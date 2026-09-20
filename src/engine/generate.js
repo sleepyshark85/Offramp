@@ -170,6 +170,39 @@ function spawnSchedule(seed, P) {
   return spawns;
 }
 
+/**
+ * generation.md §3.2 states that colW and rowH are exact integers for every (C, R) the band
+ * table uses, and AC-218 requires every node x/y and every edge lengthMlu to be integral.
+ * Neither is enforced by the construction: §3.2 divides. A band-table edit that made R a
+ * divisor of neither 1200 nor LANE_SPAN would produce a level generate() happily accepts,
+ * with float node positions and float `progress` accumulating inside the simulation — the
+ * exact thing docs/development-process.md and the fixed-point rule exist to prevent.
+ *
+ * This is a guard at level construction, not a validity rule: it rejects an impossible band
+ * table rather than an unlucky candidate network, so it throws rather than returning a
+ * rule id for validate() to retry on.
+ */
+export function assertIntegerGeometry(level) {
+  const bad = [];
+  if (!Number.isInteger(level.colW)) bad.push('colW=' + level.colW);
+  if (!Number.isInteger(level.rowH)) bad.push('rowH=' + level.rowH);
+  if (!Number.isInteger(level.diagLen)) bad.push('diagLen=' + level.diagLen);
+  for (const n of level.nodes) {
+    if (!Number.isInteger(n.x)) bad.push('node ' + n.id + ' x=' + n.x);
+    if (!Number.isInteger(n.y)) bad.push('node ' + n.id + ' y=' + n.y);
+  }
+  for (const e of level.edges) {
+    if (!Number.isInteger(e.lengthMlu)) bad.push('edge ' + e.id + ' lengthMlu=' + e.lengthMlu);
+  }
+  if (bad.length) {
+    throw new Error(
+      'NON_INTEGER_GEOMETRY: band=' + level.band + ' seed=' + level.seed + ' C=' + level.C +
+        ' R=' + level.R + ' [' + bad.length + '] ' + bad.slice(0, 6).join(', '),
+    );
+  }
+  return level;
+}
+
 export function finalise(net, P, seed) {
   const { C, K, R } = P;
   const colW = colWFor(C);
@@ -252,7 +285,7 @@ export function finalise(net, P, seed) {
     }
   }
 
-  return {
+  return assertIntegerGeometry({
     seed,
     band: P.band,
     C,
@@ -270,7 +303,7 @@ export function finalise(net, P, seed) {
     jitter: P.jitter,
     quota: P.quota,
     spawns: spawnSchedule(seed, P),
-  };
+  });
 }
 
 // --- §5 validity rules --------------------------------------------------------------------

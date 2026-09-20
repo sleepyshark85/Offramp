@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tools/pacing.mjs — completion-time distribution per difficulty band.
 //
-//   node tools/pacing.mjs [--seeds 1000] [--policy nearest]
+//   node tools/pacing.mjs [--seeds 1000]
 //
 // Measures what generation.md §7.3 and gameplay.md §5.3 assert: the median and p95 of the
 // constrained bot's simulated duration per band, and the 130 s absolute ceiling of AC-231,
@@ -22,9 +22,8 @@ const TARGET = {
 const CEILING = 130;
 
 const seeds = Number(arg('seeds', 1000));
-const policy = String(arg('policy', 'nearest'));
 
-console.log(`# Completion time — ${seeds} seeds per band, constrained bot, policy '${policy}'\n`);
+console.log(`# Completion time — ${seeds} seeds per band, constrained bot (generation.md §7.1)\n`);
 
 const rows = [];
 let failures = 0;
@@ -35,7 +34,7 @@ for (let band = 1; band <= 5; band += 1) {
   const cleared = [];
   const all = [];
   for (let seed = 0; seed < seeds; seed += 1) {
-    const r = playLevel(generate(seed, band), 'constrained', { policy });
+    const r = playLevel(generate(seed, band), 'constrained');
     all.push(r.seconds);
     if (r.cleared) cleared.push(r.seconds);
     if (r.seconds > worst) { worst = r.seconds; worstWhere = `band ${band} seed ${seed}`; }

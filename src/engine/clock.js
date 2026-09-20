@@ -18,8 +18,17 @@ import { MAX_CATCHUP_TICKS, TICK_HZ } from './constants.js';
  * When more than MAX_CATCHUP_TICKS ticks are owed the surplus is DISCARDED and the
  * accumulator is reset to 0 (gameplay.md §2.1). World time runs slower than wall time on a
  * device that cannot keep up; it never teleports a car past a junction.
+ *
+ * A non-finite delta (NaN or ±Infinity) is DROPPED, not accumulated. `NaN < 0` and
+ * `NaN > MAX_CATCHUP_TICKS` are both false, so without this guard one NaN frame — which an
+ * uninitialised `lastFrameTime` in the React layer produces exactly — poisons the
+ * accumulator and freezes the simulation for the rest of the session.
  */
 export function advanceClock(accTicks, deltaMs) {
+  if (!Number.isFinite(deltaMs)) {
+    return { ticks: 0, accTicks: Number.isFinite(accTicks) ? accTicks : 0 };
+  }
+  if (!Number.isFinite(accTicks)) return { ticks: 0, accTicks: 0 };
   const acc = accTicks + (deltaMs * TICK_HZ) / 1000;
   let ticks = Math.floor(acc);
   if (ticks < 0) return { ticks: 0, accTicks: 0 };

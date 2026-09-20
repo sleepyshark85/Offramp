@@ -347,8 +347,42 @@ test('AC-801 · the last misroute ends the level on that tick', () => {
 });
 
 test('AC-808 · spawn exhaustion throws rather than stalling', () => {
+  // A schedule that genuinely cannot reach the quota: one car, quota 99, nothing left to
+  // spawn. delivered + in-flight can never reach 99, so the run would stall silently.
   const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 0 }], quota: 99, slack: false });
   assert.throws(() => step(createState(level), []), /SPAWN_EXHAUSTED/);
+});
+
+test('AC-808 · consuming the LAST scheduled car is not exhaustion', () => {
+  // The canary used to test `nextSpawn >= spawns.length` immediately after the increment, so
+  // spawning the final car of a perfectly valid schedule threw. That made the usable schedule
+  // `quota + SPAWN_SLACK - 1`; band 5 seed 160 consumes 71 of its 72 cars, one short of the
+  // throw. Nothing in the design says the last car is unusable.
+  const spawns = [
+    { index: 0, tick: 0, colour: 1 },
+    { index: 1, tick: 20, colour: 1 },
+    { index: 2, tick: 40, colour: 1 },
+  ];
+  const level = twoDepotLevel({ spawns, quota: 2, slack: false });
+  const flip = new Map([[0, [{ tick: 0, junctionId: 0 }]]]); // send every car to depot colour 1
+  let s;
+  assert.doesNotThrow(() => { s = drive(step, createState(level), flip, 400); });
+  assert.equal(s.nextSpawn, 3, 'all three scheduled cars were consumed');
+  assert.equal(s.phase, 'won');
+  assert.equal(s.delivered, 2);
+});
+
+test('AC-808 · the canary still fires once the run can no longer reach its quota', () => {
+  // Same schedule, quota raised past what the three cars can deliver: the moment the last one
+  // has spawned and the arithmetic says the quota is unreachable, the engine stops.
+  const spawns = [
+    { index: 0, tick: 0, colour: 1 },
+    { index: 1, tick: 20, colour: 1 },
+    { index: 2, tick: 40, colour: 1 },
+  ];
+  const level = twoDepotLevel({ spawns, quota: 4, slack: false });
+  const flip = new Map([[0, [{ tick: 0, junctionId: 0 }]]]);
+  assert.throws(() => drive(step, createState(level), flip, 400), /SPAWN_EXHAUSTED/);
 });
 
 test('AC-809 · an empty input array advances the tick and changes no junction', () => {
@@ -364,8 +398,22 @@ test('AC-810 · step() after a terminal state returns a deeply equal state', () 
   const level = twoDepotLevel({ spawns, quota: 1 });
   const done = drive(step, createState(level), new Map(), 400);
   assert.notEqual(done.phase, 'running');
+
+  // The expectation is built BEFORE the call and is an independent object graph. Comparing
+  // the return value against `done` itself could not fail: step() returns the very same
+  // reference at src/engine/step.js:122, so `assert.deepEqual(again, done)` was comparing an
+  // object with itself (development-process.md §6.2).
+  const expected = structuredClone({ ...done, level: done.level });
   const again = step(done, [{ tick: done.tick, junctionId: 0 }]);
-  assert.deepEqual(again, done);
+  assert.deepEqual(again, expected);
+
+  // And the comparison is sensitive: any of the fields a broken early-return would move is
+  // caught by it.
+  assert.throws(() => assert.deepEqual({ ...expected, tick: expected.tick + 1 }, expected));
+  assert.throws(() => assert.deepEqual({ ...expected, score: expected.score + 1 }, expected));
+  const flipped = structuredClone(expected);
+  flipped.open[0] ^= 1;
+  assert.throws(() => assert.deepEqual(flipped, expected));
 });
 
 test('step() does not mutate the state it was given', () => {

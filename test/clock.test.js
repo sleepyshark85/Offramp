@@ -49,3 +49,50 @@ test('AC-128/AC-803 · not calling step() is how a pause works — the tick neve
   assert.equal(resumed.ticks, MAX_CATCHUP_TICKS);
   assert.equal(advanceClock(resetClock(), 0).ticks, 0);
 });
+
+test('a non-finite delta is dropped, not accumulated — one NaN frame froze the game forever', () => {
+  // An uninitialised `lastFrameTime` in the React layer produces `now - undefined === NaN`.
+  // Without the guard, `acc` becomes NaN, `Math.floor(NaN)` is NaN, and neither `NaN < 0` nor
+  // `NaN > MAX_CATCHUP_TICKS` is true, so the accumulator is poisoned for the whole session
+  // and `step()` is never called again.
+  const poisoned = advanceClock(0, NaN);
+  assert.equal(poisoned.ticks, 0);
+  assert.ok(Number.isFinite(poisoned.accTicks), 'accumulator survived a NaN frame');
+
+  // The session keeps running afterwards: the very next real frame advances normally.
+  assert.equal(advanceClock(poisoned.accTicks, 50).ticks, 3);
+
+  // Infinities and a poisoned accumulator handed back in are both recovered from.
+  assert.deepEqual(advanceClock(0, Infinity), { ticks: 0, accTicks: 0 });
+  assert.deepEqual(advanceClock(0, -Infinity), { ticks: 0, accTicks: 0 });
+  assert.deepEqual(advanceClock(NaN, 16), { ticks: 0, accTicks: 0 });
+
+  // The check is not vacuous: the unguarded form really does produce NaN.
+  const unguarded = (acc, d) => {
+    const a = acc + (d * 60) / 1000;
+    const t = Math.floor(a);
+    if (t < 0) return { ticks: 0, accTicks: 0 };
+    if (t > MAX_CATCHUP_TICKS) return { ticks: MAX_CATCHUP_TICKS, accTicks: 0 };
+    return { ticks: t, accTicks: a - t };
+  };
+  const bad = unguarded(0, NaN);
+  assert.ok(Number.isNaN(bad.ticks) && Number.isNaN(bad.accTicks));
+  assert.ok(Number.isNaN(unguarded(bad.accTicks, 16.7).ticks), 'and it stays poisoned');
+});
+
+test('a whole second of NaN frames still leaves the clock usable', () => {
+  let acc = 0;
+  let total = 0;
+  for (let f = 0; f < 60; f += 1) {
+    const r = advanceClock(acc, NaN);
+    acc = r.accTicks;
+    total += r.ticks;
+  }
+  assert.equal(total, 0);
+  for (let f = 0; f < 60; f += 1) {
+    const r = advanceClock(acc, 1000 / 60);
+    acc = r.accTicks;
+    total += r.ticks;
+  }
+  assert.equal(total, 60);
+});

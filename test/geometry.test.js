@@ -7,8 +7,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BANDS, K_CTRL_DEN, K_CTRL_NUM, MLU, ENTRY_LEN } from '../src/engine/constants.js';
-import { colWFor, generate, rowHFor, xOf, yOf } from '../src/engine/generate.js';
+import { BANDS, GEN_SALT, K_CTRL_DEN, K_CTRL_NUM, MAX_ATTEMPTS, MLU, ENTRY_LEN } from '../src/engine/constants.js';
+import { assertIntegerGeometry, colWFor, finalise, generate, rowHFor, tryBuild, xOf, yOf } from '../src/engine/generate.js';
+import { makeStream, mix32 } from '../src/engine/rng.js';
 
 /** generation.md §3.3 reference derivation: 128-step chord sum of the cubic, rounded. */
 function referenceDiagLen(colW, rowH, steps = 128) {
@@ -94,4 +95,20 @@ test('AC-218 · every coordinate and length is an integer', () => {
       for (const s of level.spawns) assert.ok(Number.isInteger(s.tick) && Number.isInteger(s.colour));
     }
   }
+});
+
+test('AC-218 · a band table that divides unevenly is REJECTED at level construction', () => {
+  // development-process.md §6.2: AC-218 above cannot fail, because §3.2's divisions happen to
+  // be exact for every (C, R) in today's table. Nothing asserted that they stay exact. With
+  // R = 7, `rowH = 1200 / 7` is 171.43 and generate() used to return a level with float node
+  // y values, float lengthMlu and a car carrying a float `progress` into the simulation.
+  const P = { ...BANDS[1], R: 7, Jmin: 0, Jmax: 99, Dmin: 0, Dmax: 99 };
+  const rng = makeStream(mix32(7, GEN_SALT));
+  let net = null;
+  for (let i = 0; i < MAX_ATTEMPTS && net === null; i += 1) net = tryBuild(rng, P);
+  assert.ok(net, 'the R=7 candidate builder produced a network to finalise');
+  assert.throws(() => finalise(net, P, 7), /NON_INTEGER_GEOMETRY/);
+
+  // And the guard is not vacuous: the real band table passes it.
+  for (let band = 1; band <= 5; band += 1) assertIntegerGeometry(generate(band, band));
 });

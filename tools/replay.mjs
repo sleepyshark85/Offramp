@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tools/replay.mjs — run a seed headless, print it as ASCII, and prove it replays.
 //
-//   node tools/replay.mjs --seed 42 [--band 3] [--frames 8] [--policy nearest]
+//   node tools/replay.mjs --seed 42 [--band 3] [--frames 8]
 //
 // A run is {seed, band, inputs:[{tick,junctionId}]} and nothing else (CLAUDE.md §3). This
 // harness replays one twice in this process and once in a freshly spawned process, and deep
@@ -93,11 +93,10 @@ if (has('emit')) {
 
 const seed = Number(arg('seed', 42));
 const band = Number(arg('band', 3));
-const policy = String(arg('policy', 'nearest'));
 const frameCount = Number(arg('frames', 6));
 
 const level = generate(seed, band);
-const bot = playLevel(level, 'constrained', { policy });
+const bot = playLevel(level, 'constrained');
 const run = { seed, band, inputs: bot.inputs };
 
 const capture = new Set();
@@ -113,7 +112,7 @@ const childOut = execFileSync(
   { encoding: 'utf8' },
 );
 
-console.log(`Offramp replay — seed ${seed}, band ${band}, policy ${policy}`);
+console.log(`Offramp replay — seed ${seed}, band ${band}`);
 console.log(`network: ${level.nodes.length} nodes, ${level.edges.length} edges, ` +
   `${level.junctions.length} junctions, ${level.K} colours, quota ${level.quota}`);
 console.log(`run: ${run.inputs.length} taps over ${bot.ticks} ticks (${bot.seconds.toFixed(2)} s)`);

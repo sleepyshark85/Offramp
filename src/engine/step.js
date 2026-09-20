@@ -137,11 +137,6 @@ export function step(state, inputs) {
     next.nextSpawn += 1;
     next.cars.push({ id: s.index, colour: s.colour, edgeId: level.entryEdgeId, progress: 0 });
     next.events.push({ type: 'spawn', tick: next.tick, carId: s.index, colour: s.colour });
-    if (next.nextSpawn >= spawns.length) {
-      // gameplay.md §2.7 / AC-808: the schedule carries quota + 8 cars and must never be
-      // exhausted. Stalling silently would be worse than stopping.
-      throw new Error('SPAWN_EXHAUSTED: seed=' + level.seed + ' band=' + level.band);
-    }
   }
 
   // 4. ADVANCE — ascending id order. Arrivals are collected by rebuilding the list rather
@@ -177,6 +172,28 @@ export function step(state, inputs) {
     next.score += SCORE_LIFE_BONUS * next.lives;
   } else if (next.lives <= 0) {
     next.phase = 'lost';
+  }
+
+  // 5b. SPAWN-EXHAUSTION CANARY — gameplay.md §2.7 / AC-808.
+  //
+  // The canary fires when a further spawn is GENUINELY NEEDED and unavailable, not when the
+  // last legitimately scheduled car is consumed. A schedule of `quota + SPAWN_SLACK` cars is
+  // only short if the cars already spawned cannot reach the quota: delivered + in-flight is
+  // the best remaining outcome, so `delivered + cars.length < quota` with nothing left to
+  // spawn means the run can never end in a win and would stall silently. Stopping is better.
+  //
+  // The previous form tested `nextSpawn >= spawns.length` immediately after the increment,
+  // which throws on consuming the final car of a perfectly valid schedule — it made the
+  // usable schedule `quota + SPAWN_SLACK - 1`, not `quota + SPAWN_SLACK`.
+  if (
+    next.phase === 'running' &&
+    next.nextSpawn >= spawns.length &&
+    next.delivered + next.cars.length < level.quota
+  ) {
+    throw new Error(
+      'SPAWN_EXHAUSTED: seed=' + level.seed + ' band=' + level.band + ' tick=' + next.tick +
+        ' delivered=' + next.delivered + ' inFlight=' + next.cars.length + ' quota=' + level.quota,
+    );
   }
 
   // 6.

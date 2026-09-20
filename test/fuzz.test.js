@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MLU } from '../src/engine/constants.js';
+import { BANDS, MLU } from '../src/engine/constants.js';
 import { generate } from '../src/engine/generate.js';
 import { createState, step } from '../src/engine/step.js';
 import { checkInvariants, minSharedEdgeSeparationMlu } from '../src/engine/invariants.js';
@@ -66,21 +66,77 @@ test('the invariant checker catches the faults it exists to catch', () => {
   assert.ok(checkInvariants({ ...s, delivered: s.delivered + 1 }, null).some((m) => m.includes('spawned-delivered-misrouted')));
 });
 
+/**
+ * One pass over one seed, returning the closest two cars ever came on a shared edge and how
+ * many ticks actually put two cars on one edge at all. `perturb` is the injection hook: a
+ * check that has never been seen to fail is not a check (development-process.md §6.2).
+ */
+function sharedEdgeSweep(level, tapEvery, perturb) {
+  let observedMinMlu = Infinity;
+  let observations = 0;
+  let s = createState(level);
+  while (s.phase === 'running' && s.tick < 8000) {
+    const inputs = tapEvery && s.tick % tapEvery === 0
+      ? [{ tick: s.tick, junctionId: s.tick % level.junctions.length }]
+      : [];
+    s = step(s, inputs);
+    const measured = perturb ? perturb(s) : s;
+    const sep = minSharedEdgeSeparationMlu(measured);
+    if (Number.isFinite(sep)) {
+      observations += 1;
+      if (sep < observedMinMlu) observedMinMlu = sep;
+    }
+  }
+  return { observedMinMlu, observations };
+}
+
 test('AC-124 · cars sharing an edge are never closer than the spawn gap allows', () => {
+  // The previous form ran ONE seed per band (band*101) behind an `if (observedMin !== Infinity)`
+  // guard. On seeds 303, 404 and 505 no two cars ever share an edge, so bands 3, 4 and 5
+  // asserted nothing at all and reported green — development-process.md §6.2 exactly. Every
+  // band now sweeps ten seeds in both a no-tap and a tapped pass, and the observation count is
+  // itself asserted, so a band that stops exercising the rule fails instead of passing.
   for (let band = 1; band <= 5; band += 1) {
-    const level = generate(band * 101, band);
-    const floorLu = ((level.interval - 2 * level.jitter) * level.speedMluPerTick) / MLU;
+    const floorLu = ((BANDS[band].interval - 2 * BANDS[band].jitter) * BANDS[band].speedMluPerTick) / MLU;
     assert.ok(floorLu >= 228, 'band ' + band + ' separation floor ' + floorLu);
-    let observedMin = Infinity;
-    let s = createState(level);
-    while (s.phase === 'running' && s.tick < 8000) {
-      s = step(s, s.tick % 13 === 0 ? [{ tick: s.tick, junctionId: s.tick % level.junctions.length }] : []);
-      const sep = minSharedEdgeSeparationMlu(s);
-      if (sep < observedMin) observedMin = sep;
+    let observedMinMlu = Infinity;
+    let observations = 0;
+    for (let seed = 0; seed < 10; seed += 1) {
+      for (const tapEvery of [0, 13]) {
+        const r = sharedEdgeSweep(generate(seed, band), tapEvery, null);
+        observations += r.observations;
+        if (r.observedMinMlu < observedMinMlu) observedMinMlu = r.observedMinMlu;
+      }
     }
-    if (observedMin !== Infinity) {
-      assert.ok(observedMin / MLU >= floorLu, 'band ' + band + ' observed ' + observedMin / MLU + ' < ' + floorLu);
-      assert.ok(observedMin / MLU > 140, 'closer than one car length');
-    }
+    assert.ok(
+      observations > 0,
+      'band ' + band + ' never put two cars on one edge, so the assertion below never ran',
+    );
+    assert.ok(
+      observedMinMlu / MLU >= floorLu,
+      'band ' + band + ' observed ' + observedMinMlu / MLU + ' LU < floor ' + floorLu + ' LU',
+    );
+    assert.ok(observedMinMlu / MLU > 140, 'band ' + band + ' closer than one car length');
+  }
+});
+
+test('the AC-124 sweep fails when a separation violation is injected', () => {
+  // A second car planted one third of a spawn gap behind a real one, on the same edge.
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(0, band);
+    const floorLu = ((level.interval - 2 * level.jitter) * level.speedMluPerTick) / MLU;
+    const gapMlu = Math.floor((floorLu * MLU) / 3);
+    const tailgate = (s) => {
+      const lead = s.cars.find((c) => c.progress >= gapMlu);
+      if (!lead) return s;
+      const clone = { id: lead.id + 1000, colour: lead.colour, edgeId: lead.edgeId, progress: lead.progress - gapMlu };
+      return { ...s, cars: [...s.cars, clone] };
+    };
+    const r = sharedEdgeSweep(level, 0, tailgate);
+    assert.ok(r.observations > 0, 'band ' + band + ' injection was never observed');
+    assert.ok(
+      r.observedMinMlu / MLU < floorLu,
+      'band ' + band + ' injected violation slipped past the measurement',
+    );
   }
 });
