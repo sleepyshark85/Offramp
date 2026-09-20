@@ -22,9 +22,14 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'test/*.test.js'"
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'test/*.test.js'",
+    "sync-wasm": "node -e \"require('fs').copyFileSync(require.resolve('canvaskit-wasm/bin/full/canvaskit.wasm'),'public/canvaskit.wasm')\"",
+    "postinstall": "npm run sync-wasm"
   },
   "allowScripts": {
     "@shopify/react-native-skia@2.6.2": true
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
   }
 }

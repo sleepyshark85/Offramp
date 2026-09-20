@@ -12,3 +12,6 @@ web-build/
 .env
 .env.local
 /tmp-*
+
+# CanvasKit wasm is copied from node_modules by `npm run sync-wasm` (postinstall).
+public/canvaskit.wasm

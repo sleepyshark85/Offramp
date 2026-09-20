@@ -1,0 +1,698 @@
+# Offramp — Acceptance Criteria
+
+Numbered, grouped, one observable behaviour each. The developer builds against these; the tester
+writes its own tests from these **before** reading the developer's
+(`docs/development-process.md:138`).
+
+Every AC is executable without asking the designer a question. Where an AC cites a number, the
+number is in [`gameplay.md`](gameplay.md), [`generation.md`](generation.md) or
+[`ui.md`](ui.md) and is normative there.
+
+| Range | Area | Verification tier |
+|---|---|---|
+| 100–199 | Simulation engine | 1 — `node --test` + invariant fuzzing |
+| 200–299 | Track generator | 2 — solver bots over thousands of seeds |
+| 300–399 | Input model | 1 for the engine half, 3 for the gesture half |
+| 400–499 | Layout | 4 — arithmetic over a continuous viewport sweep |
+| 500–599 | Visual system | 3 + 5 |
+| 600–699 | Accessibility | 3 + 4 + 5 |
+| 700–799 | Progression | 1 + 3 |
+| 800–899 | Failure and edge cases | 1 + 3 + 5 |
+
+Numbers are assigned with gaps inside each hundred. New ACs take the next free number in their
+group; numbers are never reused.
+
+---
+
+## 100 — Simulation
+
+**AC-101 · Fixed tick rate**
+**Given** the engine constants module,
+**When** `TICK_HZ` is read,
+**Then** it is the integer `60`, and no other module defines a tick rate.
+
+**AC-102 · One step is one tick**
+**Given** a state at tick `T`,
+**When** `step(state, [])` is called,
+**Then** the returned state's `tick` is exactly `T + 1`. Never `T`, never `T + 2`.
+
+**AC-103 · No floating point in the simulation**
+**Given** any state reached after 10,000 ticks of a seeded run,
+**When** every numeric field of the state and of every car is inspected,
+**Then** each one satisfies `Number.isInteger(v)`.
+
+**AC-104 · A car is always on exactly one edge**
+**Given** any state,
+**When** the car list is inspected,
+**Then** every car has exactly one `edgeId`, that edge exists in `level.edges`, and
+`0 <= car.progress < edge.lengthMlu`.
+
+**AC-105 · Constant advance**
+**Given** a car not transitioning this tick,
+**When** one `step()` runs,
+**Then** its `progress` increased by exactly `level.speedMluPerTick`.
+
+**AC-106 · Transition carries the remainder**
+**Given** a car whose `progress + speed >= edge.lengthMlu`,
+**When** one `step()` runs,
+**Then** the car is on an outgoing edge of that edge's `to` node with
+`progress === (oldProgress + speed) - oldEdge.lengthMlu`.
+
+**AC-107 · Junction state is read at the transition**
+**Given** a car transitioning onto a branch node this tick,
+**When** the outgoing edge is selected,
+**Then** it is `node.out[state.open[node.junctionId]]` evaluated at that instant, using the value
+of `open` after this tick's inputs were applied.
+
+**AC-108 · A flip behind a car does not re-route it**
+**Given** a car that transitioned through junction `J` at tick `T`,
+**When** `J` is flipped at any tick `> T`,
+**Then** that car's `edgeId` is unchanged by the flip and it arrives at the same depot it would
+have without the flip.
+
+**AC-109 · Inputs are applied before movement**
+**Given** a car that will reach junction `J` during tick `T`,
+**When** an input `{tick: T, junctionId: J}` is supplied to `step()`,
+**Then** the car takes the branch selected by the **post-flip** value of `open[J]`.
+
+**AC-110 · Two taps in one tick resolve by junction id**
+**Given** inputs `[{tick:T, junctionId:5}, {tick:T, junctionId:2}]` supplied in that array order,
+**When** `step()` runs,
+**Then** junction 2 is toggled before junction 5, and the resulting state is deeply equal to the
+state produced when the same two inputs are supplied in the opposite array order.
+
+**AC-111 · Duplicate taps on one junction net out**
+**Given** inputs `[{tick:T, junctionId:3}, {tick:T, junctionId:3}]`,
+**When** `step()` runs,
+**Then** `open[3]` has its original value, and two `flip` events were emitted.
+
+**AC-112 · Cars spawn on their scheduled tick**
+**Given** `level.spawns[i] = {index:i, tick:t, colour:c}`,
+**When** the simulation reaches tick `t`,
+**Then** exactly one car appears with `id === i`, `colour === c`, `edgeId === level.entryEdgeId`
+and `progress === 0`.
+
+**AC-113 · The spawn schedule is a pure function of the seed**
+**Given** the same `(seed, band)`,
+**When** the level is generated twice in separate processes,
+**Then** the two `level.spawns` arrays are deeply equal.
+
+**AC-114 · Spawn ticks strictly increase**
+**Given** any generated level at any band,
+**When** `level.spawns` is inspected,
+**Then** `spawns[i+1].tick > spawns[i].tick` for every `i`, and the minimum gap over 1,000 seeds
+per band is at least `interval - 2*jitter` ticks.
+
+**AC-115 · Colour bag prevents runs of three**
+**Given** the spawn colour sequence of any generated level,
+**When** it is scanned,
+**Then** no three consecutive entries share a colour, and over 1,000 seeds the per-colour counts
+differ by at most `K` across the whole sequence.
+
+**AC-116 · Correct delivery scores and counts**
+**Given** a car entering a depot whose `depotColour` equals the car's colour,
+**When** the arrival resolves,
+**Then** `delivered` increases by 1, `streak` increases by 1, the car is removed, `lives` is
+unchanged, and a `delivered` event is emitted.
+
+**AC-117 · Streak bonus and its cap**
+**Given** a run of `n` consecutive correct deliveries,
+**When** the `n`-th resolves,
+**Then** the score increased by `100 + 10 * min(n - 1, 9)`; for `n >= 10` the increment is exactly
+190.
+
+**AC-118 · The transition loop is single-pass**
+**Given** any seeded run of 20,000 ticks at any band,
+**When** the transition `while` loop is instrumented,
+**Then** its body executes at most once per car per tick.
+
+**AC-119 · Misroute costs a life and no points**
+**Given** a car entering a depot whose colour differs from the car's,
+**When** the arrival resolves,
+**Then** `lives` decreases by 1, `misrouted` increases by 1, `streak` becomes 0, `score` is
+unchanged, and a `misrouted` event carrying both colours is emitted.
+
+**AC-120 · Score is non-decreasing**
+**Given** a seeded fuzz run of 50,000 ticks with randomised taps,
+**When** the score is sampled after every `step()`,
+**Then** it is a non-negative integer that never decreases.
+
+**AC-121 · Lives are non-increasing and floored**
+**Given** the same fuzz run,
+**Then** `lives` never increases and never goes below 0.
+
+**AC-122 · Terminal conditions, and their order**
+**Given** a tick in which the quota-completing car is delivered **and** another car is misrouted
+taking `lives` to 0,
+**When** the terminal check runs,
+**Then** `phase === 'won'`.
+
+**AC-123 · The spawn array is never exhausted**
+**Given** a constrained-bot run over 1,000 seeds per band,
+**When** each level ends,
+**Then** `state.nextSpawn < level.spawns.length` in every run.
+
+**AC-124 · Minimum car separation**
+**Given** any seeded run at any band,
+**When** every pair of cars sharing an edge is measured after every `step()`,
+**Then** their separation in LU is at least `(interval - 2*jitter) * speedMluPerTick / 1000`,
+which is never less than 228 LU — greater than `CAR_L = 140`.
+
+**AC-125 · Replay determinism**
+**Given** a recorded run `{seed, band, inputs}`,
+**When** it is replayed twice in one process and once in a fresh process,
+**Then** all three final states are deeply equal, including `score`, `rng`, `tick` and every car.
+
+**AC-126 · Events do not accumulate**
+**Given** any state,
+**When** `step()` is called,
+**Then** `state.events` contains only events generated during that tick.
+
+**AC-127 · Frame catch-up is capped**
+**Given** a frame delta of 2,000 ms,
+**When** the React layer converts it to ticks,
+**Then** `step()` is called at most `MAX_CATCHUP_TICKS = 8` times and the accumulator is reset to
+0 rather than carrying the remainder.
+
+**AC-128 · A paused game does not advance**
+**Given** a paused game,
+**When** 5 seconds of wall time pass,
+**Then** `state.tick` is unchanged.
+
+**AC-129 · `step` is pure**
+**Given** the source of `src/engine/`,
+**When** it is searched,
+**Then** there are no occurrences of `Date.now`, `performance.now`, `Math.random`, `setTimeout`,
+`setInterval`, or any import from `react` or `react-native`.
+
+**AC-130 · Car ids are unique and ascending**
+**Given** any state,
+**Then** `cars` is strictly ascending by `id` and no id appears twice.
+
+**AC-131 · No car occupies two edges**
+**Given** the fuzz run of AC-120,
+**Then** no car object ever holds more than one `edgeId`, and the total car count equals
+(spawned − delivered − misrouted) after every `step()`.
+
+**AC-132 · Level clear bonus**
+**Given** a level won with `L` lives remaining,
+**Then** the final score includes `50 * L` over and above the delivery total.
+
+**AC-133 · Cars in flight are discarded at level end**
+**Given** a level that ends with cars still on the network,
+**Then** those cars score nothing, cost nothing, and remain in `state.cars` for the renderer to
+freeze.
+
+**AC-134 · PRNG streams are independent**
+**Given** a level,
+**When** the number of generator draws is artificially changed without changing the seed,
+**Then** `level.spawns` is unchanged.
+
+**AC-135 · The engine runs in bare Node**
+**Given** `src/engine/`,
+**When** it is imported and driven by `node --test` with no bundler and no React,
+**Then** it runs to completion.
+
+---
+
+## 200 — Generation
+
+**AC-201 · Generation is a pure function of `(seed, band)`**
+**Given** the same seed and band,
+**When** `generate()` is called in two separate processes,
+**Then** the two level objects are deeply equal.
+
+**AC-202 · Band parameters are applied**
+**Given** a generated level for band `b`,
+**Then** its `C`, `K`, `R`, `colW`, `rowH`, `diagLen`, `speedMluPerTick`, `interval`, `jitter`
+and `quota` exactly match row `b` of [`generation.md` §6.1](generation.md#61-the-table).
+
+**AC-203 · Generation never exhausts**
+**Given** `tools/generator-audit.mjs --seeds 5000` across all five bands,
+**Then** zero `GEN_EXHAUSTED` errors are thrown, and the reported attempt count has median ≤ 8 and
+maximum ≤ 128.
+
+**AC-204 · V1 — no dead ends**
+**Given** any generated level,
+**Then** every non-depot node has out-degree 1 or 2, every depot has out-degree 0 and in-degree
+≥ 1, and every node reaches at least one depot.
+
+**AC-205 · V2 — merge-free ordering**
+**Given** any generated level,
+**When** the edge targets of each route row are listed left to right by source column,
+**Then** they are strictly increasing; on the terminal row they are non-decreasing.
+
+**AC-206 · V3 — planarity**
+**Given** any generated level,
+**When** every pair of edges within the same row band is tested,
+**Then** no pair `(a→b)`, `(a'→b')` exists with `a < a'` and `b > b'`.
+
+**AC-207 · Edge lengths match the curve**
+**Given** the band table's `diagLen` values,
+**When** the reference derivation of [`generation.md` §3.3](generation.md#33-edge-lengths) is run
+(128-step chord sum of the cubic, rounded),
+**Then** it returns 521, 415, 415, 323 and 293 for bands 1–5 respectively, and every edge's
+`lengthMlu` is `1000 ×` the table value for its shape.
+
+**AC-208 · V4 — lattice invariant**
+**Given** any generated level,
+**Then** every edge has `to.row === from.row + 1` and `|to.col - from.col| <= 1`.
+
+**AC-209 · V5 — every depot is reachable from the entry**
+**Given** any generated level,
+**When** a forward search from the entry node is run,
+**Then** all `K` depot nodes are reached.
+
+**AC-210 · V6 — every junction is decisive**
+**Given** any branch node,
+**When** the reachable depot-colour set of each of its two branches is computed,
+**Then** the two sets differ.
+
+**AC-211 · V7 — junction count in band range**
+**Given** 1,000 generated levels per band,
+**Then** every level's junction count lies in its band's `J` range, and the observed distribution
+matches [`generation.md` §6.2](generation.md#62-measured-generator-behaviour) within 5 percentage
+points per bucket.
+
+**AC-212 · V8 — depth in band range**
+**Given** any generated level,
+**When** the junction count on every entry-to-depot path is computed,
+**Then** each lies within the band's `[Dmin, Dmax]`.
+
+**AC-213 · V12 — consecutive levels differ**
+**Given** any two consecutive level indices in the same band,
+**Then** their network signatures (sorted edge list + entry column + depot-colour assignment)
+differ.
+
+**AC-214 · V9 — one node per lattice site**
+**Given** any generated level,
+**Then** no two nodes share `(row, col)`, and no row holds more than `C` nodes.
+
+**AC-215 · V10 — palette assignment**
+**Given** a level at a band with `K` colours,
+**Then** its depot colours are exactly the first `K` entries of the palette in
+[`ui.md` §5.1](ui.md#51-the-car-palette), each used once.
+
+**AC-216 · V11 — junction separation**
+**Given** any generated level,
+**When** the distance between every pair of junction centres is computed,
+**Then** the minimum is at least 150 LU.
+
+**AC-217 · Merge-free**
+**Given** any generated level,
+**Then** no node with `kind !== 'depot'` has in-degree greater than 1.
+
+**AC-218 · Integer geometry**
+**Given** any generated level,
+**Then** every node's `x` and `y`, and every edge's `lengthMlu`, satisfy `Number.isInteger`.
+
+**AC-219 · Serialisation round-trip**
+**Given** any generated level,
+**When** it is `JSON.stringify`'d and parsed back,
+**Then** the result is deeply equal to the original.
+
+**AC-220 · Unconstrained bot clears everything**
+**Given** `tools/bot.mjs --unconstrained --seeds 1000` per band,
+**Then** the clear rate is **100 %** and the misroute count is **0** in every run.
+
+**AC-221 · Constrained bot clear rate — band 1**
+**Given** `tools/bot.mjs --seeds 1000 --band 1` with the constraints of
+[`generation.md` §7.1](generation.md#71-the-constrained-solver-bot),
+**Then** the clear rate is within **92 – 100 %**.
+
+**AC-222 · Constrained bot clear rate — band 2**
+**Then** the clear rate is within **88 – 99 %**.
+
+**AC-223 · Constrained bot clear rate — band 3**
+**Then** the clear rate is within **80 – 96 %**.
+
+**AC-224 · Constrained bot clear rate — band 4**
+**Then** the clear rate is within **72 – 90 %**.
+
+**AC-225 · Constrained bot clear rate — band 5**
+**Then** the clear rate is within **62 – 84 %**.
+
+**AC-226 · Completion-time band — band 1**
+**Given** `tools/pacing.mjs` over 1,000 successful constrained-bot runs,
+**Then** the median simulated duration is within **42 – 62 s** and p95 ≤ **68 s**.
+
+**AC-227 · Completion-time band — band 2**
+**Then** median within **58 – 78 s**, p95 ≤ **86 s**.
+
+**AC-228 · Completion-time band — band 3**
+**Then** median within **70 – 92 s**, p95 ≤ **100 s**.
+
+**AC-229 · Completion-time band — band 4**
+**Then** median within **84 – 106 s**, p95 ≤ **114 s**.
+
+**AC-230 · Completion-time band — band 5**
+**Then** median within **98 – 122 s**, p95 ≤ **126 s**.
+
+**AC-231 · The two-minute ceiling**
+**Given** every constrained-bot run across all bands and all sampled seeds,
+**Then** **no** run exceeds **130 s** of simulated time.
+
+**AC-232 · Bot constraints are enforced**
+**Given** the constrained bot's own input log,
+**Then** no two taps occur within 11 ticks, no tap occurs within 6 ticks of the tapped junction
+being reached by a car, and no tick contains more than one tap.
+
+**AC-233 · Tap rate is measured and reported**
+**Given** `tools/bot.mjs --seeds 1000` per band,
+**Then** it reports mean taps per second per band, and the reported value for band 5 is
+≤ **1.25 /s**.
+
+**AC-234 · Network variety**
+**Given** 3,000 generated levels per band,
+**Then** the count of distinct network signatures is at least 30 for band 1 and at least 500 for
+bands 2–5.
+
+---
+
+## 300 — Input
+
+**AC-301 · Screen-to-design mapping**
+**Given** `scale`, `originX`, `originY` from [`ui.md` §3.2](ui.md#32-mapping-design-space-onto-the-play-area),
+**When** a touch at `(sx, sy)` is converted,
+**Then** the result is `round((sx - originX)/scale)`, `round((sy - originY)/scale)`.
+
+**AC-302 · Hit radius formula**
+**Given** any `scale` and any band,
+**Then** `HIT_R_LU === clamp(ceil(22/scale), 76, floor((min(colW,rowH) - 6)/2))`.
+
+**AC-303 · Hit circles never overlap**
+**Given** any band and any supported viewport,
+**Then** `2 * HIT_R_LU < min(colW, rowH)`, so at most one junction contains any point.
+
+**AC-304 · A tap on empty road is ignored**
+**Given** a tap more than `HIT_R_LU` from every junction centre,
+**Then** no input is enqueued, no event is emitted, and nothing on screen changes.
+
+**AC-305 · A tap is stamped to the next tick to be simulated**
+**Given** a tap received between two `step()` calls where the next is tick `T`,
+**Then** the enqueued input is `{tick: T, junctionId}` and it is consumed by that `step()`.
+
+**AC-306 · Two pointers, two inputs, one tick**
+**Given** two simultaneous taps on two different junctions within one frame,
+**Then** two inputs are enqueued with the same `tick`, and they resolve by ascending junction id.
+
+**AC-307 · Taps are discarded while paused**
+**Given** a paused game or an active resume countdown,
+**When** the canvas is tapped,
+**Then** no input is enqueued.
+
+**AC-308 · Taps are discarded after the level ends**
+**Given** `phase !== 'running'`,
+**When** the canvas is tapped,
+**Then** no input is enqueued.
+
+**AC-309 · No debounce**
+**Given** two taps on the same junction 20 ms apart,
+**Then** both are enqueued, on consecutive ticks, and the junction ends in its original state.
+
+**AC-310 · Flipping ahead of a car works**
+**Given** a car on an edge approaching junction `J`,
+**When** `J` is tapped,
+**Then** the flip applies immediately and the car takes the new branch on arrival.
+
+**AC-311 · Flipping behind a car does nothing to it**
+**Given** a car that has already transitioned through `J`,
+**When** `J` is tapped,
+**Then** that car's route is unchanged; the flip affects only later arrivals.
+
+**AC-312 · Tap is the only gesture**
+**Given** the gesture configuration over the canvas,
+**Then** only `Gesture.Tap()` is registered; there is no pan, swipe, long-press or double-tap
+handler.
+
+---
+
+## 400 — Layout
+
+**AC-401 · 44 pt tap targets across the viewport sweep**
+**Given** `tools/layout-sweep.mjs` over widths 320–520 pt, heights 560–1200 pt, eight safe-area
+inset profiles and all five bands,
+**Then** `2 * HIT_R_LU * scale >= 44` in every configuration; the harness reports 0 overflowing
+and a minimum of 44.00 pt.
+
+**AC-402 · Car body legibility across the sweep**
+**Given** the same sweep,
+**Then** `CAR_W * scale >= 20` in every configuration; the minimum is 21.00 pt.
+
+**AC-403 · Scale is uniform**
+**Given** any viewport,
+**Then** `scale === min(playW/1000, playH/1600)` and the same value is used on both axes.
+
+**AC-404 · Vertical slack split**
+**Given** a viewport with vertical slack,
+**Then** `originY === playTop + slackY * 0.55` and `originX === (playW - 1000*scale)/2`.
+
+**AC-405 · HUD sits below the safe-area top inset**
+**Given** any inset profile,
+**Then** the HUD's top edge equals `safeAreaTop` and its height is 56 pt.
+
+**AC-406 · Play area clears the bottom inset**
+**Given** any inset profile,
+**Then** the play area's bottom edge is `safeAreaBottom + 8` pt above the screen bottom, and no
+interactive element is within 16 pt of the bottom inset.
+
+**AC-407 · Portrait only**
+**Given** the app configuration,
+**Then** `orientation` is `"portrait"`, and rotating the device does not re-lay out the game.
+
+**AC-408 · Reference device fit**
+**Given** 393 × 852 pt with insets 59 / 34,
+**Then** `scale === 0.393`, play height is 695 pt, and the junction target is 59.7 pt.
+
+**AC-409 · Support floor is enforced, not assumed**
+**Given** a viewport with `playW < 320` or `playH < 400`,
+**Then** the game still renders without crashing, and the layout harness reports it as outside the
+declared support envelope rather than as a pass.
+
+**AC-410 · Depots stay inside the design rect**
+**Given** any band,
+**Then** every depot's `x ± DEPOT_W/2` lies within `[0, 1000]`, with a margin of at least 30 LU.
+
+---
+
+## 500 — Visual
+
+**AC-501 · Draw order**
+**Given** a rendered frame,
+**Then** elements are painted in the order of [`ui.md` §4.2](ui.md#42-draw-order), and a car is
+never occluded by a junction marker or a depot.
+
+**AC-502 · The car body is one colour fill**
+**Given** a rendered car,
+**Then** its body is a single rounded rectangle filled with one palette colour; the windscreen and
+glyph are drawn over it and together cover less than 35 % of its area.
+
+**AC-503 · Car fits the road**
+**Given** any band,
+**Then** `CAR_W (84) < ROAD_W (104)`, and two roads in adjacent columns are separated by at least
+`colW - ROAD_W = 91` LU at the narrowest band.
+
+**AC-504 · The blade shows the open branch**
+**Given** a junction with `open === k`,
+**Then** its blade is rotated to lie along `out[k]`, and the first 150 LU of that edge is drawn
+brighter than the closed branch.
+
+**AC-505 · In-canvas animation is replay-deterministic**
+**Given** a recorded run replayed at a fixed frame rate,
+**When** frames are captured at the same ticks as the live run,
+**Then** the screenshots are identical, because every play-surface animation derives its phase
+from `currentTick - eventTick`.
+
+**AC-506 · Commit preview arms at 260 LU**
+**Given** a car whose remaining distance to junction `J` is ≤ `COMMIT_PREVIEW = 260` LU,
+**Then** `J` draws the lead-highlight arc along its open branch; above 260 LU it does not.
+
+**AC-507 · Nothing idles**
+**Given** a running level with no `events` in the current tick and `lives > 1`,
+**Then** the only changing pixels in the play surface are car positions.
+
+**AC-508 · No logging in the render path**
+**Given** `src/render/`,
+**Then** it contains no `console.*` call.
+
+**AC-509 · Depot colours are unique within a level**
+**Given** any level,
+**Then** no two depots share a colour, and every car colour has exactly one matching depot.
+
+**AC-510 · Last-life state**
+**Given** `lives === 1`,
+**Then** the 2 pt `--alert` border at 24 % is present and the life-pip row is pulsing on a 1.6 s
+cycle; at `lives >= 2` neither is present.
+
+**AC-511 · Failure desaturates**
+**Given** `phase === 'lost'`,
+**Then** the play surface transitions to greyscale over 320 ms and the cars freeze in place.
+
+**AC-512 · Palette values are exact**
+**Given** the theme module,
+**Then** the five car colours are `#FF852A`, `#89D9FF`, `#FF5386`, `#22C6AF`, `#A879FF` in that
+index order, and the chrome tokens match [`ui.md` §5.3](ui.md#53-surface-and-chrome-palette)
+character for character.
+
+---
+
+## 600 — Accessibility
+
+**AC-601 · Glyph assignment**
+**Given** the five palette entries,
+**Then** their glyphs are circle, triangle-up, square, plus, double-bar in index order — so that
+the two tritanopia-collapsing pairs (Ember/Rose, Sky/Teal) are circle-vs-square and
+triangle-vs-plus.
+
+**AC-602 · Glyphs are always drawn**
+**Given** any settings combination,
+**Then** every car and every depot shows its glyph. There is no setting that hides it.
+
+**AC-603 · Glyphs are screen-upright**
+**Given** a car on a diagonal edge,
+**Then** its glyph is rotated 0° relative to the screen while its body is rotated to the road
+tangent.
+
+**AC-604 · Symbol size setting**
+**Given** Symbol size = Large,
+**Then** `GLYPH_CAR` is 66 LU, `GLYPH_DEPOT` is 88 LU and car-glyph opacity is 100 %; at Standard
+they are 48 LU, 64 LU and 78 %.
+
+**AC-605 · Reduce motion preserves information**
+**Given** Reduce motion = On,
+**Then** the shatter, vignette flash, panel spring, last-life pulse and score count-up are
+replaced by their static or 120 ms-fade equivalents, and every state in
+[`ui.md` §8](ui.md#8-screen-states) is still distinguishable from every other.
+
+**AC-606 · Contrast floors**
+**Given** the theme,
+**Then** every text token is ≥ 4.5 : 1 against every surface it is used on, and every car colour
+is ≥ 3.0 : 1 against `--road` (measured minimum 4.21 : 1).
+
+**AC-607 · Screen-reader scope is what is claimed**
+**Given** VoiceOver enabled,
+**Then** every menu, overlay and settings control is labelled and operable, and the play surface
+is exposed as a single element whose label updates on delivery, misroute and level end with the
+level number, delivered count, quota and lives. Per-car announcement is explicitly out of scope.
+
+**AC-608 · Every control is at least 44 × 44 pt**
+**Given** any screen,
+**Then** every interactive element has a hit area of at least 44 × 44 pt with at least 8 pt
+between adjacent targets.
+
+**AC-609 · Lives are not signalled by colour alone**
+**Given** the HUD,
+**Then** a lost life is indicated by the pip becoming outlined, not by a hue change, and the
+count is also legible from the pip fill state alone in greyscale.
+
+**AC-610 · Haptics can be turned off**
+**Given** Haptics = Off,
+**Then** no `expo-haptics` call is made for any event.
+
+---
+
+## 700 — Progression
+
+**AC-701 · Level-to-band mapping**
+**Given** a level number `N`,
+**Then** its band is 1 for `N ≤ 4`, 2 for `5 ≤ N ≤ 9`, 3 for `10 ≤ N ≤ 15`, 4 for
+`16 ≤ N ≤ 22`, and 5 for `N ≥ 23`.
+
+**AC-702 · Level seed derivation**
+**Given** `RUN_SEED` and level `N`,
+**Then** the level seed is `mix32(RUN_SEED ^ Math.imul(N, 0x9E3779B1), GEN_SALT)` and is stable
+across restarts.
+
+**AC-703 · Unlock sequence**
+**Given** level `N` cleared for the first time,
+**Then** level `N+1` becomes available and no later level does.
+
+**AC-704 · Retry replays the same level**
+**Given** a level and its seed,
+**When** Retry is chosen,
+**Then** the regenerated network, depot colours and spawn schedule are deeply equal to the
+previous attempt's.
+
+**AC-705 · Persistence fields**
+**Given** a cleared level,
+**Then** cleared-flag, best score, best streak and fewest misroutes are stored, and survive an app
+restart.
+
+**AC-706 · No network, no accounts, no ads**
+**Given** the whole app,
+**Then** it makes no outbound network request, has no sign-in, and contains no advertising or
+analytics SDK.
+
+**AC-707 · Level 1 is always playable**
+**Given** a fresh install with no stored progress,
+**Then** level 1 is immediately available with no gate.
+
+---
+
+## 800 — Failure and edge cases
+
+**AC-801 · The third misroute ends the level immediately**
+**Given** `lives === 1`,
+**When** a car is misrouted,
+**Then** `phase` becomes `'lost'` on that same tick and no further car resolves.
+
+**AC-802 · Quota and misroute on the same tick is a win**
+See AC-122; this is the on-device expression of it — the level-complete overlay is shown, not the
+failure overlay.
+
+**AC-803 · Backgrounding does not advance the simulation**
+**Given** a running level,
+**When** the app is backgrounded for 30 s and resumed,
+**Then** `state.tick` at the moment of resume equals `state.tick` at the moment of backgrounding.
+
+**AC-804 · Resume countdown**
+**Given** a resume from background,
+**Then** a 3-2-1 countdown of 3 × 600 ms runs, no `step()` is called during it, and taps are
+discarded until it completes.
+
+**AC-805 · A slow frame advances whole ticks**
+**Given** a 50 ms frame,
+**Then** `step()` is called exactly 3 times and 0.0 ticks of remainder are carried into the
+simulation (the 0.33 ms remainder stays in the React layer's accumulator).
+
+**AC-806 · A very slow frame is capped**
+See AC-127; on device, a 2 s stall must not produce a visible teleport of any car by more than
+`8 * speed` LU.
+
+**AC-807 · Generator exhaustion throws**
+**Given** a deliberately impossible band configuration injected into the band table,
+**Then** `generate()` throws `GEN_EXHAUSTED` with the band and seed in the message, and
+`tools/generator-audit.mjs` reports a failure rather than a pass.
+
+**AC-808 · Spawn exhaustion is asserted, not tolerated**
+**Given** a run artificially forced past `spawns.length`,
+**Then** the engine throws rather than spawning nothing and silently stalling.
+
+**AC-809 · Empty input array**
+**Given** `step(state, [])`,
+**Then** the tick advances and no junction changes state.
+
+**AC-810 · `step()` after a terminal state**
+**Given** `phase !== 'running'`,
+**When** `step()` is called,
+**Then** the returned state is deeply equal to the input state.
+
+**AC-811 · Cross-machine replay**
+**Given** the same recorded run,
+**When** it is replayed on an arm64 device and on an x86 CI runner,
+**Then** the final states are deeply equal. **A regression here outranks every other finding.**
+
+**AC-812 · React 19 StrictMode double-invocation**
+**Given** development mode with StrictMode on,
+**When** the play screen mounts,
+**Then** the simulation advances the same number of ticks per second as it does with StrictMode
+off, no timer is registered twice, and no `step()` is called from inside a `setState` updater.
+
+**AC-813 · A level with the minimum junction count is still winnable**
+**Given** a band-1 level (`J = 3`, `D = 2`),
+**Then** the constrained bot clears it, and every one of its three colours requires at least one
+flip in at least one spawn sequence over 1,000 seeds — i.e. no level is won by never tapping.
+
+**AC-814 · No level is won by never tapping**
+**Given** 1,000 seeds per band and a bot that never taps,
+**Then** the clear rate is 0 % at every band.
