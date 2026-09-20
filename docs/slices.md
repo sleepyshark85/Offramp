@@ -4,7 +4,7 @@
 what the next action is. `docs/development-process.md` says *how* work is done; this says *where
 it is*.
 
-Last updated: developer round 4 committed (`7b28dd1`). 105 tests green.
+Last updated: **slice 1 merged to `main`** (`23d3bc1`). 105 tests green on `main`.
 
 ---
 
@@ -13,78 +13,49 @@ Last updated: developer round 4 committed (`7b28dd1`). 105 tests green.
 | Slice | Contents | State |
 |---|---|---|
 | **0** | Squad, scaffold, toolchain, design | **Done**, merged to `main` |
-| **1** | Simulation engine, generator, headless harnesses | **Code done and green; difficulty not yet tuned.** On `slice-1-engine`, draft PR #1 |
-| **1b** | Bot rebuilt to the attention model; 6 defects fixed; entry geometry corrected | **Design committed, implementation pending** |
-| **2** | React state layer + Skia play surface | Not started |
+| **1** | Simulation engine, generator, headless harnesses | **Done**, merged to `main`. Every §7.2 target in band. |
+| **1b** | Attention model, entry geometry, difficulty levers | **Done**, merged with slice 1 |
+| **2** | React state layer + Skia play surface | **In progress** on `slice-2-play` |
 | **3** | Visual system, motion, accessibility | Not started |
 | **4** | Meta progression, persistence | Not started |
 | **5** | Polish — sound, haptics, juice | Not started |
 | **6** | Store readiness | Not started |
 
-**Branch:** `slice-1-engine`. **`main` has slice 0 only.** Do not branch new work off
-`slice-1-engine` unless the dependency is real (`development-process.md` §6.5).
+**Branch:** `slice-2-play`, cut from `main`. `main` carries slices 0, 1 and 1b.
 
 ---
 
 ## → The next action
 
-**Designer round 6: pull the difficulty levers, and fix three AC wording defects.**
+**Slice 2: the React state layer and the Skia play surface.** It is done when **the game plays
+on a real phone** — not when it bundles.
 
-Round 4 implemented onset capture. **The bimodality is gone** — the row-0 split collapsed from
-0.2/32.7/80.1/95.3/19.8 pp to 0.2/1.0/3.2/30.2/9.2, and AC-246 passes at every band with the
-first decision now as reliable as every other one. 105 tests green, determinism re-verified,
-and §7.2.4 / §7.1.8 / §7.1.10 are now fully re-derivable from this repo.
+Read `docs/device-testing.md` first. Skia is a native module, so **Expo Go cannot run this app**;
+iteration goes through an EAS cloud dev build, and `eas init` has never been run.
 
-**What is left is the difficulty curve itself.** Clear rates are
-**99.9 / 99.3 / 97.2 / 68.9 / 2.6 %** against targets of ≥95 / 86–97 / 76–92 / 66–85 / 55–78:
+What already exists that slice 2 needs:
 
-| pair | drop | R2 (≥4 pp) | R3 (≤15 pp) |
-|---|---|---|---|
-| 1→2 | 0.6 pp | **FAIL** | pass |
-| 2→3 | 2.1 pp | **FAIL** | pass |
-| 3→4 | 28.3 pp | pass | **FAIL** |
-| 4→5 | 66.3 pp | pass | **FAIL** |
+- `src/engine/serialise.js` — for the `window.__offramp` snapshot tier-3 asserts against. The
+  canvas has no queryable elements, so this is how Playwright sees state at all.
+- `src/engine/clock.js` — the ms→tick boundary, already guarding non-finite deltas. The React
+  layer owns the timer; the engine never sees a millisecond.
+- `ui.md` §7.6 — the depot-mouth draw order, which puts cars **beneath** the depot layer.
+- `ui.md` §4.2 — draw order, renumbered in round 5 when the entry flare was added.
 
-Bands 1–3 are flat and indistinguishable; bands 4–5 fall off a cliff. This is now a real statement
-about the game, measured on an instrument that has passed its own sensitivity guard — which is
-what the last four rounds bought.
+Two things in slice 2 are load-bearing for correctness, not just for looks:
 
-Use `generation.md` §7.4's lever order, starting at **Lever 0** (iso-duration: raise `interval`,
-rescale `quota` by `1 + round((quota−1)·interval/interval')`). Constraints that must all still
-hold afterwards: §7.3's duration bands, AC-231's 130 s ceiling, AC-139's spawn margin re-derived
-from the new parameters, AC-233's tap ceiling, AC-234's variety floors, and **AC-246** — band 5
-sits at 81 % of its ceiling, and the ceiling is a function of `quota`, so a lever that cuts
-`quota` loosens it and one that cuts `interval` tightens it. Never touch a bot constant.
+1. **`AC-517` — a car's arrival must be an abrupt onset, never a fade.** A gradual luminance
+   ramp abolishes onset capture, which is the mechanism the entire bot model and every §7.2
+   number now rests on. If the renderer ships a fade-in, the drawing falsifies the player model
+   and **nothing in the clear rate would show it.** This is slice 3 work but it constrains slice 2's
+   draw order.
+2. **`tools/layout-sweep.mjs` does not exist** (`development-process.md` §9, AC-604), and
+   AC-411's device-matrix clause waits on it. Build it in slice 2.
 
-**Three AC wording defects found by the developer, all confirmed:**
-
-1. **AC-246's parenthesis has two readings, and one is not a working instrument.** Under the
-   reachable-colour-*set* reading the gaps go negative at every band under *both* sweeps, so the
-   check would pass the fault it exists to catch. Tighten it to the per-colour reading.
-2. **AC-247's "exactly the number of cars that spawned" is unachievable** — a car still in flight
-   at level end is never glanced at, so the ratio is 0.998–0.999.
-3. **§8's harness table contradicts AC-246 about band 1**, saying the injection must fail at every
-   band. Band 1 never had the defect and correctly passes.
-
-**After that:** developer round 5 implements and re-measures, then **slice 1 merges to `main`**
-and slice 2 begins.
-
-### Carried into slice 3 — do not lose this one
-
-**AC-517 (a car's arrival is an abrupt onset) is load-bearing for a *measurement*, not just for a
-look.** The visual system originally specified a 140 ms fade-in for arriving cars. A gradual
-luminance ramp is precisely the manipulation that abolishes onset capture — the mechanism the
-whole bot model, and therefore every §7.2 number, now rests on. If the renderer ships a fade-in,
-the drawing falsifies the player model and **nothing in the clear rate would show it.**
-
-### Still outstanding regardless
-
-- `tools/layout-sweep.mjs` does not exist (`development-process.md` §9, AC-604). Slice 2.
-  AC-411's device-matrix clause waits on it.
-- `eas init` has never been run — no `extra.eas.projectId`, so no device build exists and tier 5
-  has never happened.
-- `docs/design` §6.2's distinct-network counts and drawn-`J` means still differ from this repo in
-  the last digit. Immaterial to every verdict; re-state them from a real run when convenient.
+**Also open:** designer round 7 is correcting stale numbers in `gameplay.md` and `generation.md`
+— band 3's measured per-car error is 3.38 %, not the 2.88 % recorded, which makes §7.2.4's
+"rising at every step" false (it is flat across bands 3 and 4). No verdict changes; the numbers
+are wrong. `ui.md` is untouched by that round, so slice 2 can proceed against it.
 
 ---
 
