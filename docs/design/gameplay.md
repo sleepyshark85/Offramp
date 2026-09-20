@@ -44,9 +44,32 @@ transition" loop in §2.5 is provably single-pass. 30 Hz would halve the step co
 a 33 ms quantisation right at junction-entry boundaries, which is exactly where the game's
 fairness lives.
 
-**Catch-up.** The React layer accumulates real elapsed milliseconds and converts to whole ticks.
-It calls `step()` at most `MAX_CATCHUP_TICKS` times per frame and **discards** any remainder
-beyond that, resetting its accumulator to zero. Consequences, stated plainly:
+**Converting elapsed time to ticks — normative, and the integer form is required.** The React
+layer accumulates real elapsed milliseconds and converts to whole ticks with exactly this
+arithmetic:
+
+```
+acc += dtMs                                   // float milliseconds, from the frame callback
+n    = Math.floor(acc * TICK_HZ / 1000)       // multiply FIRST, then divide
+if (n > MAX_CATCHUP_TICKS) { n = MAX_CATCHUP_TICKS; acc = 0 }
+else                       { acc -= n * 1000 / TICK_HZ }
+for (let i = 0; i < n; i++) state = step(state, inputsForTick())
+```
+
+`Math.floor(acc * TICK_HZ / 1000)` and `Math.floor(acc / (1000 / TICK_HZ))` are **not** the same
+function. `1000 / 60` is `16.666666666666668` in IEEE 754 — very slightly *above* one sixtieth of
+a second — so the second form returns **2** for a 50 ms frame where the first returns the correct
+**3**. The divide-first form is a silent one-tick-per-frame loss under exactly the conditions
+(a frame that is a whole multiple of the tick period) where correctness is most visible. The
+integer-first form is required by [AC-805](acceptance-criteria.md) and the divide-first form is
+the fault [AC-816](acceptance-criteria.md) injects to prove AC-805 can fail.
+
+`acc` is a float and it lives in the React layer only. Its residue can never perturb the
+simulation, because the only thing that crosses into the engine is the integer `n`.
+
+**Catch-up.** The layer calls `step()` at most `MAX_CATCHUP_TICKS` times per frame and
+**discards** any remainder beyond that, resetting its accumulator to zero. Consequences, stated
+plainly:
 
 - On a device that cannot sustain 60 fps, world time runs slower than wall time. The level takes
   longer in seconds but is identical in ticks. That is the correct trade: a time-skip would
@@ -195,13 +218,31 @@ resolveArrival(car, depotNode):
   else:
      state.misrouted += 1
      state.streak     = 0
-     state.lives     -= 1
+     state.lives      = max(0, state.lives - 1)        // floored; see below
      push { type:'misrouted', carId, depotId, carColour, depotColour }
 ```
 
 Counters and the event are written by the same function, in one place. There is deliberately no
 second derivation of the score from the event stream — two sources that must agree is the shape
 of a bug, not the absence of one (`docs/development-process.md:173`).
+
+**Why `lives` is floored at 0 and `misrouted` is not.** Step 4 of §2.5 resolves *every* arrival in
+the tick before step 5 checks for a terminal condition, so two cars can misroute on the same tick
+with `lives === 1`. Three things have to hold together and the resolution is normative:
+
+1. **Every arrival resolves.** No arrival is skipped because the level is already over — the
+   terminal check is a separate step and it runs once, after all of them. Skipping would make the
+   result depend on car id order, which §2.5 deliberately fixed so that nothing depends on it.
+2. **`misrouted` counts every misroute.** It is the honest count of what the player did, it feeds
+   the end-of-level summary, and it must equal the number of `misrouted` events emitted.
+3. **`lives` is clamped at 0.** `lives` is a displayed quantity with three pips; `-1` is not a
+   state the UI can draw and not a state the fuzzer's invariant permits.
+
+So on that tick `misrouted` increases by 2, two events are emitted, `lives` is 0 and not −1, and
+`phase` becomes `'lost'` at step 5. This reconciles [AC-119](acceptance-criteria.md),
+[AC-121](acceptance-criteria.md), [AC-122](acceptance-criteria.md) and
+[AC-801](acceptance-criteria.md), which slice 1 found could not all hold under their slice-0
+wording; [AC-136](acceptance-criteria.md) is the case that pins it.
 
 ### 2.7 Spawn scheduling as a deterministic function of the seed
 
@@ -366,7 +407,10 @@ LIVES = 3
 
 Three is the smallest number that supports a distinct **last life** state (which the UI needs to
 communicate jeopardy, [`ui.md` §8.5](ui.md#85-last-life)) while still allowing two recoveries. A
-level ends the instant the third life is lost.
+level ends on the terminal check of the tick in which the third life is lost — that is, after
+every arrival on that tick has resolved (§2.6), not in the middle of them. `lives` is clamped at
+0, so two misroutes on the tick that takes the player from one life to none leave `lives === 0`,
+`misrouted` up by two, and `phase === 'lost'`.
 
 ### 4.2 Quota and level end
 
@@ -415,7 +459,11 @@ Cars pass through one another with no collision, no queueing and no speed change
   harder and would introduce a way to lose that the player cannot see coming.
 - The topology guarantees it is almost never visible anyway (§4.5).
 
-### 4.5 Why two cars never visually overlap
+### 4.5 Why two cars never overlap on the same edge
+
+**The heading is the claim, and the claim is narrower than slice 0 made it.** The argument below
+proves something about two cars *on one edge*. It proves nothing about two cars on two different
+edges, and §4.5b is the case it does not cover.
 
 The network is a **tree**: no non-depot node has more than one incoming edge
 ([`generation.md` §2.4](generation.md#24-merge-free-by-construction)). Two cars are on the same
@@ -436,8 +484,32 @@ minSeparationLu = (INTERVAL - 2 * JITTER) * SPEED_MLU / 1000
 | 5 | 228 LU | 140 LU | 88 LU |
 
 The worst case, band 5, leaves 88 LU — about 32 pt on an iPhone 16 — of clear road between two
-cars. This is a *structural* guarantee, not a tuned one: it cannot be violated by any network the
-generator emits, because there is nowhere for two paths to converge. ([AC-124](acceptance-criteria.md))
+cars. This is a *structural* guarantee for cars sharing an edge, and it is not a tuned one: no
+network the generator emits can violate it, because the route portion of the network has nowhere
+for two paths to converge. ([AC-124](acceptance-criteria.md))
+
+### 4.5b Where the guarantee stops: the depot mouth
+
+Two paths *do* converge in one place — the depot row. V2
+([`generation.md` §5](generation.md#5-validity-rules-what-rejects-a-candidate)) requires terminal
+targets to be non-decreasing rather than strictly increasing, so two or three terminal edges may
+feed one depot. Slice 1 measured what that means:
+
+| Measured over the generator | Result |
+|---|---|
+| Levels with at least one depot fed by two or more terminal edges | **100 % at every band** (max depot in-degree 3 at bands 2–5) |
+| Runs in which two cars on different terminal edges came within a car length | **0–5 per 1,000**, by band |
+| Minimum observed centre-to-centre distance | **26 LU**, against `CAR_L = 140` — a total overlap, not a near miss |
+
+So the situation is universal structurally and rare behaviourally, and when it lands it is a
+complete overlap. **No rule and no generator change follows from this.** Both cars resolve
+correctly and independently; §4.4 already says cars do not interact. It is a drawing problem, and
+it is solved in the drawing: [`ui.md` §7.6](ui.md#76-the-depot-mouth) specifies a depot-mouth
+apron that covers the last stretch of every terminal edge, sized per band so that the region where
+two converging centrelines are closer than a car's width is drawn over the cars rather than under
+them. Outside the apron the worst residual overlap is 11 % of a car body — a flank clip — and the
+minimum centre-to-centre distance is 91 LU, which is three and a half times the 26 LU that was
+measured. ([AC-513](acceptance-criteria.md))
 
 ### 4.6 Why a junction is always flippable in time
 
@@ -448,7 +520,7 @@ separation equals their spawn separation. The minimum across all bands is band 5
 One second is comfortably above the sum of a human's visual reaction (~250 ms) and tap (~100 ms).
 No band asks the player to beat a 400 ms window at a single junction. The difficulty is the
 *aggregate* load across several junctions, which is what the constrained bot measures
-([`generation.md` §6](generation.md#7-the-two-measurable-targets)).
+([`generation.md` §7](generation.md#7-the-two-measurable-targets)).
 
 ### 4.7 Every level is solvable, provably
 
@@ -614,7 +686,39 @@ value of one setting changes.
 The estimated sustained tap rate at band 5 is **1.03 taps/s** over 109 s. That is high, and it is
 the number most likely to come back from the tester as "too hard". The recommendation is to hold
 the parameters as specified and let the constrained bot arbitrate: if band 5's clear rate falls
-below the 62 % floor ([`generation.md` §6](generation.md#7-the-two-measurable-targets)), the first
-lever is quota (64 → 56), not speed, because reducing speed shortens the planning horizon and
-pushes the game toward reaction. The second lever is interval (96 → 108). This ordering is
-normative so the fix is not reinvented under time pressure.
+below the 55 % floor ([`generation.md` §7.2](generation.md#72-target-1--constrained-bot-clear-rate)),
+the first lever is the iso-duration pair — raise `interval` and cut `quota` together so the
+completion-time band, which passes today, keeps passing
+([`generation.md` §7.4](generation.md#74-when-a-target-is-missed)). Speed is never a lever:
+reducing it shortens the planning horizon relative to the spawn rate and pushes the game toward
+reaction. This ordering is normative so the fix is not reinvented under time pressure.
+
+### 8.7 The bot is a model of attention, not of timing — **decided**
+Slice 0's constrained bot constrained only *when* it could tap. Slice 1 measured the consequence:
+one reading of the policy cleared 100 % of band 5 while obeying every constraint the design
+imposed, because nothing in the design ever asked it to divide its attention. A bot with perfect
+memory of every car's colour and no cost to switching between cars cannot measure the difficulty
+of dividing attention, which is the only thing this game is about.
+
+[`generation.md` §7.1](generation.md#71-the-constrained-solver-bot) now specifies a bounded
+working set of three cars, a cost in ticks to focus a car, a higher cost to focus one it has
+forgotten, a memory that expires after two seconds, and a fixed sweep that must *find* the next
+car rather than being handed a sorted list. The line it draws is deliberate: **the static picture
+is free, the moving objects are not.** A player reads the network once and refers back to a
+drawing that has not changed; what costs them is keeping four coloured cars bound to four
+positions while the board keeps producing more.
+
+The sharpest consequence is that the safe-window check now ranges over the bot's working set
+only. The bot can misroute a car it has forgotten by flipping a junction for a car it is holding
+— and never see it coming. That is the game's actual failure mode, and the old instrument could
+not produce it at all.
+
+### 8.8 §4.5's guarantee is narrowed, not repaired — **decided**
+Slice 0 claimed no two cars ever visually overlap. Slice 1 measured that every level has a depot
+fed by two or more terminal edges, and that two cars come within 26 LU of each other there in up
+to 5 runs per 1,000. The options were to constrain the generator (make terminal targets strictly
+increasing, which costs the shared-depot topology entirely and shrinks an already small network
+space), to add a spacing rule on terminal edges (a rule that would reject valid networks for a
+render artifact), or to draw it correctly. The third is the only one that costs the game nothing,
+so §4.5's heading now says what its argument proves, §4.5b states the exception with its measured
+numbers, and [`ui.md` §7.6](ui.md#76-the-depot-mouth) covers it.

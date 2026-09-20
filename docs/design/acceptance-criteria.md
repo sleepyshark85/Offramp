@@ -129,8 +129,13 @@ unchanged, and a `delivered` event is emitted.
 **AC-119 · Misroute costs a life and no points**
 **Given** a car entering a depot whose colour differs from the car's,
 **When** the arrival resolves,
-**Then** `lives` decreases by 1, `misrouted` increases by 1, `streak` becomes 0, `score` is
-unchanged, and a `misrouted` event carrying both colours is emitted.
+**Then** `lives` becomes `max(0, lives - 1)`, `misrouted` increases by 1 unconditionally, `streak`
+becomes 0, `score` is unchanged, and a `misrouted` event carrying both colours is emitted.
+*The decrement is clamped, not conditional: the arrival always resolves and is always counted,
+and only the displayed life total is floored. See AC-121, AC-122, AC-136 and AC-801, which
+together were unsatisfiable under their slice-0 wording, and*
+[`gameplay.md` §2.6](gameplay.md#26-resolvearrival--the-single-place-scoring-happens) *for the
+resolution.*
 
 **AC-120 · Score is non-decreasing**
 **Given** a seeded fuzz run of 50,000 ticks with randomised taps,
@@ -139,13 +144,19 @@ unchanged, and a `misrouted` event carrying both colours is emitted.
 
 **AC-121 · Lives are non-increasing and floored**
 **Given** the same fuzz run,
-**Then** `lives` never increases and never goes below 0.
+**Then** `lives` never increases and never goes below 0 — including on a tick in which more
+misroutes resolve than there are lives remaining (AC-136). The floor is a property of the
+decrement in AC-119, not a separate clamp applied afterwards, so there is exactly one place in the
+engine where `lives` is written.
 
 **AC-122 · Terminal conditions, and their order**
 **Given** a tick in which the quota-completing car is delivered **and** another car is misrouted
 taking `lives` to 0,
 **When** the terminal check runs,
-**Then** `phase === 'won'`.
+**Then** `phase === 'won'`. Both arrivals resolved first: `delivered`, `misrouted`, `score` and
+`lives` all reflect both cars, because step 4 of
+[`gameplay.md` §2.5](gameplay.md#25-stepstate-inputs--exactly-one-tick) resolves every arrival in
+the tick and step 5 runs the terminal check exactly once, afterwards.
 
 **AC-123 · The spawn array is never exhausted**
 **Given** a constrained-bot run over 1,000 seeds per band,
@@ -212,6 +223,20 @@ freeze.
 **Given** `src/engine/`,
 **When** it is imported and driven by `node --test` with no bundler and no React,
 **Then** it runs to completion.
+
+**AC-136 · Two misroutes on one tick with one life**
+**Given** `lives === 1` and two cars whose `progress` reaches the end of their edges into
+wrong-coloured depots on the same tick,
+**When** that tick is stepped,
+**Then** both arrivals resolve in ascending car id order, `misrouted` increases by **2**, exactly
+two `misrouted` events are emitted, `lives === 0` and not `-1`, `score` is unchanged, and
+`phase === 'lost'` after the terminal check of that tick.
+
+**AC-137 · The terminal check runs once, after every arrival**
+**Given** a seeded fuzz run of 50,000 ticks with randomised taps,
+**When** `phase` is sampled inside step 4 of every tick,
+**Then** it is `'running'` throughout step 4 on every tick, and changes only at step 5 — no
+arrival is ever skipped because an earlier arrival in the same tick ended the level.
 
 ---
 
@@ -316,21 +341,22 @@ differ.
 **Then** the clear rate is **100 %** and the misroute count is **0** in every run.
 
 **AC-221 · Constrained bot clear rate — band 1**
-**Given** `tools/bot.mjs --seeds 1000 --band 1` with the constraints of
+**Given** `tools/bot.mjs --seeds 1000 --band 1` with the attention model of
 [`generation.md` §7.1](generation.md#71-the-constrained-solver-bot),
-**Then** the clear rate is within **92 – 100 %**.
+**Then** the clear rate is **≥ 95 %**. There is no upper bound at band 1
+([`generation.md` §7.2](generation.md#72-target-1--constrained-bot-clear-rate) R1).
 
 **AC-222 · Constrained bot clear rate — band 2**
-**Then** the clear rate is within **88 – 99 %**.
+**Then** the clear rate is within **86 – 97 %**.
 
 **AC-223 · Constrained bot clear rate — band 3**
-**Then** the clear rate is within **80 – 96 %**.
+**Then** the clear rate is within **76 – 92 %**.
 
 **AC-224 · Constrained bot clear rate — band 4**
-**Then** the clear rate is within **72 – 90 %**.
+**Then** the clear rate is within **66 – 85 %**.
 
 **AC-225 · Constrained bot clear rate — band 5**
-**Then** the clear rate is within **62 – 84 %**.
+**Then** the clear rate is within **55 – 78 %**.
 
 **AC-226 · Completion-time band — band 1**
 **Given** `tools/pacing.mjs` over 1,000 successful constrained-bot runs,
@@ -352,10 +378,14 @@ differ.
 **Given** every constrained-bot run across all bands and all sampled seeds,
 **Then** **no** run exceeds **130 s** of simulated time.
 
-**AC-232 · Bot constraints are enforced**
-**Given** the constrained bot's own input log,
-**Then** no two taps occur within 11 ticks, no tap occurs within 6 ticks of the tapped junction
-being reached by a car, and no tick contains more than one tap.
+**AC-232 · Bot motor constraints are enforced**
+**Given** the constrained bot's own input log and the per-tap record of which car the tap was made
+for,
+**Then** no two taps occur within `BOT_MIN_TAP_GAP = 11` ticks, no tap occurs within
+`BOT_LOCKOUT_TICKS = 6` ticks of **the car it was made for** reaching the tapped junction, and no
+tick contains more than one tap. *The lockout is scoped to the focused car; slice 0 phrased it over
+any car, which is a different constraint and not one the bot can evaluate without global
+knowledge.*
 
 **AC-233 · Tap rate is measured and reported**
 **Given** `tools/bot.mjs --seeds 1000` per band,
@@ -366,6 +396,53 @@ being reached by a car, and no tick contains more than one tap.
 **Given** 3,000 generated levels per band,
 **Then** the count of distinct network signatures is at least 30 for band 1 and at least 500 for
 bands 2–5.
+
+**AC-235 · The bot's attention bounds are enforced**
+**Given** `tools/bot.mjs --seeds 1000` per band with its bot state instrumented after every tick,
+**Then** `mem.length <= BOT_WORKING_SET = 3` on every tick of every run; no entry survives more
+than `BOT_MEMORY_TICKS = 120` ticks past its `seenTick`; the bot never emits a tap on a tick where
+`focus === null`; and every tap is for the car that was focused when the tap was emitted.
+
+**AC-236 · The bot is deterministic and seeded**
+**Given** the same `(seed, band)`,
+**When** `tools/bot.mjs` is run twice in one process and once in a fresh process,
+**Then** the three input streams are element-for-element identical, and the bot's PRNG has been
+drawn from exactly once per glance and never anywhere else — asserted by counting draws against
+the glance count.
+
+**AC-237 · R2 — every band is measurably harder than the one below it**
+**Given** the five clear rates of AC-221 – AC-225 over 1,000 seeds per band,
+**Then** each band's clear rate is at least **4 percentage points** below the band above it. *A
+run in which every band sits inside its own window but two adjacent bands measure within 4 points
+of each other is a failure: the ladder is not escalating.*
+
+**AC-238 · R3 — no band boundary is a wall**
+**Given** the same five clear rates,
+**Then** no adjacent pair differs by more than **15 percentage points**.
+
+**AC-239 · The attention report is emitted**
+**Given** `tools/bot.mjs --attention-report --seeds 1000` per band,
+**Then** it reports, per band: glances/s, focus events/s, the split between `BOT_SWITCH_TICKS` and
+`BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, and the
+count of misroutes caused by a flip the bot made for a held car that misrouted a car it was **not**
+holding. *Without these a missed target in AC-221 – AC-225 cannot be explained, only observed.*
+
+**AC-240 · The instrument is proven to be sensitive**
+**Given** the bot run at band 5 over 1,000 seeds with `BOT_WORKING_SET` raised to `Infinity`,
+`BOT_ACQUIRE_TICKS` and `BOT_SWITCH_TICKS` set to 0 and `BOT_MEMORY_TICKS` set to `Infinity` —
+every attention constraint removed, every timing constraint kept —
+**Then** the clear rate rises by at least **20 percentage points** over the unmodified bot.
+*This is the fault injection required by `docs/development-process.md:136`. It proves the
+attention model is what binds the measurement rather than something else wearing its name; a bot
+whose clear rate barely moves when attention is made free is not measuring attention.*
+
+**AC-241 · A lever pull satisfies both targets or is not a lever pull**
+**Given** any proposed change to a band's `quota`, `interval`, `pBranch` or `K` under
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed),
+**When** the change is applied,
+**Then** AC-221 – AC-231 are **all** re-run and all pass. A change that moves a clear rate into
+band while moving a completion-time median out of band has not been applied; it has been
+proposed and rejected.
 
 ---
 
@@ -479,8 +556,10 @@ declared support envelope rather than as a pass.
 
 **AC-501 · Draw order**
 **Given** a rendered frame,
-**Then** elements are painted in the order of [`ui.md` §4.2](ui.md#42-draw-order), and a car is
-never occluded by a junction marker or a depot.
+**Then** elements are painted in the order of [`ui.md` §4.2](ui.md#42-draw-order); a car is never
+occluded by a junction marker, by the road, by another car's shadow or by anything outside the
+depot layer; and a car **is** occluded by the depot-mouth apron and the depot body, which are the
+two things painted after it ([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
 
 **AC-502 · The car body is one colour fill**
 **Given** a rendered car,
@@ -533,6 +612,35 @@ cycle; at `lives >= 2` neither is present.
 **Then** the five car colours are `#FF852A`, `#89D9FF`, `#FF5386`, `#22C6AF`, `#A879FF` in that
 index order, and the chrome tokens match [`ui.md` §5.3](ui.md#53-surface-and-chrome-palette)
 character for character.
+
+**AC-513 · The depot mouth covers the convergence zone**
+**Given** any band and the `mouthLu` table of [`ui.md` §7.6](ui.md#76-the-depot-mouth),
+**When** every pair of positions on two terminal edges feeding the same depot is swept at 2 LU
+resolution with both car centres outside the apron,
+**Then** the minimum centre-to-centre distance is at least **91 LU**, the worst overlap of the two
+car bodies is at most **11 %** of a body, and diagonal-vs-opposite-diagonal pairs overlap by
+**0 %** — and in a seeded run of 1,000 levels per band, every pair of cars that comes within
+`CAR_L = 140` LU on converging terminal edges has both centres inside the apron.
+
+**AC-514 · The mouth never reaches a junction marker**
+**Given** the band table,
+**Then** `mouthLu <= rowH - JUNCTION_MARK_R - 12` for every band (tightest: band 5, 140 ≤ 142),
+and `MOUTH_W = 176 >= sqrt(CAR_L² + CAR_W²) = 163.3`, so no corner of a car at any heading
+protrudes from the side of the apron.
+
+**AC-515 · A misroute is legible from under the depot**
+**Given** a `misrouted` event,
+**Then** the shatter fragments originate at the mouth line of the terminal edge the car came down
+— not at the depot node — are filled with the **car's** colour, and are drawn over the apron and
+the depot body; and the rejecting depot desaturates over the same 350 ms
+([`ui.md` §8.4](ui.md#84-car-misrouted)).
+
+**AC-516 · The apron does not stack alpha**
+**Given** a depot fed by two or three terminal edges,
+**When** the frame is sampled inside the overlap of two apron fade segments,
+**Then** the sampled colour equals the colour of a single fade segment at the same alpha —
+the fades are composited in one `saveLayer` and the cores are one filled path
+([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
 
 ---
 
@@ -631,10 +739,14 @@ analytics SDK.
 
 ## 800 — Failure and edge cases
 
-**AC-801 · The third misroute ends the level immediately**
+**AC-801 · The third misroute ends the level on that tick**
 **Given** `lives === 1`,
 **When** a car is misrouted,
-**Then** `phase` becomes `'lost'` on that same tick and no further car resolves.
+**Then** `phase` becomes `'lost'` at the terminal check of that same tick, and no car resolves on
+any **later** tick. Cars arriving in the **same** tick still resolve and are still counted
+(AC-122, AC-136) — the terminal check is step 5 and runs once, after step 4 has resolved every
+arrival. *Slice 0's wording said "no further car resolves", which read as an abort in the middle
+of step 4 and contradicted AC-122.*
 
 **AC-802 · Quota and misroute on the same tick is a win**
 See AC-122; this is the on-device expression of it — the level-complete overlay is shown, not the
@@ -650,10 +762,16 @@ failure overlay.
 **Then** a 3-2-1 countdown of 3 × 600 ms runs, no `step()` is called during it, and taps are
 discarded until it completes.
 
-**AC-805 · A slow frame advances whole ticks**
-**Given** a 50 ms frame,
-**Then** `step()` is called exactly 3 times and 0.0 ticks of remainder are carried into the
-simulation (the 0.33 ms remainder stays in the React layer's accumulator).
+**AC-805 · A slow frame advances whole ticks, computed integer-first**
+**Given** an accumulator of 0 ms and a frame delta of 50 ms,
+**When** the React layer converts elapsed milliseconds to ticks using the normative form
+`n = Math.floor(acc * TICK_HZ / 1000)` from
+[`gameplay.md` §2.1](gameplay.md#21-tick-rate),
+**Then** `n === 3`, `step()` is called exactly **3** times, and the accumulator is left holding
+exactly **0 ms** — 50 ms is three whole ticks at 60 Hz and the remainder is zero, not 0.33 ms.
+*Slice 0 asserted a 0.33 ms remainder, which is arithmetically false.* The divide-first form
+`Math.floor(acc / (1000 / TICK_HZ))` returns **2** here, because `1000 / 60` is
+`16.666666666666668` in IEEE 754; see AC-816.
 
 **AC-806 · A very slow frame is capped**
 See AC-127; on device, a 2 s stall must not produce a visible teleport of any car by more than
@@ -696,3 +814,18 @@ flip in at least one spawn sequence over 1,000 seeds — i.e. no level is won by
 **AC-814 · No level is won by never tapping**
 **Given** 1,000 seeds per band and a bot that never taps,
 **Then** the clear rate is 0 % at every band.
+
+**AC-815 · The accumulator carries a true remainder**
+**Given** an accumulator of 0 ms and a frame delta of 55 ms,
+**Then** `step()` is called exactly **3** times and the accumulator retains **5 ms**; and given a
+following frame delta of 12 ms (accumulator 17 ms), `step()` is called exactly **1** more time.
+*This is the companion to AC-805: AC-805 pins the zero-remainder case and this pins a non-zero
+one, so a build that drops the remainder entirely passes neither.*
+
+**AC-816 · The divide-first form is proven to fail AC-805**
+**Given** the React layer's tick conversion temporarily replaced by
+`n = Math.floor(acc / (1000 / TICK_HZ))`,
+**When** AC-805 is run,
+**Then** it **fails**, reporting `n === 2` against the required 3; and it passes again once the
+integer-first form is restored. *`docs/development-process.md:136` — a check that cannot fail is
+not a check, and this is the specific fault AC-805 exists to catch.*

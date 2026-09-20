@@ -114,9 +114,13 @@ This single property delivers four things at once:
 
 - It satisfies `docs/development-process.md:96` — "no junction a car can enter from two
   directions" — completely rather than approximately.
-- Two cars share an edge only if they took the identical path, so their separation is exactly
-  their spawn separation ([`gameplay.md` §4.5](gameplay.md#45-why-two-cars-never-visually-overlap)).
-  No car ever overlaps another. This needs no validity rule and no tuning.
+- Two cars share an edge only if they took the identical path, so their separation *on that edge*
+  is exactly their spawn separation
+  ([`gameplay.md` §4.5](gameplay.md#45-why-two-cars-never-overlap-on-the-same-edge)). This needs
+  no validity rule and no tuning. It is a guarantee about **one edge**, and it says nothing about
+  two cars on two different terminal edges converging on a shared depot, which V2 permits and
+  which every generated level contains; that case is handled in the renderer
+  ([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
 - Two cars arrive at the same junction only if they took the same path to it, so the minimum
   flip window at any junction equals the minimum spawn gap — 1.00 s at the hardest band
   ([`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time)).
@@ -127,7 +131,7 @@ The alternative — a general DAG with merges — was prototyped and measured. T
 converging on a shared edge it requires every path to a node to have identical arc length, and
 that constraint rejects essentially every candidate at bands 2–5: **0 valid networks in 2,000
 seeds per band**, against 3,000/3,000 for the merge-free model. The decision is recorded in
-[`gameplay.md` §8.2](gameplay.md#82-merge-free-networks-decided).
+[`gameplay.md` §8.2](gameplay.md#82-merge-free-networks--decided).
 
 ### 2.5 Planarity: why there are never ambiguous crossings
 
@@ -424,6 +428,12 @@ The estimate assumes a junction is in the wrong state half the time, which overs
 rate because consecutive same-colour cars inherit a correct junction. The measured value from
 `tools/bot.mjs` is the one that counts ([AC-233](acceptance-criteria.md)).
 
+**Read this table as an upper bound on *demand*, never as a prediction of the bot.** Slice 1 found
+that the `literal` bot policy's measured tap rate landed almost exactly on this estimate while
+clearing 0.7 % of band 5 — a bot can match the tap rate by tapping the wrong things. Agreement
+between this column and a measured column is not evidence that the bot is playing well, and the
+two must never be used to corroborate each other.
+
 ---
 
 ## 7. The two measurable targets
@@ -437,40 +447,357 @@ An omniscient bot proves nothing about playability (`development-process.md:99`)
 the targets are stated against is constrained to human limits, and its constraints are
 normative — a bot that clears a level by doing something a person cannot do is not evidence.
 
+**This section was rewritten after slice 1.** The previous wording admitted at least three
+readings and the developer implemented all three; band 5's measured clear rate moved
+0.7 % → 30.0 % → 100 % across them, which means no clear-rate number stated against it was
+falsifiable. Worse, the most permissive reading cleared **100 % at every band while obeying every
+constraint the section imposed**, because every constraint was a *timing* constraint. Offramp's
+subject is divided attention, and nothing in the old bot ever divided its attention: it had
+perfect topology knowledge, perfect memory of every car's colour, and no cost to switching
+between cars. What follows replaces the timing-only model with an **attention model**, and is
+written so that two competent implementers cannot disagree about what the bot does on any tick.
+
+#### 7.1.1 What the bot is a model of
+
+A **competent, attentive adult playing with one thumb**. Not an expert, not a beginner, not a
+machine. It is the instrument the two targets in §7.2 and §7.3 are read off, so the question to
+ask of every constant below is not "is this optimal?" but "is this what a person can do?".
+
+#### 7.1.2 What the bot is given for free, and why the line is drawn there
+
+| Given free | Why |
+|---|---|
+| The network topology, and the set of depot colours reachable from every node | The network is drawn on screen, is static for the whole level, and does not move. A player reads it once during `SPAWN_LEAD` and refers back to a picture that has not changed. Charging for this would measure map-reading, not attention. |
+| The exact position of any car it is currently looking at | Positions are on screen and unambiguous. |
+| Its own tap timing | Motor constraints are modelled explicitly below. |
+
+| **Not** given free | Why |
+|---|---|
+| **Which car to look at next** | A player is not handed a list sorted by urgency. The bot scans (§7.1.5 D). |
+| **A car's colour** | Binding a colour to a moving object is the expensive operation in this game. It costs focus (§7.1.5 E) and it is forgotten (§7.1.5 A). |
+| **Simultaneous attention to many cars** | Capacity is `BOT_WORKING_SET`. |
+| **Knowing whether a flip hurts a car it has forgotten** | The safe-window check ranges over the working set only (§7.1.6). Capacity limits what the bot can fix *and* what it can avoid breaking. |
+
+#### 7.1.3 Constants
+
+Motor and latency constants — unchanged from slice 0 except where noted:
+
 ```
-BOT_REACTION_TICKS   = 15    // 250 ms: a car is not "seen" until 15 ticks after it spawns
-                             //          or after it transitions at a junction
-BOT_MIN_TAP_GAP      = 11    // 180 ms between consecutive taps
-BOT_MAX_TAPS_PER_TICK = 1    // one finger
-BOT_LOCKOUT_TICKS    = 6     // 100 ms: will not attempt a flip inside the last 100 ms
-                             //          before a car reaches the junction — no frame-perfect play
-BOT_LOOKAHEAD_CARS   = 4     // considers only the 4 cars nearest to their next junction
-BOT_SAFE_WINDOW      = 20    // will not flip a junction if another car reaches it within 20 ticks
-                             //          and the flip would misroute that car
+BOT_MIN_TAP_GAP       = 11   // 180 ms between consecutive taps. One thumb, returning to a new
+                             //   target: the fast end of Fitts-law reciprocal tapping at these
+                             //   target sizes.
+BOT_MAX_TAPS_PER_TICK = 1    // one finger. A consequence of §7.1.5, not a separate rule.
+BOT_LOCKOUT_TICKS     = 6    // 100 ms. The bot will not attempt a flip when the car it is acting
+                             //   for reaches the junction in fewer than 6 ticks — no frame-perfect
+                             //   play. (Slice 0 phrased this over "a car"; it is the *focused*
+                             //   car, because this models the bot's own motor confidence.)
+BOT_SAFE_WINDOW       = 20   // 333 ms. The bot will not flip a junction if a car it is currently
+                             //   holding in its working set would be misrouted by the flip and
+                             //   reaches that junction within 20 ticks. Cars it is not holding are
+                             //   not considered — it does not know about them.
 ```
 
-Policy: each tick, for the nearest actionable car, compute the branch at its next junction that
-leads to its depot (from the precomputed per-node reachable-colour sets). If the junction is
-already correct, do nothing. If it is wrong and neither the lockout nor the safe window forbids
-it, tap it. Otherwise move to the next car in the lookahead window.
+Attention constants — new, and the reason this section exists:
+
+```
+BOT_WORKING_SET   = 3    // cars whose colour and identity the bot holds at once.
+                         //   Visual working memory for objects that must stay bound to a moving
+                         //   location is 3–4 items; 3 is the conservative end. It is deliberately
+                         //   *below* the 3.3–4.1 cars in flight (§6.3): if capacity exceeded
+                         //   traffic, the game would be a checklist rather than a division of
+                         //   attention.
+
+BOT_SCAN_TICKS    = 6    // 100 ms per glance. About ten glances a second — the fast end of serial
+                         //   visual search for a positional judgement over a sparse field. Chosen
+                         //   generously so that a failure is attributable to capacity rather than
+                         //   to search speed.
+
+BOT_ACQUIRE_TICKS = 15   // 250 ms to focus a car that is NOT in the working set: find it, read its
+                         //   colour, bind the colour to that moving object, recall the depot.
+                         //   This is slice 0's BOT_REACTION_TICKS at the same value, reattached to
+                         //   the operation it was always meant to price. A newly spawned car is
+                         //   not a special case — it is simply a car not yet held.
+
+BOT_SWITCH_TICKS  = 4    // 67 ms to re-focus a car already in the working set: a covert attention
+                         //   shift to an already-encoded item. Cheap, but not free — that gap is
+                         //   what makes holding three cars different from holding one.
+
+BOT_MEMORY_TICKS  = 120  // 2.00 s. An entry not refreshed for this long is dropped and the car's
+                         //   colour must be re-observed at full price. Two seconds is shorter than
+                         //   band 1's spawn interval (2.60 s) and longer than band 5's (1.60 s),
+                         //   so memory alone can never carry the bot across the traffic stream,
+                         //   and it carries less of it as the bands get harder.
+
+BOT_URGENCY_TICKS = 90   // 1.50 s. A glance at a car whose next junction is further away than this
+                         //   does not escalate to a focus. It covers acquire (15) + tap gap (11) +
+                         //   lockout (6) with more than twice the margin, and it is short enough
+                         //   that the bot cannot pre-solve the board at leisure.
+
+BOT_LAPSE_PCT     = 3    // 3 % of glances land on nothing — roughly one lost glance every three
+                         //   seconds of sustained play. This is the only stochastic element and it
+                         //   is what makes the clear rate a distribution rather than a per-seed
+                         //   pass/fail, which is what a human's clear rate on one level is.
+
+BOT_SALT          = 0x5BF03635
+```
+
+`BOT_LOOKAHEAD_CARS` from slice 0 is **deleted**. It was the constant that made the three
+readings possible: it described a window over a globally sorted list, and nothing said what the
+bot did with a car in the window that needed nothing. There is no list and no window now.
+
+#### 7.1.4 Bot state
+
+The bot is a pure function of `(level, botState, simState)` and carries its own state. It runs
+**before** `step()` for tick `T` and returns the input array for that tick — either `[]` or a
+single `[{ tick: T, junctionId }]`.
+
+```
+botState = {
+  rng:         uint32,        // mulberry32(mix32(seed, BOT_SALT)) — gameplay.md §2.7
+  busyUntil:   int,           // ticks strictly before this are consumed by an action in progress
+  focus:       carId | null,  // the one car currently focused
+  mem:         [ { carId, colour, seenTick } ],   // the working set, oldest first, length <= 3
+  cursor:      carId | null,  // where the scan sweep is
+  lastTapTick: int,           // -BOT_MIN_TAP_GAP at tick 0
+}
+```
+
+`mem` is a **queue ordered by insertion**, not by recency of use. Eviction removes `mem[0]`.
+
+#### 7.1.5 The per-tick procedure — normative
+
+Exactly this, in exactly this order. Every branch returns; there is no fall-through that is not
+written down.
+
+```
+botTick(sim, bot):
+  T = sim.tick
+
+  // ── A. HOUSEKEEPING. Free, and it happens on every tick including busy ones.
+  A1  drop from bot.mem every entry with  T - entry.seenTick >= BOT_MEMORY_TICKS
+  A2  drop from bot.mem every entry whose carId is not in sim.cars
+  A3  if bot.focus is not in sim.cars:  bot.focus = null
+  A4  if bot.focus is not null and no entry in bot.mem has carId === bot.focus:
+          bot.focus = null                     // its memory decayed out from under it
+
+  // ── B. BUSY. An action in progress consumes the tick.
+  B1  if T < bot.busyUntil:  return []
+
+  // ── C. ACT. A ready focus is evaluated and then released, whatever the outcome.
+  C1  if bot.focus !== null:
+          c = the car in sim.cars with id bot.focus   // A3/A4 guarantee it exists
+          m = the entry in bot.mem with carId === bot.focus  // A4 guarantees it exists
+          v = evaluate(sim, c, m.colour)                      // §7.1.6
+          m.seenTick   = T                                    // looking refreshes, either way
+          bot.focus    = null
+          bot.busyUntil = T + 1
+          if v is NOTHING:  return []
+          j = v.junctionId
+          if T - bot.lastTapTick <  BOT_MIN_TAP_GAP:            return []
+          if ticksToReach(sim, c, j) <  BOT_LOCKOUT_TICKS:      return []
+          if breaksHeldCar(sim, bot, j, c):                     return []
+          bot.lastTapTick = T
+          return [ { tick: T, junctionId: j } ]
+
+  // ── D. GLANCE. One car per BOT_SCAN_TICKS, in a fixed sweep. This is the only way the bot
+  //       ever learns that a car exists.
+  D1  bot.busyUntil = T + BOT_SCAN_TICKS
+  D2  if sim.cars is empty:  return []
+  D3  bot.cursor = nextCarId(sim.cars, bot.cursor)
+  D4  r = bot.rng.next()                       // exactly one draw per glance; nowhere else
+      if r % 100 < BOT_LAPSE_PCT:  return []   // the glance did not land
+  D5  c = the car in sim.cars with id bot.cursor
+      j = nextJunction(sim, c)                 // §7.1.6
+      if j === null:                           // nothing left to decide for this car
+          drop the mem entry for c.id if present
+          return []
+      if ticksToReach(sim, c, j) > BOT_URGENCY_TICKS:  return []
+
+  // ── E. ESCALATE TO FOCUS. Paid for on top of the glance that found it.
+  E1  if bot.mem has an entry e for c.id:
+          e.seenTick    = T
+          bot.focus     = c.id
+          bot.busyUntil = T + BOT_SCAN_TICKS + BOT_SWITCH_TICKS
+          return []
+  E2  if bot.mem.length === BOT_WORKING_SET:  remove bot.mem[0]
+      append { carId: c.id, colour: c.colour, seenTick: T } to bot.mem
+      bot.focus     = c.id
+      bot.busyUntil = T + BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS
+      return []
+```
+
+**The sweep.** `nextCarId(cars, cursor)` is the smallest id in `cars` strictly greater than
+`cursor`; if there is none, or `cursor` is `null`, the smallest id in `cars`. `sim.cars` is
+ascending by id (`gameplay.md` §2.4), so this is a total, deterministic, cyclic sweep and needs
+no sort. Because ids are spawn order and every car moves at the same speed, the sweep runs from
+the car nearest the depots back up to the newest — a fixed spatial sweep, **not** an urgency
+ordering: the first car in the sweep is frequently one with nothing left to decide.
+
+**The three readings, resolved.** The old text's ambiguity was entirely about what happens when
+the bot looks at a car that needs nothing. Here, that costs a glance plus a focus and the tick
+that evaluates it (`C1` with `v = NOTHING`), and then attention is released. Checking is never
+free, waiting is never free, and attention is never held: **C1 releases the focus on every path**,
+so a car whose flip is currently forbidden does not pin the bot — it stays in `mem`, and the
+sweep will come back to it at `BOT_SWITCH_TICKS` instead of `BOT_ACQUIRE_TICKS`. That is the
+single rule that kills all three old readings at once.
+
+**Determinism.** `botTick` reads only `sim` and `bot`, draws from `bot.rng` exactly once per
+glance and never elsewhere, and breaks every tie by car id or junction id. Two bots started from
+the same `(seed, band)` produce byte-identical input streams
+([AC-236](acceptance-criteria.md)).
+
+#### 7.1.6 The helper functions
+
+```
+nextJunction(sim, car):
+   n = edge(car.edgeId).to
+   loop:
+      if n.kind === 'depot':   return null
+      if n.kind === 'branch':  return n
+      n = edge(n.out[0]).to                  // a pass node has exactly one outgoing edge
+```
+
+```
+ticksToReach(sim, car, junctionNode):
+   d = edge(car.edgeId).lengthMlu - car.progress
+   n = edge(car.edgeId).to
+   while n !== junctionNode:
+      if n.kind === 'depot':  return Infinity
+      e = n.out[ n.kind === 'branch' ? sim.open[n.junctionId] : 0 ]
+      d += edge(e).lengthMlu
+      n  = edge(e).to
+   return ceil(d / level.speedMluPerTick)
+```
+
+```
+evaluate(sim, car, rememberedColour):
+   j = nextJunction(sim, car)
+   if j === null:  return NOTHING
+   k0 = reaches(j.out[0], rememberedColour)     // precomputed per-edge reachable-colour sets
+   k1 = reaches(j.out[1], rememberedColour)
+   if k0 === k1:  return NOTHING                // both branches work, or neither does
+   want = k0 ? 0 : 1
+   if sim.open[j.junctionId] === want:  return NOTHING
+   return TAP(j.junctionId)
+```
+
+```
+breaksHeldCar(sim, bot, junctionId, focusedCar):
+   j = the branch node with this junctionId
+   for each entry m in bot.mem, in mem order:
+      if m.carId === focusedCar.id:  continue
+      if m.carId not in sim.cars:    continue
+      o = the car in sim.cars with id m.carId
+      if nextJunction(sim, o) !== j:                       continue
+      if ticksToReach(sim, o, j) > BOT_SAFE_WINDOW:        continue
+      if reaches(j.out[ sim.open[junctionId] ],     m.colour)
+         and not reaches(j.out[ 1 - sim.open[junctionId] ], m.colour):  return true
+   return false
+```
+
+`evaluate` uses `rememberedColour`, not `car.colour`. They are the same value today because the
+bot only ever writes a colour it has just observed; the distinction is kept in the signature so
+that a future mis-remembering model has somewhere to live, and so that a reviewer can see that
+the bot is reading its memory rather than the world.
+
+Note that `breaksHeldCar` ranges over `bot.mem` and nothing else. A car the bot has forgotten
+will be misrouted by a flip made for a car it is holding, and it will never see it coming. That
+is the failure mode the game is made of, and it is the reason this bot can measure something the
+old one could not.
+
+#### 7.1.7 Why this is expected to bind, arithmetically
+
+Attention supply is 60 ticks per second. Demand is one focus per junction decision per car:
+
+| Band | cars/s | mean depth | focus events/s needed | cheapest cost each | dearest cost each | ticks/s demanded |
+|---|---|---|---|---|---|---|
+| 1 | 0.385 | 2.0 | 0.77 | 11 | 22 | 8 – 17 |
+| 2 | 0.435 | 2.5 | 1.09 | 11 | 22 | 12 – 24 |
+| 3 | 0.500 | 2.7 | 1.35 | 11 | 22 | 15 – 30 |
+| 4 | 0.556 | 3.2 | 1.78 | 11 | 22 | 20 – 39 |
+| 5 | 0.625 | 3.3 | 2.06 | 11 | 22 | 23 – 45 |
+
+Cheapest is `BOT_SCAN_TICKS + BOT_SWITCH_TICKS + 1` (the car was still held); dearest is
+`BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS + 1` (it had been forgotten or evicted). Neither figure
+counts glances that land on a car needing nothing, which rise with the number of cars in flight.
+Band 1 sits at a quarter of supply; band 5 sits between 38 % and 75 % of supply *before* wasted
+glances, with 4.1 cars competing for 3 working-set slots so that the dearer figure dominates.
+
+The gradient is a property of the model, not of a tuned constant: the same fixed capacity is
+asked to cover more cars, more colours and more decisions per car at every step up the ladder.
+This is what §7.2's required *shape* is read against.
 
 ### 7.2 Target 1 — constrained-bot clear rate
 
-Over 1,000 seeds per band. Both ends matter: a band that clears at 99 % is not a challenge, and a
-band that clears at 40 % is not a game.
+Over 1,000 seeds per band, with the bot of §7.1.
 
-| Band | Clear-rate band |
-|---|---|
-| 1 | 92 – 100 % |
-| 2 | 88 – 99 % |
-| 3 | 80 – 96 % |
-| 4 | 72 – 90 % |
-| 5 | 62 – 84 % |
+**These targets are a shape the design requires, not a reading taken off a bot.** The slice-1
+report is right that a target retuned to whatever the instrument measures is not a target. What
+follows is derived from what the ladder is *for*; if the rebuilt bot misses it, §7.4 applies and
+that is a real finding about the game, which is the entire point of having an instrument.
+
+#### 7.2.1 The four requirements
+
+**R1 — Band 1 is not allowed to fail a competent player.** Band 1 is four levels long and it is
+where the player learns what a junction does. A competent player who loses level 1 before
+understanding the rule does not conclude that they should try harder; they conclude the game is
+not for them, and there is no upside to that failure anywhere in the design. **Band 1 clear rate
+≥ 95 %**, with no upper bound — 100 % at band 1 is the intended outcome, not a sign the band is
+too easy.
+
+**R2 — Every band must be harder than the one below it, measurably.** A band boundary exists to
+escalate; if band 3 is not harder than band 2 for the same player model, the boundary is
+decoration and §5.1's escalation table is a story rather than a design. **Each band's clear rate
+must be at least 4 percentage points below the band above it.** Four points is the smallest gap
+that is not sampling noise: the binomial standard error at `p ≈ 0.8` over 1,000 seeds is 1.3 pp,
+so 4 pp is about three standard errors.
+
+**R3 — No band boundary may be a wall.** §5.1 adds exactly one axis per step up the ladder — a
+column, a colour, a row. One axis should not cost a quarter of the player's runs. **No adjacent
+pair of bands may differ by more than 15 percentage points.**
+
+**R4 — Band 5 must have a ceiling, and must stay a reasonable bet.** Band 5 is levels 23 and up;
+it is where the player lives. Two bounds, from opposite directions:
+
+- *Upper.* At 80 % a competent player clears four levels in five and the ladder has no top. A
+  visible failure rate of at least one run in five is what makes band 5 read as the ceiling
+  rather than as band 4 with a bigger number. **≤ 80 %.**
+- *Lower.* Expected attempts to clear is `1/p`. At 50 % that is 2 attempts, about 3.7 minutes of
+  play per level cleared at band 5's ~110 s. At 33 % it is 3 attempts and 5.5 minutes, which is
+  where a retry stops feeling like a rematch and starts feeling like grinding. **≥ 50 %.**
+
+#### 7.2.2 The table
+
+The design band for each level band, chosen inside R1–R4 with room on both sides:
+
+| Band | Clear-rate band | Which requirement pins it |
+|---|---|---|
+| 1 | **≥ 95 %** | R1 |
+| 2 | **86 – 97 %** | R2 against band 1, R3 |
+| 3 | **76 – 92 %** | R2, R3 |
+| 4 | **66 – 85 %** | R2, R3 |
+| 5 | **55 – 78 %** | R4 both ends, inset from 50/80 for headroom |
+
+R2 and R3 are **separately measurable** and are ACs in their own right
+([AC-237](acceptance-criteria.md), [AC-238](acceptance-criteria.md)): a run that lands every band
+inside its window but with band 2 only 2 pp below band 1 has failed, because the ladder is not
+escalating even though every individual number looks fine. That is precisely the failure the
+slice-0 targets could not have detected.
 
 An **unconstrained** bot must clear **100 % of seeds at every band with zero misroutes**. That
 follows from V1/V5/V6 plus the 1.00 s minimum flip window
 ([`gameplay.md` §4.7](gameplay.md#47-every-level-is-solvable-provably)), so a failure there is a
 generator defect, not a tuning question. ([AC-220](acceptance-criteria.md))
+
+#### 7.2.3 What the slice-0 numbers were, and why they moved
+
+Slice 0 stated 92–100 / 88–99 / 80–96 / 72–90 / 62–84. Those numbers were judgement against an
+unbuilt bot, and the slice-1 report showed they had been written against two different implicit
+bots at once — §6.3's estimated tap rate matches the `literal` policy's measured rate almost
+exactly, while §7.2's clear rate could only have been written with something much more capable in
+mind. The bands above are wider and lower because they are now derived from R1–R4 rather than
+interpolated, and because the bot they are read off pays for attention. **No lever has been
+pulled.** §6.1's parameter table is untouched.
 
 ### 7.3 Target 2 — completion-time band
 
@@ -492,17 +819,59 @@ the two misroutes a winning run may contain. No seed at any band may exceed it
 
 The lever order is normative, so the fix is not reinvented under time pressure.
 
-- **Clear rate too low:** reduce `quota` first, then increase `interval`. Do **not** reduce speed
-  — a slower car shortens nothing and a faster spawn rate is what makes it hard; reducing speed
-  shortens the planning horizon relative to the spawn rate and pushes the game toward reaction.
-- **Clear rate too high:** increase `quota`, then reduce `interval`, then raise `pBranch`.
-- **Median time above band:** reduce `quota`. Duration is `≈ SPAWN_LEAD/60 + (quota-1)·interval/60 + transit`,
-  and `quota` is the only term that moves it without changing how the level feels.
-- **Median time below band:** increase `quota`.
+**Both targets bind at once.** §7.2 and §7.3 are not independent, and slice 1 showed the trap:
+moving band 5's clear rate from 30 % to a 62 % floor by cutting `quota` alone implied a median
+duration of about 76 s, which breaks §7.3's 98–122 s band — a band that currently passes at every
+seed. **A lever is only pulled if the sweep shows both targets satisfied after the pull.** A
+change that fixes §7.2 and breaks §7.3 has not fixed anything.
+
+**Lever 0 — the iso-duration lever. Try this first whenever the clear rate is out of band and the
+duration is in band.** Duration is
+`≈ SPAWN_LEAD/60 + (quota - 1)·interval/60 + transit`, so the product `(quota - 1)·interval` is
+what sets it. Difficulty, however, is set by `interval` alone — how much time separates two cars
+is how much attention each one can have. So the two can be moved against each other:
+
+```
+interval' = interval + Δ                       // Δ > 0 makes the band easier, Δ < 0 harder
+quota'    = 1 + round( (quota - 1) * interval / interval' )
+```
+
+This lowers (or raises) difficulty while holding the completion time where it already passes.
+Worked, for band 5 at `interval = 96`, `quota = 64`, `SPAWN_LEAD = 90` ticks and a measured
+transit of 6.5 s:
+
+| `interval'` | `quota'` | nominal duration | inside §7.3's 98–122 s? |
+|---|---|---|---|
+| 96 (today) | 64 | 108.8 s | yes |
+| 108 | 57 | 108.8 s | yes |
+| 120 | 51 | 108.0 s | yes |
+| 132 | 47 | 109.2 s | yes |
 
 `interval` must never fall below `2·jitter + 60` ticks, or the minimum flip window drops below
 1.00 s and [`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time) stops
-being true.
+being true. There is no upper bound on `interval` other than §7.3.
+
+**If lever 0 is exhausted** — that is, the clear rate is still out of band at the edge of what
+§7.3 allows:
+
+- **Clear rate too low:** reduce `quota` further, then reduce `pBranch` (fewer junctions, so
+  fewer decisions per car). Do **not** reduce speed — a slower car shortens nothing and a faster
+  spawn rate is what makes it hard; reducing speed shortens the planning horizon relative to the
+  spawn rate and pushes the game toward reaction.
+- **Clear rate too high:** increase `quota`, then raise `pBranch`, then add a colour (`K`) if the
+  band's `C` allows it.
+- **Median time above band:** reduce `quota`. It is the only term that moves duration without
+  changing how the level feels.
+- **Median time below band:** increase `quota`.
+- **R2 violated (a band is not harder than the one below it):** the fix is never a clear-rate
+  lever on the offending band alone. Two adjacent bands that measure the same are one band; the
+  correction is to §5.1's escalation — move an axis from the step above down into the step that
+  is not escalating.
+
+**What is not a lever.** `BOT_WORKING_SET`, `BOT_MEMORY_TICKS` and every other constant in §7.1
+are properties of the instrument, not of the game. Changing one to make a target pass is
+adjusting the gauge to match the reading, and it is forbidden. They change only if the *model of
+a human player* is shown to be wrong, and then every target is re-read, not just the failing one.
 
 ---
 
@@ -511,7 +880,8 @@ being true.
 | Tool | What it must assert |
 |---|---|
 | `tools/generator-audit.mjs --seeds 5000` | V1–V12 hold for every band × seed; zero `GEN_EXHAUSTED`; report attempt-count percentiles and distinct-network counts per band. |
-| `tools/bot.mjs --seeds 1000` | Unconstrained clear rate = 100 %; constrained clear rate within §7.2; measured taps/s per band. |
+| `tools/bot.mjs --seeds 1000` | Unconstrained clear rate = 100 %; constrained clear rate within §7.2's table **and** satisfying R2 and R3's shape rules; measured taps/s per band. |
+| `tools/bot.mjs --attention-report` | Per band, per 1,000 seeds: mean glances/s, mean focus events/s, the split between `BOT_SWITCH_TICKS` and `BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, and the count of misroutes caused by a flip the bot made for a car it was holding onto a car it was not (`breaksHeldCar` could not see). These are the numbers that say *why* a band lands where it does, and without them a missed target is unexplainable. |
 | `tools/pacing.mjs` | Completion-time median / p95 / max per band against §7.3. |
 | `tools/replay.mjs --seed N` | A recorded run replays to a deeply equal final state, twice in a row and across machines. |
 
