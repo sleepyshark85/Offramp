@@ -15,3 +15,7 @@ web-build/
 
 # CanvasKit wasm is copied from node_modules by `npm run sync-wasm` (postinstall).
 public/canvaskit.wasm
+
+# tier-3 artefacts: the web export Playwright runs against, and its screenshots.
+.e2e-web/
+.e2e-shots/

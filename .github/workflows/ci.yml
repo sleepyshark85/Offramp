@@ -56,6 +56,20 @@ jobs:
       - name: AC cross-references
         run: node docs/design/check-ac-refs.mjs
 
+      # Tier 4 (development-process.md §4, §9). 2,580,840 viewport configurations; the run
+      # must report 0 overflowing. It is pure arithmetic and takes under a second.
+      - name: Layout sweep (AC-401 to AC-411)
+        run: node tools/layout-sweep.mjs
+
+      # A sweep nobody has seen fail is a sweep that proves nothing (§6.2). Each injection
+      # breaks one thing the sweep claims to catch and must make it fail.
+      - name: Every layout check proven able to fire
+        run: |
+          set -e
+          for i in tap-round hit-cap car-width depot-depth depot-width slack-split hit-overlap; do
+            node tools/layout-sweep.mjs --inject "$i"
+          done
+
   bundle:
     name: Bundles for iOS, Android and web
     runs-on: ubuntu-latest
@@ -80,3 +94,28 @@ jobs:
 
       - name: CanvasKit wasm is published alongside the web bundle
         run: test -s /tmp/export-web/canvaskit.wasm
+
+  e2e:
+    name: Tier 3 — Playwright against the Expo web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      # Drives the real app at a 393 x 852 viewport with real pointer events and asserts
+      # against window.__offramp. The suite writes screenshots because a state assertion
+      # does not prove the paint — a canvas has no queryable elements.
+      - name: E2E
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: .e2e-shots/
+          if-no-files-found: warn

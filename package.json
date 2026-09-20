@@ -25,6 +25,8 @@
     "web": "expo start --web",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'test/*.test.js'",
     "sync-wasm": "node tools/sync-wasm.mjs",
+    "build:web": "expo export --platform web --output-dir .e2e-web",
+    "test:e2e": "npm run build:web && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test --test-concurrency=1 'e2e/*.e2e.mjs'",
     "postinstall": "npm run sync-wasm"
   },
   "allowScripts": {
