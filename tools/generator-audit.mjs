@@ -3,6 +3,8 @@
 //
 //   node tools/generator-audit.mjs --seeds 5000
 //   node tools/generator-audit.mjs --seeds 200 --inject V2
+//   node tools/generator-audit.mjs --rule-injection            AC-244
+//   node tools/generator-audit.mjs --actionable --seeds 3000   AC-243
 //
 // Every band x seed is generated and then checked TWICE: once with the engine's own
 // validate() (the production rule set) and once with the independent re-implementation
@@ -15,12 +17,19 @@ import {
   GEN_STATS,
   MIN_JUNCTION_SEP_LU,
   PALETTE,
+  RULE_ORDER,
+  RULES,
+  actionableJunctions,
+  firstDecisionTicks,
   generate,
   pathDepths,
   signature,
   validate,
 } from '../src/engine/index.js';
-import { arg, percentile, table } from './lib/report.mjs';
+import { lazyOptimal } from './lib/oracle.mjs';
+import { arg, percentile, summary, table } from './lib/report.mjs';
+
+const FIRST_DECISION_FLOOR = 40; // AC-245, gameplay.md §4.6b
 
 /** Independent structural re-check. Returns a list of rule ids it believes are violated. */
 function independentCheck(level) {
@@ -80,14 +89,21 @@ function independentCheck(level) {
     if (n.kind === 'depot') reach[i].add(n.depotColour);
     else for (const eid of n.out) for (const c of reach[edges[eid].to]) reach[i].add(c);
   }
+  let actionable = 0;
   for (const n of nodes) {
     if (n.kind !== 'branch') continue;
-    const l = [...reach[edges[n.out[0]].to]].sort().join();
-    const r = [...reach[edges[n.out[1]].to]].sort().join();
-    if (l === r) bad.push('V6');
+    const L = reach[edges[n.out[0]].to];
+    const R2 = reach[edges[n.out[1]].to];
+    if ([...L].sort().join() === [...R2].sort().join()) bad.push('V6');
+    // V13, stated as set containment rather than as a bitmask, so the two implementations
+    // share nothing but the design.
+    const lInR = [...L].every((c) => R2.has(c));
+    const rInL = [...R2].every((c) => L.has(c));
+    if (!lInR && !rInL) actionable += 1;
   }
 
   const P = BANDS[level.band];
+  if (actionable < P.Ja) bad.push('V13');
   const J = nodes.filter((n) => n.kind === 'branch').length;
   if (J !== level.junctions.length) bad.push('V7');
   if (J < P.Jmin || J > P.Jmax) bad.push('V7');
@@ -138,8 +154,173 @@ function inject(rule, level) {
   return l;
 }
 
+/**
+ * AC-244 — one fixture per rule, each built to violate THAT rule, with the rule's own check
+ * invoked directly rather than through validate()'s ordered cascade.
+ *
+ * Eight of the twelve rules never reject anything tryBuild produces (generation.md §5.2), so
+ * this is the only place their checks are ever executed against a violation. Running them
+ * through the cascade does not do it: an earlier rule catches the fixture first, which is
+ * exactly why slice 1's blind pass could not make V5 or V9 fire from any single-edge mutation
+ * of 200 band-3 levels. Several fixtures below deliberately violate more than one rule; that
+ * is harmless here and impossible to avoid, because the rules are not independent — what
+ * matters is that the NAMED rule's own predicate returns true on its own fixture and false on
+ * the pristine level.
+ */
+const RULE_FIXTURES = {
+  // A depot with an outgoing edge. Depots are sinks; a car that leaves one never resolves.
+  V1: (l) => {
+    const depot = l.nodes.find((n) => n.kind === 'depot');
+    l.edges.push({ id: l.edges.length, from: depot.id, to: 0, lengthMlu: 1000, shape: 'straight' });
+    depot.out.push(l.edges.length - 1);
+  },
+  // Two sources on one route row pointing at the same target: the targets stop increasing.
+  V2: (l) => retargetToMerge(l),
+  // The same fixture seen as a merge: a non-depot node with in-degree 2.
+  V3: (l) => retargetToMerge(l),
+  // An edge that moves two columns in one row.
+  V4: (l) => { l.nodes[l.edges[1].to].col += 3; },
+  // Nothing is reachable from the entry, so no depot is.
+  V5: (l) => { l.nodes[0].out = []; },
+  // Every depot the same colour, so both branches of every junction reach the same set.
+  V6: (l) => { for (const n of l.nodes) if (n.kind === 'depot') n.depotColour = 0; },
+  // A level that draws no junctions at all is outside every band's J range.
+  V7: (l) => { l.junctions = []; },
+  // Every route node a branch, so every path is R junctions deep — past every band's Dmax.
+  V8: (l) => {
+    for (const n of l.nodes) if (n.kind === 'pass') n.kind = 'branch';
+  },
+  // Two nodes on one lattice site.
+  V9: (l) => {
+    const a = l.nodes.find((n) => n.row === 0);
+    const b = l.nodes.find((n) => n.row === 1);
+    b.row = a.row;
+    b.col = a.col;
+  },
+  // A colour outside the band's first K palette entries.
+  V10: (l) => { l.nodes.find((n) => n.kind === 'depot').depotColour = 4; },
+  // Two junction centres on top of each other.
+  V11: (l) => {
+    const js = l.junctions.map((id) => l.nodes[id]);
+    js[1].x = js[0].x;
+    js[1].y = js[0].y;
+  },
+  // Every junction decorative: with one depot colour, no two branch sets are incomparable,
+  // so the actionable count is 0 and every band's Ja floor is missed.
+  V13: (l) => { for (const n of l.nodes) if (n.kind === 'depot') n.depotColour = 0; },
+};
+
+function retargetToMerge(l) {
+  const row = l.nodes.filter((n) => n.row === 0 || n.row === 1);
+  const srcs = l.nodes.filter((n) => n.row === 1).sort((a, b) => a.col - b.col);
+  const target = srcs[0];
+  const donor = l.edges.find((e) => l.nodes[e.to].row === 1 && e.to !== target.id);
+  if (!donor) throw new Error('fixture needs a row-1 node to retarget; row size ' + row.length);
+  donor.to = target.id;
+}
+
+function ruleInjection() {
+  console.log('# AC-244 — every validity rule proven able to fire, invoked directly\n');
+  const rows = [];
+  let bad = 0;
+  for (const id of RULE_ORDER) {
+    // Band 4: five columns and five rows, so every fixture below has the nodes it needs.
+    const P = BANDS[4];
+    const pristine = JSON.parse(JSON.stringify(generate(11, 4)));
+    const clean = RULES[id](pristine, P);
+    const broken = JSON.parse(JSON.stringify(pristine));
+    RULE_FIXTURES[id](broken);
+    const fires = RULES[id](broken, P);
+    // What validate() says about the same fixture, to show which rule the cascade reaches
+    // first — the reason the direct invocation is required rather than merely tidier.
+    const cascade = validate(broken, P);
+    const ok = clean === false && fires === true;
+    if (!ok) bad += 1;
+    rows.push({
+      rule: id,
+      'on a valid level': clean === false ? 'accepts' : 'REJECTS',
+      'on its own fixture': fires === true ? 'rejects' : 'ACCEPTS',
+      'validate() cascade reports': cascade === null ? '(nothing)' : cascade,
+      verdict: ok ? 'PASS' : 'FAIL',
+    });
+  }
+  console.log(table(rows));
+  const viaCascade = rows.filter((r) => r['validate() cascade reports'] === r.rule).length;
+  console.log(`\n${viaCascade} of ${rows.length} fixtures are ALSO caught by validate() under the`);
+  console.log('rule they were built for; the rest are caught by an earlier rule first, which is');
+  console.log('why AC-244 requires the direct invocation.');
+  console.log(bad === 0 ? 'RULE INJECTION: PASS' : `RULE INJECTION: FAIL (${bad} rule(s))`);
+  process.exit(bad === 0 ? 0 : 1);
+}
+
+/**
+ * AC-243 — actionable J measured per run rather than assumed from the band table, using
+ * generation.md §6.2's lazy-optimal oracle. The junctions the oracle never flips are the
+ * junctions the level never asked about.
+ */
+function actionableReport(seeds) {
+  console.log(`# Actionable junctions — ${seeds} seeds per band, lazy-optimal oracle (AC-243)\n`);
+  const rows = [];
+  let bad = 0;
+  for (let band = 1; band <= 5; band += 1) {
+    const P = BANDS[band];
+    const live = [];
+    const drawn = [];
+    const twice = [];
+    const staticJa = [];
+    let belowJa = 0;
+    let belowJaMinusOne = 0;
+    let notCleared = 0;
+    let misrouted = 0;
+    for (let seed = 0; seed < seeds; seed += 1) {
+      const level = generate(seed, band);
+      const r = lazyOptimal(level);
+      if (!r.cleared) notCleared += 1;
+      misrouted += r.misrouted;
+      live.push(r.liveCount);
+      drawn.push(r.drawn);
+      twice.push(r.flippedTwicePlus);
+      staticJa.push(actionableJunctions(level).length);
+      if (r.liveCount < P.Ja) belowJa += 1;
+      if (r.liveCount < P.Ja - 1) belowJaMinusOne += 1;
+    }
+    const L = summary(live);
+    const D = summary(drawn);
+    const T = summary(twice);
+    const S = summary(staticJa);
+    const belowPct = (100 * belowJa) / seeds;
+    // AC-243: live >= Ja - 1 in 100 % of runs, and >= Ja in at least 95 %.
+    const ok = belowJaMinusOne === 0 && belowPct <= 5 && notCleared === 0 && misrouted === 0;
+    if (!ok) bad += 1;
+    rows.push({
+      band,
+      Ja: P.Ja,
+      'drawn J mean': D.mean.toFixed(2),
+      'static actionable mean/min': S.mean.toFixed(2) + '/' + S.min,
+      'live mean/min': L.mean.toFixed(2) + '/' + L.min,
+      'flipped 2x+ mean/min': T.mean.toFixed(2) + '/' + T.min,
+      'below Ja': belowPct.toFixed(1) + '%',
+      'below Ja-1': ((100 * belowJaMinusOne) / seeds).toFixed(1) + '%',
+      'decorative % of drawn': (100 * (1 - S.mean / D.mean)).toFixed(1) + '%',
+      'oracle misroutes': misrouted,
+      'AC-243': ok ? 'PASS' : 'FAIL',
+    });
+  }
+  console.log(table(rows));
+  console.log('\n"static actionable" is V13/AC-242 — the count of junctions whose two colour sets are');
+  console.log('incomparable. "live" is AC-243 — the count the lazy-optimal oracle actually flipped on');
+  console.log('this seed\'s spawn order. live < static is a SPAWN-ORDER effect, not a topology one: a');
+  console.log('junction can be structurally actionable and still never be exercised, and no static');
+  console.log('rule removes that residue. It is bounded, and reporting it is what keeps it visible.');
+  console.log(bad === 0 ? 'ACTIONABLE: PASS' : `ACTIONABLE: FAIL (${bad} band(s))`);
+  process.exit(bad === 0 ? 0 : 1);
+}
+
 const seeds = Number(arg('seeds', 5000));
 const injectRule = arg('inject', null);
+
+if (process.argv.includes('--rule-injection')) ruleInjection();
+if (process.argv.includes('--actionable')) actionableReport(seeds);
 
 console.log(`# Generator audit — ${seeds} seeds x 5 bands` +
   (injectRule ? `, INJECTING ${injectRule}` : '') + '\n');
@@ -160,6 +341,8 @@ for (let band = 1; band <= 5; band += 1) {
   let depths = [Infinity, -Infinity];
   let sharedDepotLevels = 0;
   let maxDepotInDegree = 0;
+  let minFirstDecision = Infinity;
+  const jaDist = Object.create(null);
 
   for (let seed = 0; seed < seeds; seed += 1) {
     let level;
@@ -180,6 +363,11 @@ for (let band = 1; band <= 5; band += 1) {
       const id = engineSays || auditSays[0];
       violations[id] = (violations[id] || 0) + 1;
     }
+
+    const fdt = firstDecisionTicks(level);
+    if (fdt < minFirstDecision) minFirstDecision = fdt;
+    const ja = actionableJunctions(level).length;
+    jaDist[ja] = (jaDist[ja] || 0) + 1;
 
     sigs.add(signature(level));
     topo.add(signature(level).split('|').slice(0, 2).join('|'));
@@ -206,7 +394,10 @@ for (let band = 1; band <= 5; band += 1) {
   // the generator, would be the limit, so it is reported but not failed.
   const distinctOk = seeds < 3000 || (band === 1 ? topo.size >= 30 : topo.size >= 500);
   const attemptsOk = percentile(attempts, 0.5) <= 8 && attempts[attempts.length - 1] <= 128;
-  if (!injectRule && (exhausted || violationText !== 'none' || !distinctOk || !attemptsOk)) failures += 1;
+  // AC-245: the cheapest possible check on the quantity that went unmeasured through two
+  // slices. The minimum is the entry-edge transit, because rows[0] holds one node.
+  const fdOk = minFirstDecision >= FIRST_DECISION_FLOOR;
+  if (!injectRule && (exhausted || violationText !== 'none' || !distinctOk || !attemptsOk || !fdOk)) failures += 1;
 
   rows.push({
     band,
@@ -216,6 +407,9 @@ for (let band = 1; band <= 5; band += 1) {
     'distinct networks': topo.size,
     'with colours': sigs.size,
     'J dist': Object.entries(jDist).map(([k, v]) => `${k}:${Math.round((100 * v) / seeds)}%`).join(' '),
+    'Ja dist': Object.entries(jaDist).map(([k, v]) => `${k}:${Math.round((100 * v) / seeds)}%`).join(' '),
+    'min firstDecision': minFirstDecision,
+    'AC-245 (>= 40)': fdOk ? 'PASS' : 'FAIL',
     D: depths[0] + '–' + depths[1],
     violations: violationText,
     'levels w/ shared depot': `${Math.round((100 * sharedDepotLevels) / seeds)}%`,
@@ -235,6 +429,8 @@ if (injectRule) {
 }
 
 console.log('checks: AC-203 (no exhaustion, median attempts <= 8, max <= 128), AC-211, AC-212,');
-console.log('        AC-234 variety (only asserted at --seeds 3000 or more; reported always)');
+console.log('        AC-234 variety (only asserted at --seeds 3000 or more; reported always),');
+console.log('        AC-242 (V13, via both rule sets), AC-245 (first-decision floor of 40 ticks).');
+console.log('see also: --rule-injection (AC-244) and --actionable (AC-243).');
 console.log(failures === 0 && disagreements === 0 ? 'GENERATOR AUDIT: PASS' : 'GENERATOR AUDIT: FAIL');
 process.exit(failures === 0 && disagreements === 0 ? 0 : 1);

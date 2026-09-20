@@ -18,10 +18,10 @@ import {
   ROW0_Y,
   SPAWN_LEAD,
   SPAWN_SALT,
-  SPAWN_SLACK,
   V12_MAX_REDERIVE,
   V12_SALT,
   bandParams,
+  spawnSlack,
 } from './constants.js';
 import { choose, makeStream, mix32, shuffle } from './rng.js';
 
@@ -155,7 +155,7 @@ export function tryBuild(rng, P) {
 
 function spawnSchedule(seed, P) {
   const rng = makeStream(mix32(seed, SPAWN_SALT));
-  const count = P.quota + SPAWN_SLACK;
+  const count = P.quota + spawnSlack(P.band);
   const spawns = [];
   let bag = [];
   for (let i = 0; i < count; i += 1) {
@@ -341,115 +341,235 @@ export function pathDepths(level) {
 }
 
 /**
+ * The mask pair of a branch node's two branches, as [out0, out1].
+ */
+function branchMasks(level, mask, node) {
+  return [mask[level.edges[node.out[0]].to], mask[level.edges[node.out[1]].to]];
+}
+
+/**
+ * V13's predicate. Two reachable-colour sets are INCOMPARABLE when neither contains the
+ * other, which is what makes a junction actionable: whichever way it is left, some colour is
+ * served that the other branch does not serve. Where one set contains the other, the superset
+ * branch serves every colour the subset branch does and a perfect player never has to flip it
+ * — the junction is decorative (AC-242).
+ */
+export function incomparable(a, b) {
+  const both = a & b;
+  return both !== a && both !== b;
+}
+
+/** The branch nodes whose two colour sets are incomparable. Ascending by junctionId. */
+export function actionableJunctions(level) {
+  const mask = reachableColourMasks(level);
+  const out = [];
+  for (const n of level.nodes) {
+    if (n.kind !== 'branch' || n.out.length !== 2) continue;
+    const [a, b] = branchMasks(level, mask, n);
+    if (incomparable(a, b)) out.push(n.junctionId);
+  }
+  return out;
+}
+
+/**
+ * gameplay.md §4.6b / AC-245. For every entry-to-depot path, the arc length from the entry
+ * node to the FIRST branch node on that path, converted to ticks. Returns the minimum
+ * over all paths — the window the player has to make a decision that cannot be prepared.
+ * Paths with no branch at all are not decisions and do not contribute.
+ */
+export function firstDecisionTicks(level) {
+  // Accumulated in MLU and divided exactly once, so no partial length is ever held as a
+  // fraction of an LU.
+  let min = Infinity;
+  const walk = (nodeId, mlu) => {
+    const n = level.nodes[nodeId];
+    if (n.kind === 'depot') return;
+    if (n.kind === 'branch') {
+      const t = Math.ceil(mlu / level.speedMluPerTick);
+      if (t < min) min = t;
+      return; // the FIRST branch on this path; everything past it is not a first decision
+    }
+    for (const e of n.out) walk(level.edges[e].to, mlu + level.edges[e].lengthMlu);
+  };
+  walk(0, 0);
+  return min;
+}
+
+/**
+ * The validity rules of generation.md §5, each as its own predicate over a finalised level.
+ *
+ * They are separate functions rather than branches of one cascade because eight of the twelve
+ * never reject anything `tryBuild` produces (§5.2) — they are structural tripwires, and the
+ * only way their checks are ever executed against a violation is to invoke them DIRECTLY on a
+ * fixture built to break them. Run through validate()'s ordered cascade an earlier rule always
+ * catches the fixture first, which is how slice 1's blind pass left V5 and V9 never once
+ * executed against a violation (AC-244).
+ *
+ * Each returns true when the rule is VIOLATED.
+ */
+export const RULES = {
+  /** V1 — no dead ends. */
+  V1(level) {
+    const inDeg = inDegrees(level);
+    for (const n of level.nodes) {
+      if (n.kind === 'depot') {
+        if (n.out.length !== 0 || inDeg[n.id] < 1) return true;
+      } else if (n.kind === 'entry') {
+        if (n.out.length !== 1) return true;
+      } else if (n.out.length !== 1 && n.out.length !== 2) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  /** V2 — targets across a route row strictly increasing; terminal row non-decreasing. */
+  V2(level) {
+    const { nodes, edges, R } = level;
+    for (let r = 0; r < R; r += 1) {
+      const terminal = r === R - 1;
+      const srcs = nodes.filter((n) => n.row === r).sort((a, b) => a.col - b.col);
+      let prev = -1;
+      let first = true;
+      for (const s of srcs) {
+        for (const eid of s.out) {
+          const t = nodes[edges[eid].to].col;
+          if (!first && (terminal ? t < prev : t <= prev)) return true;
+          prev = t;
+          first = false;
+        }
+      }
+    }
+    return false;
+  },
+
+  /** V3 — merge-free. */
+  V3(level) {
+    const inDeg = inDegrees(level);
+    for (const n of level.nodes) if (n.kind !== 'depot' && inDeg[n.id] > 1) return true;
+    return false;
+  },
+
+  /** V4 — the lattice invariant. */
+  V4(level) {
+    for (const e of level.edges) {
+      const a = level.nodes[e.from];
+      const b = level.nodes[e.to];
+      if (b.row !== a.row + 1) return true;
+      if (Math.abs(b.col - a.col) > 1) return true;
+    }
+    return false;
+  },
+
+  /** V5 — every depot reachable from the entry, and there are exactly K of them. */
+  V5(level) {
+    const { nodes, edges } = level;
+    const seen = new Set([0]);
+    const stack = [0];
+    while (stack.length) {
+      const n = nodes[stack.pop()];
+      for (const eid of n.out) {
+        const t = edges[eid].to;
+        if (!seen.has(t)) {
+          seen.add(t);
+          stack.push(t);
+        }
+      }
+    }
+    let depotCount = 0;
+    for (const n of nodes) {
+      if (n.kind === 'depot') {
+        depotCount += 1;
+        if (!seen.has(n.id)) return true;
+      }
+    }
+    return depotCount !== level.K;
+  },
+
+  /** V6 — every junction is decisive: its two branches differ in what they reach. */
+  V6(level) {
+    const mask = reachableColourMasks(level);
+    for (const n of level.nodes) {
+      if (n.kind !== 'branch' || n.out.length !== 2) continue; // out-degree is V1's business
+      const [a, b] = branchMasks(level, mask, n);
+      if (a === b) return true;
+    }
+    return false;
+  },
+
+  /** V7 — junction count in the band's range. */
+  V7(level, P) {
+    return level.junctions.length < P.Jmin || level.junctions.length > P.Jmax;
+  },
+
+  /** V8 — every entry-to-depot path has junction depth in the band's range. */
+  V8(level, P) {
+    for (const d of pathDepths(level)) if (d < P.Dmin || d > P.Dmax) return true;
+    return false;
+  },
+
+  /** V9 — one node per lattice site, no row wider than C. */
+  V9(level) {
+    const sites = new Set();
+    const perRow = new Map();
+    for (const n of level.nodes) {
+      const key = n.row + ',' + n.col;
+      if (sites.has(key)) return true;
+      sites.add(key);
+      perRow.set(n.row, (perRow.get(n.row) || 0) + 1);
+    }
+    for (const [row, count] of perRow) if (row >= 0 && count > level.C) return true;
+    return false;
+  },
+
+  /** V10 — the depot colours are exactly the band's first K palette entries, each once. */
+  V10(level) {
+    const colours = level.nodes.filter((n) => n.kind === 'depot').map((n) => n.depotColour);
+    const want = [];
+    for (let k = 0; k < level.K; k += 1) want.push(k);
+    if (colours.slice().sort((a, b) => a - b).join(',') !== want.join(',')) return true;
+    return level.K > PALETTE.length;
+  },
+
+  /** V11 — junction separation, squared so the check stays integer. */
+  V11(level) {
+    const js = level.junctions.map((id) => level.nodes[id]);
+    for (let i = 0; i < js.length; i += 1) {
+      for (let j = i + 1; j < js.length; j += 1) {
+        const dx = js[i].x - js[j].x;
+        const dy = js[i].y - js[j].y;
+        if (dx * dx + dy * dy < MIN_JUNCTION_SEP_LU * MIN_JUNCTION_SEP_LU) return true;
+      }
+    }
+    return false;
+  },
+
+  /**
+   * V13 — the actionable-junction floor. At least `Ja` branch nodes must have INCOMPARABLE
+   * colour sets. V6 forbids the outright no-op junction; this forbids a level whose drawn `J`
+   * is a difficulty claim its topology does not honour. There is no V12 here: V12 is the
+   * cross-level rule and lives in generateLevel().
+   */
+  V13(level, P) {
+    return actionableJunctions(level).length < P.Ja;
+  },
+};
+
+/** The order generation.md §5 checks the rules in; the id is what an audit failure reports. */
+export const RULE_ORDER = ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11', 'V13'];
+
+function inDegrees(level) {
+  const inDeg = new Array(level.nodes.length).fill(0);
+  for (const e of level.edges) inDeg[e.to] += 1;
+  return inDeg;
+}
+
+/**
  * Returns the id of the first violated rule, or null. Rules are checked in the order of
- * generation.md §5; the id is what a generator-audit failure reports.
+ * generation.md §5.
  */
 export function validate(level, P) {
-  const { nodes, edges } = level;
-  const R = level.R;
-  const inDeg = new Array(nodes.length).fill(0);
-  for (const e of edges) inDeg[e.to] += 1;
-
-  // V1 — no dead ends.
-  for (const n of nodes) {
-    if (n.kind === 'depot') {
-      if (n.out.length !== 0 || inDeg[n.id] < 1) return 'V1';
-    } else if (n.kind === 'entry') {
-      if (n.out.length !== 1) return 'V1';
-    } else if (n.out.length !== 1 && n.out.length !== 2) {
-      return 'V1';
-    }
-  }
-
-  // V2 — targets across a route row strictly increasing; terminal row non-decreasing.
-  for (let r = 0; r < R; r += 1) {
-    const terminal = r === R - 1;
-    const srcs = nodes.filter((n) => n.row === r).sort((a, b) => a.col - b.col);
-    let prev = -1;
-    let first = true;
-    for (const s of srcs) {
-      for (const eid of s.out) {
-        const t = nodes[edges[eid].to].col;
-        if (!first && (terminal ? t < prev : t <= prev)) return 'V2';
-        prev = t;
-        first = false;
-      }
-    }
-  }
-
-  // V3 — merge-free.
-  for (const n of nodes) if (n.kind !== 'depot' && inDeg[n.id] > 1) return 'V3';
-
-  // V4 — lattice invariant.
-  for (const e of edges) {
-    const a = nodes[e.from];
-    const b = nodes[e.to];
-    if (b.row !== a.row + 1) return 'V4';
-    if (Math.abs(b.col - a.col) > 1) return 'V4';
-  }
-
-  // V5 — every depot reachable from the entry.
-  const seen = new Set([0]);
-  const stack = [0];
-  while (stack.length) {
-    const n = nodes[stack.pop()];
-    for (const eid of n.out) {
-      const t = edges[eid].to;
-      if (!seen.has(t)) {
-        seen.add(t);
-        stack.push(t);
-      }
-    }
-  }
-  let depotCount = 0;
-  for (const n of nodes) {
-    if (n.kind === 'depot') {
-      depotCount += 1;
-      if (!seen.has(n.id)) return 'V5';
-    }
-  }
-  if (depotCount !== level.K) return 'V5';
-
-  // V6 — every junction is decisive.
-  const mask = reachableColourMasks(level);
-  for (const n of nodes) {
-    if (n.kind === 'branch' && mask[edges[n.out[0]].to] === mask[edges[n.out[1]].to]) return 'V6';
-  }
-
-  // V7 — junction count in band range.
-  if (level.junctions.length < P.Jmin || level.junctions.length > P.Jmax) return 'V7';
-
-  // V8 — path depth in band range.
-  for (const d of pathDepths(level)) if (d < P.Dmin || d > P.Dmax) return 'V8';
-
-  // V9 — one node per lattice site, no row wider than C.
-  const sites = new Set();
-  const perRow = new Map();
-  for (const n of nodes) {
-    const key = n.row + ',' + n.col;
-    if (sites.has(key)) return 'V9';
-    sites.add(key);
-    perRow.set(n.row, (perRow.get(n.row) || 0) + 1);
-  }
-  for (const [row, count] of perRow) if (row >= 0 && count > level.C) return 'V9';
-
-  // V10 — palette assignment.
-  const colours = nodes.filter((n) => n.kind === 'depot').map((n) => n.depotColour);
-  const want = [];
-  for (let k = 0; k < level.K; k += 1) want.push(k);
-  if (colours.slice().sort((a, b) => a - b).join(',') !== want.join(',')) return 'V10';
-  if (level.K > PALETTE.length) return 'V10';
-
-  // V11 — junction separation (squared, so the check stays integer).
-  const js = level.junctions.map((id) => nodes[id]);
-  for (let i = 0; i < js.length; i += 1) {
-    for (let j = i + 1; j < js.length; j += 1) {
-      const dx = js[i].x - js[j].x;
-      const dy = js[i].y - js[j].y;
-      if (dx * dx + dy * dy < MIN_JUNCTION_SEP_LU * MIN_JUNCTION_SEP_LU) return 'V11';
-    }
-  }
-
+  for (const id of RULE_ORDER) if (RULES[id](level, P)) return id;
   return null;
 }
 

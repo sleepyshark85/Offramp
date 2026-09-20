@@ -8,13 +8,17 @@ import {
   MAX_CATCHUP_TICKS,
   SCORE_DELIVERY,
   SCORE_LIFE_BONUS,
-  SPAWN_SLACK,
+  BANDS,
+  inFlightMax,
+  spawnSlack,
+  transitMaxTicks,
   STREAK_CAP,
   TICK_HZ,
 } from '../src/engine/constants.js';
 import { createState, step, TRANSITION_STATS, resetTransitionStats } from '../src/engine/step.js';
 import { generate } from '../src/engine/generate.js';
 import { drive, twoDepotLevel } from './helpers.js';
+import { playLevel } from '../tools/lib/solver.mjs';
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -132,12 +136,56 @@ test('AC-112 · cars spawn on their scheduled tick', () => {
   let s = createState(level);
   for (let i = 0; i < 7; i += 1) s = step(s, []);
   assert.equal(s.cars.length, 0, 'nothing before tick 7');
+  const before = s;
   s = step(s, []);
   assert.equal(s.cars.length, 1);
   assert.equal(s.cars[0].id, 0);
   assert.equal(s.cars[0].colour, 1);
-  // progress is one tick of travel because spawn precedes advance within the tick.
+  assert.equal(s.cars[0].edgeId, level.entryEdgeId);
+  assert.equal(before.cars.filter((c) => c.id === 0).length, 0, 'no car with that id a tick earlier');
+  // progress is one tick of travel because spawn precedes advance within the tick. AC-112's
+  // note: progress === 0 is not observable by any caller, it exists only between two
+  // statements inside step().
   assert.equal(s.cars[0].progress, level.speedMluPerTick);
+  const spawned = s.events.filter((e) => e.type === 'spawn');
+  assert.equal(spawned.length, 1);
+  assert.deepEqual(spawned[0], { type: 'spawn', tick: 7, carId: 0, colour: 1 });
+});
+
+test('AC-112 · every scheduled car of a real level arrives exactly once, on its tick', () => {
+  // On the shipped geometry rather than the fixture, because AC-112's claim that a car cannot
+  // transition on its spawn tick rests on ENTRY_LEN = 160,000 MLU being far longer than one
+  // tick of travel at any band — 3,800 MLU at the fastest.
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(40 + band, band);
+    assert.ok(level.edges[level.entryEdgeId].lengthMlu > 10 * level.speedMluPerTick);
+    const wanted = new Map(level.spawns.map((sp) => [sp.tick, sp]));
+    const seenIds = new Set();
+    let prev = createState(level);
+    let s = prev;
+    while (s.phase === 'running' && s.tick < 4000) {
+      prev = s;
+      s = step(s, []);
+      const tickOfStep = s.tick - 1;
+      const sp = wanted.get(tickOfStep);
+      const events = s.events.filter((e) => e.type === 'spawn');
+      if (!sp) {
+        assert.equal(events.length, 0, 'unscheduled spawn at tick ' + tickOfStep);
+        continue;
+      }
+      assert.equal(events.length, 1, 'band ' + band + ' tick ' + tickOfStep);
+      assert.deepEqual(events[0], { type: 'spawn', tick: sp.tick, carId: sp.index, colour: sp.colour });
+      assert.equal(prev.cars.filter((c) => c.id === sp.index).length, 0);
+      const car = s.cars.find((c) => c.id === sp.index);
+      assert.ok(car, 'car ' + sp.index + ' not present after its spawn tick');
+      assert.equal(car.colour, sp.colour);
+      assert.equal(car.edgeId, level.entryEdgeId);
+      assert.equal(car.progress, level.speedMluPerTick);
+      assert.ok(!seenIds.has(sp.index), 'car id ' + sp.index + ' spawned twice');
+      seenIds.add(sp.index);
+    }
+    assert.ok(seenIds.size > 3, 'band ' + band + ' saw only ' + seenIds.size + ' spawns');
+  }
 });
 
 test('AC-114 · spawn ticks strictly increase, gap >= interval - 2*jitter', () => {
@@ -153,21 +201,27 @@ test('AC-114 · spawn ticks strictly increase, gap >= interval - 2*jitter', () =
   }
 });
 
-test('AC-115 · the colour bag never produces three in a row and stays balanced', () => {
+test('AC-115 · the colour bag never produces three in a row, and balances WITHIN a level', () => {
+  // The aggregate-over-seeds reading is withdrawn (AC-115's note): the leftover of the last
+  // bag is a fresh uniform draw, so an aggregate spread of 34 or 43 is ordinary multinomial
+  // noise and no tolerance over it is a check. The per-level reading is a theorem about the
+  // bag, so it holds at EVERY seed with tolerance 1, and fails the moment the bag is replaced
+  // by independent draws.
   for (let band = 1; band <= 5; band += 1) {
-    const counts = new Array(5).fill(0);
     for (let seed = 0; seed < 300; seed += 1) {
       const level = generate(seed, band);
-      const cs = level.spawns.map((s) => s.colour);
+      const cs = level.spawns.map((sp) => sp.colour);
       for (let i = 2; i < cs.length; i += 1) {
         assert.ok(!(cs[i] === cs[i - 1] && cs[i] === cs[i - 2]), 'three in a row, band ' + band);
       }
+      const counts = new Array(level.K).fill(0);
       for (const c of cs) counts[c] += 1;
+      const spread = Math.max(...counts) - Math.min(...counts);
+      const want = cs.length % level.K === 0 ? 0 : 1;
+      assert.equal(spread, want,
+        'band ' + band + ' seed ' + seed + ': ' + cs.length + ' spawns over K=' + level.K +
+        ' gave counts ' + counts.join(',') );
     }
-    const used = counts.slice(0, generate(0, band).K);
-    const spread = Math.max(...used) - Math.min(...used);
-    const total = used.reduce((a, b) => a + b, 0);
-    assert.ok(spread <= total * 0.02, 'band ' + band + ' colour spread ' + spread + ' of ' + total);
   }
 });
 
@@ -281,10 +335,64 @@ test('AC-120/AC-121 · score non-decreasing, lives non-increasing and floored', 
   }
 });
 
-test('AC-123 · the spawn array carries quota + 8 and is never exhausted in play', () => {
+test('AC-123 · the spawn array carries quota + the DERIVED slack, and is never exhausted', () => {
+  // gameplay.md §2.7's table: slack 8 / 9 / 9 / 9 / 10 and counts 24 / 35 / 45 / 57 / 74.
+  // Band 2 is 9 rather than 8 because ENTRY_LEN 100 -> 160 pushed transitMax/interval across
+  // an integer boundary — the silent walk the derivation exists to catch.
+  const wantTransit = [null, 575, 569, 536, 494, 505];
+  const wantInFlight = [null, 5, 6, 6, 6, 7];
+  const wantSlack = [null, 8, 9, 9, 9, 10];
+  const wantCount = [null, 24, 35, 45, 57, 74];
   for (let band = 1; band <= 5; band += 1) {
+    // Every term of the derivation, not only its result — a lever move in §7.4 changes one of
+    // these and the slack must follow it.
+    assert.equal(transitMaxTicks(BANDS[band]), wantTransit[band], 'band ' + band + ' transitMax');
+    assert.equal(inFlightMax(BANDS[band]), wantInFlight[band], 'band ' + band + ' inFlightMax');
+    assert.equal(spawnSlack(band), wantSlack[band], 'band ' + band + ' slack');
+    assert.ok(Number.isInteger(spawnSlack(band)));
     const level = generate(band, band);
-    assert.equal(level.spawns.length, level.quota + SPAWN_SLACK);
+    assert.equal(level.spawns.length, level.quota + spawnSlack(band));
+    assert.equal(level.spawns.length, wantCount[band], 'band ' + band + ' SPAWN_COUNT');
+  }
+});
+
+test('AC-123 · nextSpawn stays below spawns.length at EVERY tick, not only the last', () => {
+  // "not only at the final tick" is the clause the old test did not cover: it compared two
+  // array lengths and never ran a level.
+  for (let band = 1; band <= 5; band += 1) {
+    for (let seed = 0; seed < 25; seed += 1) {
+      const level = generate(seed, band);
+      const r = playLevel(level, 'constrained', {
+        onTick: (state) => {
+          assert.ok(state.nextSpawn < level.spawns.length,
+            'band ' + band + ' seed ' + seed + ' tick ' + state.tick +
+            ': nextSpawn ' + state.nextSpawn + ' of ' + level.spawns.length);
+        },
+      });
+      assert.ok(!r.stalled);
+    }
+  }
+});
+
+test('AC-138 · every junction starts on branch 0', () => {
+  // gameplay.md §4.8: a rule, not an allocation default. A build that seeded `open` from the
+  // level seed would pass every other AC in the document and change how every level opens.
+  for (let band = 1; band <= 5; band += 1) {
+    for (let seed = 0; seed < 100; seed += 1) {
+      const level = generate(seed, band);
+      const s = createState(level);
+      assert.equal(s.open.length, level.junctions.length, 'band ' + band + ' open length');
+      assert.ok(level.junctions.length > 0);
+      for (let j = 0; j < s.open.length; j += 1) {
+        assert.equal(s.open[j], 0, 'band ' + band + ' seed ' + seed + ' junction ' + j);
+      }
+      // out[0] is the LOWER-column branch, so an untouched network sends every car to the
+      // leftmost depot it can reach.
+      for (const id of level.junctions) {
+        const n = level.nodes[id];
+        assert.ok(level.nodes[level.edges[n.out[0]].to].col < level.nodes[level.edges[n.out[1]].to].col);
+      }
+    }
   }
 });
 
@@ -356,8 +464,10 @@ test('AC-808 · spawn exhaustion throws rather than stalling', () => {
 test('AC-808 · consuming the LAST scheduled car is not exhaustion', () => {
   // The canary used to test `nextSpawn >= spawns.length` immediately after the increment, so
   // spawning the final car of a perfectly valid schedule threw. That made the usable schedule
-  // `quota + SPAWN_SLACK - 1`; band 5 seed 160 consumes 71 of its 72 cars, one short of the
-  // throw. Nothing in the design says the last car is unusable.
+  // `quota + SPAWN_SLACK - 1`; under the flat slack of 8, band 5 seed 160 consumed 71 of its
+  // 72 cars, one short of the throw. The derived slack makes band 5's schedule 74 and the
+  // oracle's worst consumption 71, a margin of 3 (AC-139) — but the canary's shape is what
+  // this test is about, and nothing in the design says the last car is unusable.
   const spawns = [
     { index: 0, tick: 0, colour: 1 },
     { index: 1, tick: 20, colour: 1 },

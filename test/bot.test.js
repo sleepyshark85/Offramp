@@ -226,8 +226,10 @@ test('§7.1.6 · breaksHeldCar ranges over the working set and nothing else', ()
   // The blind spot is the point: a flip made for a held car misroutes a car the bot has
   // forgotten, and it never sees it coming. If that never happened, the bot would not be
   // modelling divided attention at all.
-  // Named seeds, not a sample: these are the ones the blind spot actually shows up on.
-  for (const [band, seed] of [[4, 90], [4, 240], [5, 160], [5, 197], [5, 202]]) {
+  // Named seeds, not a sample: these are the ones the blind spot actually shows up on. They
+  // were re-found after slice 1b's geometry change and V13 moved the level population at
+  // bands 3-5; seed 160 at band 5 is the only one of the old five that survived it.
+  for (const [band, seed] of [[4, 107], [4, 232], [5, 32], [5, 35], [5, 160]]) {
     const r = playLevel(generate(seed, band), 'constrained');
     assert.ok(
       r.attention.unseenMisroutes > 0,
@@ -245,33 +247,55 @@ test('§7.1.6 · breaksHeldCar ranges over the working set and nothing else', ()
   assert.ok(total > unseen && unseen > 0, unseen + ' of ' + total + ' misroutes were unseen');
 });
 
-test('AC-240 · removing the attention constraints raises the clear rate', () => {
+test('AC-240 · removing the attention constraints raises the clear rate where there is room', () => {
   // The full 1,000-seed assertion is `node tools/bot.mjs --ac240`; this is the in-suite
   // sample, and it is the check that the constants named "attention" are load-bearing.
+  //
+  // AC-240's headroom clause: a 20 pp rise needs 20 pp of headroom, so a band the unmodified
+  // bot already clears above 80 % is reported n/a rather than failed — that is a ceiling, not
+  // insensitivity. Band 1 now sits there. Any band AT OR BELOW 80 % that does not rise is a
+  // real failure, which is what slice 1b's +2.0 and +7.4 pp at bands 4 and 5 were.
+  const N = 150;
+  let asserted = 0;
+  const report = [];
   for (const band of [1, 2, 3]) {
     let base = 0;
     let free = 0;
-    for (let seed = 0; seed < 150; seed += 1) {
+    for (let seed = 0; seed < N; seed += 1) {
       const level = generate(seed, band);
       if (playLevel(level, 'constrained').cleared) base += 1;
       if (playLevel(level, 'constrained', { attention: BOT_NO_ATTENTION }).cleared) free += 1;
     }
-    assert.ok(free - base >= 20 * 1.5, 'band ' + band + ' rise ' + (free - base) + '/150');
+    const basePct = (100 * base) / N;
+    const risePct = (100 * (free - base)) / N;
+    report.push('band ' + band + ': ' + basePct.toFixed(1) + '% -> +' + risePct.toFixed(1) + ' pp');
+    if (basePct > 80) continue; // n/a — no headroom
+    asserted += 1;
+    assert.ok(risePct >= 20, 'band ' + band + ' rose only ' + risePct.toFixed(1) + ' pp from ' + basePct.toFixed(1) + '%');
   }
+  // A test that skipped every band would report green while asserting nothing, which is the
+  // defect this project has been bitten by twice. At least one band must have been asserted.
+  assert.ok(asserted > 0, 'every band was skipped for headroom: ' + report.join('; '));
 });
 
-test('AC-813 · the minimum-junction band is still winnable and still needs taps', () => {
+test('AC-813/AC-221 · the minimum-junction band clears its floor', () => {
   let cleared = 0;
   for (let seed = 0; seed < SEEDS; seed += 1) {
     const level = generate(seed, 1);
     assert.equal(level.junctions.length, 3);
     if (playLevel(level, 'constrained').cleared) cleared += 1;
   }
-  // NOT ≥ 90 %: see docs/reports/slice-1b-developer.md. Band 1 measures 61.3 % over 1,000
-  // seeds because a junction at row 0 is unreachable inside the entry edge. This asserts the
-  // level is winnable at all and that the harness is running, not that AC-221 passes — that
-  // is tools/bot.mjs's job and it currently reports BELOW.
-  assert.ok(cleared > 0, 'band 1 constrained clear rate ' + cleared + '/' + SEEDS);
+  // Re-tightened. This assertion was loosened to "> 0 cleared" during slice 1b, when band 1
+  // measured 61.3 % because a junction at row 0 was unreachable inside a 100 LU entry edge —
+  // the loosened form could not tell a fixed band from a broken one, and it was carried
+  // forward explicitly to be restored here.
+  //
+  // The floor is AC-221's own: >= 95 %, R1, "band 1 is not allowed to fail a competent
+  // player". Measured over this 120-seed sample at 99.2 %, and 98.0 % over the 1,000 seeds
+  // tools/bot.mjs runs — which remains the reading AC-221 is decided on; this is the check
+  // that a regression in band 1 stops `npm test` rather than waiting for a sweep.
+  const pct = (100 * cleared) / SEEDS;
+  assert.ok(pct >= 95, 'band 1 constrained clear rate ' + pct.toFixed(1) + '% (' + cleared + '/' + SEEDS + ')');
 });
 
 test('a bot run replays from its input log alone', () => {

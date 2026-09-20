@@ -13,12 +13,13 @@
 // measured tap rate against AC-233, and the depot-mouth near-miss statistic slice 3 needs
 // (docs/reports/slice-0-orchestrator-verification.md, finding 1).
 
-import { generate } from '../src/engine/index.js';
+import { ENTRY_LEN, MLU, generate } from '../src/engine/index.js';
 import {
   BOT_ACQUIRE_TICKS,
   BOT_LOCKOUT_TICKS,
   BOT_NO_ATTENTION,
   BOT_SCAN_TICKS,
+  BOT_SWITCH_TICKS,
   playLevel,
 } from './lib/solver.mjs';
 import { buildCurves, carPoint } from './lib/curve.mjs';
@@ -31,6 +32,7 @@ const CLEAR_TARGET = { 1: [95, null], 2: [86, 97], 3: [76, 92], 4: [66, 85], 5: 
 const R2_MIN_DROP = 4; // pp, AC-237
 const R3_MAX_DROP = 15; // pp, AC-238
 const AC240_MIN_RISE = 20; // pp
+const AC240_HEADROOM_CEILING = 80; // pp — above this a 20 pp rise cannot be asked for
 
 /** Terminal edges grouped by the depot they feed, for depots fed by more than one edge. */
 function convergingGroups(level) {
@@ -203,18 +205,27 @@ if (has('unconstrained')) {
     const base = runBand(band, seeds, 'constrained');
     const free = runBand(band, seeds, 'constrained', { attention: BOT_NO_ATTENTION });
     const rise = free.clearPct - base.clearPct;
+    // AC-240's headroom clause. A 20 pp rise needs 20 pp of headroom, so the test is
+    // meaningless wherever the unmodified bot already clears above 80 % — that is a ceiling,
+    // not insensitivity, and reporting it as a failure would be reporting the arithmetic.
+    // Any band AT OR BELOW 80 % that does not rise 20 pp is a real failure, at every band and
+    // not only at band 5: the failure this AC is for looked like slice 1b's bands 4 and 5
+    // rising +2.0 and +7.4 pp from 19.7 % and 2.3 %, with plenty of headroom and nothing
+    // moving.
+    const hasHeadroom = base.clearPct <= AC240_HEADROOM_CEILING;
     const ok = rise >= AC240_MIN_RISE;
-    if (band === 5 && !ok) failures += 1;
+    if (hasHeadroom && !ok) failures += 1;
     rows.push({
       band,
       'bot §7.1': base.clearPct.toFixed(1) + '%',
       'attention free': free.clearPct.toFixed(1) + '%',
       rise: (rise >= 0 ? '+' : '') + rise.toFixed(1) + ' pp',
-      'AC-240 (≥20 pp)': ok ? 'PASS' : 'FAIL',
+      'AC-240 (≥20 pp)': hasHeadroom ? (ok ? 'PASS' : 'FAIL') : 'n/a (no headroom)',
     });
   }
   console.log(table(rows));
-  console.log('\nAC-240 is asserted at band 5; the other bands are reported for context.');
+  console.log(`\nA band whose unmodified rate is above ${AC240_HEADROOM_CEILING} % is reported n/a and is not a failure;`);
+  console.log('any band at or below it that fails to rise 20 pp is.');
 } else if (has('attention-report')) {
   console.log(`# Attention report — ${seeds} seeds per band (AC-239)\n`);
   const rows = [];
@@ -245,30 +256,43 @@ if (has('unconstrained')) {
   console.log('cannot reach its colour by a flip the bot made for a car it WAS holding, was never');
   console.log('rescued, and misrouted. breaksHeldCar (§7.1.6) cannot see these by construction.');
 } else if (has('entry-window')) {
-  // Diagnostic, not an AC. The first junction sits ENTRY_LEN = 100 LU after the spawn point,
-  // which is fewer ticks than the bot's cheapest cold focus at every band above 1.
-  console.log(`# Entry-window diagnostic — ${seeds} seeds per band\n`);
+  // Diagnostic, not an AC — generation.md §7.1.7's table, measured rather than tabulated.
+  // The first junction sits ENTRY_LEN LU after the spawn point, and that is the whole runway
+  // a car's first decision gets: its colour cannot be known before it spawns, so nothing
+  // about the decision can be prepared (gameplay.md §4.6b).
+  //
+  // ENTRY_LEN is READ FROM THE ENGINE. It was hard-coded as 100 here through slice 1b, which
+  // is how a diagnostic built to explain a geometry problem came to be reporting the old
+  // geometry back at itself.
+  console.log(`# Entry-window diagnostic — ${seeds} seeds per band (generation.md §7.1.7)\n`);
+  console.log(`ENTRY_LEN = ${ENTRY_LEN} LU\n`);
   const rows = [];
   for (const band of bands) {
     const r = runBand(band, seeds, 'constrained');
     const lvl = generate(0, band);
-    const transit = Math.ceil(100 * 1000 / lvl.speedMluPerTick);
+    const transit = Math.ceil((ENTRY_LEN * MLU) / lvl.speedMluPerTick);
     // A glance that lands when the car is `a` ticks old escalates (E2), and C1 emits the tap
-    // `BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS` ticks later. The lockout then needs the car to be
-    // BOT_LOCKOUT_TICKS or more from the junction at that moment.
-    const glanceToTap = BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS;
+    // BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS ticks later when the car is cold, or
+    // BOT_SCAN_TICKS + BOT_SWITCH_TICKS later when it is already held. The lockout then needs
+    // the car to be BOT_LOCKOUT_TICKS or more from the junction at that moment.
+    const cold = BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS + BOT_LOCKOUT_TICKS;
+    const warm = BOT_SCAN_TICKS + BOT_SWITCH_TICKS + BOT_LOCKOUT_TICKS;
     rows.push({
       band,
       'entry transit ticks': transit,
-      'glance → tap': glanceToTap,
-      '+ lockout': glanceToTap + BOT_LOCKOUT_TICKS,
-      'glance must land by car age': transit - glanceToTap - BOT_LOCKOUT_TICKS,
+      'as ms': Math.round((1000 * transit) / 60),
+      'cold glance→tap+lockout': cold,
+      'cold deadline (car age)': transit - cold,
+      'held deadline (car age)': transit - warm,
       'levels with branch at row 0': r.row0Branch + '/' + r.seeds,
       'cleared, row0 = branch': r.row0BranchCleared + '/' + r.row0Branch,
       'cleared, row0 = pass': r.row0PassCleared + '/' + (r.seeds - r.row0Branch),
     });
   }
   console.log(table(rows));
+  console.log('\nAt ENTRY_LEN = 100 the cold deadline read 7/5/3/2/0 ticks: at band 5 the glance had');
+  console.log('to land on the tick the car spawned, and the bot emitted zero taps at the row-0');
+  console.log('junction across 269 levels that had one. That is what AC-240 caught.');
 } else {
   console.log(`# Constrained bot — ${seeds} seeds per band (generation.md §7.1 attention model)\n`);
   const rows = [];

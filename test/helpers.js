@@ -17,8 +17,11 @@ import { MLU } from '../src/engine/constants.js';
  * edge 1, or s+133 via edge 2.
  */
 export function twoDepotLevel({ spawns, quota = 1, speed = 3000, slack = true } = {}) {
-  // Real levels carry quota + 8 spawns of slack (gameplay.md §8.4); fixtures get the same
-  // so that consuming the schedule is an error condition here too, not an artefact.
+  // Real levels carry quota + a DERIVED slack of 8-10 (gameplay.md §2.7, §8.4); fixtures get
+  // a flat 8 so that consuming the schedule is an error condition here too, not an artefact.
+  // This fixture is deliberately NOT the shipped geometry — it is a hand-built two-depot
+  // level with a 100 LU entry edge, so that rules can be exercised at exact ticks. The
+  // shipped ENTRY_LEN of 160 LU is checked against generated levels, not against this.
   const list = (spawns || [{ index: 0, tick: 0, colour: 0 }]).slice();
   if (slack) {
     for (let i = 0; i < 8; i += 1) list.push({ index: list.length, tick: 100000 + i * 156, colour: 0 });

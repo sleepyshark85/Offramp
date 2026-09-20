@@ -3,16 +3,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BANDS, MIN_JUNCTION_SEP_LU, PALETTE, SPAWN_SLACK } from '../src/engine/constants.js';
+import { BANDS, MIN_JUNCTION_SEP_LU, PALETTE, spawnSlack } from '../src/engine/constants.js';
 import {
   GEN_STATS,
+  actionableJunctions,
+  firstDecisionTicks,
   generate,
   generateLevel,
+  incomparable,
   pathDepths,
   reachableColourMasks,
   signature,
   validate,
 } from '../src/engine/generate.js';
+import { routeOracle } from '../tools/lib/oracle.mjs';
 
 const SEEDS = 400;
 
@@ -131,19 +135,78 @@ test('AC-211 · V7 — junction count inside the band range', () => {
       dist[band][j] = (dist[band][j] || 0) + 1;
     }
   }
-  // generation.md §6.2's measured distribution, +/- 5 percentage points (AC-211).
+  // generation.md §6.2's table AS MEASURED WITH V13 IN FORCE, which is what AC-211's 5-point
+  // tolerance is stated against — not slice 0's pre-V13 distribution, which differs by far
+  // more than 5 points at bands 3, 4 and 5.
   const expected = {
     1: { 3: 100 },
-    2: { 3: 17, 4: 38, 5: 44 },
-    3: { 4: 20, 5: 37, 6: 43 },
-    4: { 5: 11, 6: 32, 7: 57 },
-    5: { 7: 29, 8: 71 },
+    2: { 3: 18, 4: 37, 5: 45 },
+    3: { 4: 13, 5: 40, 6: 48 },
+    4: { 5: 4, 6: 25, 7: 71 },
+    5: { 7: 3, 8: 97 },
   };
   for (const band of [1, 2, 3, 4, 5]) {
     for (const [j, pct] of Object.entries(expected[band])) {
       const got = (100 * (dist[band][j] || 0)) / N;
       assert.ok(Math.abs(got - pct) <= 5, `band ${band} J=${j}: ${got.toFixed(1)}% vs ${pct}%`);
     }
+  }
+});
+
+test('AC-242 · V13 — every level clears its band’s actionable-junction floor', () => {
+  // Ja = 3 / 3 / 4 / 5 / 7. A junction whose two colour sets are COMPARABLE is decorative:
+  // the superset branch serves every colour the subset branch does, so a perfect player never
+  // has to flip it. V6 only forbids the outright no-op.
+  const wantJa = [null, 3, 3, 4, 5, 7];
+  const decorative = [null, 0, 0, 0, 0, 0];
+  const drawn = [null, 0, 0, 0, 0, 0];
+  eachLevel((level, band) => {
+    const P = BANDS[band];
+    assert.equal(P.Ja, wantJa[band], 'band ' + band + ' Ja');
+    const act = actionableJunctions(level);
+    assert.ok(act.length >= P.Ja,
+      'band ' + band + ' seed ' + level.seed + ': ' + act.length + ' actionable of ' +
+      level.junctions.length + ' drawn, floor ' + P.Ja);
+    // Every actionable junction is a real junction, and the count never exceeds the drawn one.
+    for (const j of act) assert.ok(level.junctions[j] !== undefined);
+    assert.ok(act.length <= level.junctions.length);
+    drawn[band] += level.junctions.length;
+    decorative[band] += level.junctions.length - act.length;
+  });
+  // Decorative junctions are ALLOWED above the floor and the design expects them at bands 2-5
+  // (generation.md §5.1: forbidding them outright makes the game easier and the generator
+  // unreliable). This asserts the rule is a floor, not a ban.
+  assert.equal(decorative[1], 0, 'band 1 has no room for a decorative junction');
+  assert.ok(decorative[2] > 0, 'band 2 lost its decorative junctions — V13 became a ban');
+});
+
+test('§5 · incomparable() is the predicate V13 is stated in, and it is not "differs"', () => {
+  assert.equal(incomparable(0b011, 0b101), true, 'neither contains the other');
+  assert.equal(incomparable(0b011, 0b001), false, 'strict superset: decorative');
+  assert.equal(incomparable(0b001, 0b011), false, 'strict subset: decorative');
+  assert.equal(incomparable(0b011, 0b011), false, 'equal sets are V6’s case, not V13’s');
+  assert.equal(incomparable(0b010, 0b001), true, 'disjoint non-empty sets are never comparable');
+});
+
+test('AC-245 · the first-decision window clears its 40-tick floor at every band', () => {
+  // gameplay.md §4.6b. This is the tightest window in the game and it went unmeasured through
+  // two slices: at ENTRY_LEN = 100 it read 34/32/30/28/27 and band 5 failed the floor by 13.
+  const wantMin = [null, 54, 50, 48, 45, 43];
+  for (let band = 1; band <= 5; band += 1) {
+    let min = Infinity;
+    for (let seed = 0; seed < 1000; seed += 1) {
+      const t = firstDecisionTicks(generate(seed, band));
+      assert.ok(t >= 40, 'band ' + band + ' seed ' + seed + ' firstDecisionTicks ' + t);
+      if (t < min) min = t;
+    }
+    // The minimum is exactly the entry-edge transit, because rows[0] holds one node and
+    // 41-89 % of levels branch there.
+    assert.equal(min, wantMin[band], 'band ' + band + ' minimum firstDecisionTicks');
+    const level = generate(0, band);
+    assert.equal(
+      Math.ceil((level.edges[level.entryEdgeId].lengthMlu) / level.speedMluPerTick),
+      wantMin[band], 'band ' + band + ' entry-edge transit',
+    );
   }
 });
 
@@ -266,8 +329,29 @@ test('validate() catches an injected violation of each rule it owns', () => {
   assert.equal(validate(v10, P), 'V10');
 });
 
-test('spawn schedules carry quota + 8 entries', () => {
-  eachLevel((level) => assert.equal(level.spawns.length, level.quota + SPAWN_SLACK));
+test('spawn schedules carry quota + the band’s derived slack', () => {
+  eachLevel((level, band) => assert.equal(level.spawns.length, level.quota + spawnSlack(band)));
+});
+
+test('AC-139 · the spawn schedule keeps a margin of at least 2 under injected misroutes', () => {
+  // The 2,000-seed sweep is `node tools/spawn-margin.mjs`; this is the in-suite sample, and
+  // it is here because the slack is now DERIVED — a band-table edit that moves interval,
+  // speed, R or the geometry recomputes it, and this is what notices when the recomputation
+  // leaves too little.
+  for (let band = 1; band <= 5; band += 1) {
+    for (let seed = 0; seed < 20; seed += 1) {
+      const level = generate(seed, band);
+      for (const variant of ['shortest', 'longest']) {
+        const r = routeOracle(level, variant);
+        assert.equal(r.injected, 2, 'band ' + band + ' seed ' + seed + ': misroutes not injected');
+        assert.equal(r.misrouted, 2, 'band ' + band + ' seed ' + seed + ': injection did not land');
+        assert.equal(r.cleared, true, 'band ' + band + ' seed ' + seed + ' ' + variant + ' did not clear');
+        assert.ok(r.margin >= 2,
+          'band ' + band + ' seed ' + seed + ' ' + variant + ': margin ' + r.margin +
+          ' (used ' + r.maxNextSpawn + ' of ' + level.spawns.length + ')');
+      }
+    }
+  }
 });
 
 test('AC-701/AC-702/AC-704 · level -> band, level seed, and retry', async () => {

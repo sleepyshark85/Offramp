@@ -33,6 +33,20 @@ jobs:
       - name: Generator audit
         run: node tools/generator-audit.mjs --seeds 1500
 
+      # Eight of the twelve validity rules never reject anything generate() produces, so
+      # this is the only place their checks are ever executed against a violation (AC-244).
+      - name: Every validity rule proven able to fire
+        run: node tools/generator-audit.mjs --rule-injection
+
+      # The band table's difficulty claim is about ACTIONABLE junctions, not drawn ones.
+      - name: Actionable junctions under the lazy-optimal oracle (AC-243)
+        run: node tools/generator-audit.mjs --actionable --seeds 400
+
+      # SPAWN_SLACK is derived, and a lever pull or a geometry edit walks through the margin
+      # without failing anything else (AC-139).
+      - name: Spawn margin under injected misroutes
+        run: node tools/spawn-margin.mjs --seeds 300
+
       - name: Unconstrained solver clears every level (AC-220)
         run: node tools/bot.mjs --unconstrained --seeds 500
 
