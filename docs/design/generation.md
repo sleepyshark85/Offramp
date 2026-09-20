@@ -25,7 +25,7 @@ level = {
   junctions: [nodeId, ...],      // ascending; index is the junctionId
   entryEdgeId,
   speedMluPerTick, interval, jitter, quota,
-  spawns: [{index, tick, colour}, ...]   // gameplay.md §2.7, length = quota + 8
+  spawns: [{index, tick, colour}, ...]   // gameplay.md §2.7, length = quota + SPAWN_SLACK(band)
 }
 ```
 
@@ -277,7 +277,7 @@ generate(seed, band):
 **There is no fallback layout.** A silent fallback would hide a generator regression behind a
 level that still plays. Exhaustion throws, and `tools/generator-audit.mjs` asserts it never
 happens over 5,000 seeds × 5 bands ([AC-203](acceptance-criteria.md)). Measured attempt counts
-are in §5.2; the worst observed over 15,000 runs is 68.
+are in §6.2; the worst observed over 15,000 runs is 50.
 
 ### 4.1 `tryBuild`
 
@@ -356,7 +356,7 @@ order; the id is what a generator-audit failure reports.
 |---|---|---|
 | **V1** | Every route-row node has out-degree 1 or 2; every depot has out-degree 0 and in-degree ≥ 1. | No dead ends. Every car reaches a depot. |
 | **V2** | Targets across a route row are strictly increasing; targets across the terminal row are non-decreasing. | Merge-free (§2.4) and planar (§2.5), in one rule. |
-| **V3** | No node other than a depot has in-degree > 1. | `development-process.md:96`. Implied by V2; checked independently so the check can fail. |
+| **V3** | No node other than a depot has in-degree > 1. | `development-process.md:96`. Implied by V2; kept as an independent tripwire (§5.2). |
 | **V4** | Every edge has `|Δcol| ≤ 1` and `Δrow = +1`. | The lattice invariant. |
 | **V5** | Every depot column is reachable from the entry. | Any colour can spawn; every colour must be routable. |
 | **V6** | Every branch node's two branches lead to **different** depot-colour sets. | A junction whose two branches are equivalent is a lie to the player. |
@@ -365,14 +365,99 @@ order; the id is what a generator-audit failure reports.
 | **V9** | At most one node per lattice site; `rows[r].length ≤ C` for all `r`. | Geometry. |
 | **V10** | The `K` depot colours are distinct and are exactly the band's first `K` palette entries. | [`ui.md` §5.1](ui.md#51-the-car-palette). |
 | **V11** | Minimum distance between any two junction centres ≥ 150 LU. | Tap targets (§3.2). Guaranteed by the lattice; asserted anyway. |
+| **V13** | The count of branch nodes whose two branches lead to **incomparable** colour sets — neither set contains the other — is at least the band's `Ja` (§6.1). | `J` is a difficulty claim. A junction that never has to move is not difficulty. |
 
-**V6 subsumes the "no-op junction" case.** If both branches reached the same set, flipping it
-would change nothing for any colour, and the player would learn that tapping sometimes does
-nothing.
+**V6 subsumes the "no-op junction" case, and V13 subsumes the decorative one.** If both branches
+reached the same set, flipping the junction would change nothing for any colour and the player
+would learn that tapping sometimes does nothing — that is V6, and it fires: 239 to 1,545 candidates
+per band per 3,000 seeds are rejected for it. But *differing* is weaker than *mattering*. Where one
+branch's set strictly contains the other's, the superset branch serves every colour the subset
+branch does, so a perfect player leaves the junction alone for the whole level. Slice 1 measured
+that class at `0 / 29.7 / 13.8 / 26.7 / 14.0 %` of all drawn junctions, and measured its
+consequence: band 2 seed 986 draws `J = 5` and plays as 2; band 4 seed 332 draws `J = 6` and plays
+as 3; 54 of 3,000 band-1 levels play as `J = 2` in a band whose table says `J = 3` exactly. V13 is
+the floor that makes `Ja` in §6.1 true. §6.2 gives what it cost and §5.1 gives what was tried
+instead.
+
+### 5.1 Why V6 was not simply strengthened
+
+The obvious repair is to require **every** junction's two sets to be incomparable, rather than
+requiring `Ja` of them. It was prototyped against the shipped generator over 300 seeds per band and
+it is not a repair:
+
+| Band | attempts med / p95 / max | `GEN_EXHAUSTED` | mean `J` | mean live junctions per run |
+|---|---|---|---|---|
+| 1 | 5 / 21 / 34 (unchanged) | 0 | 3.00 | 2.99 |
+| 2 | **17 / 71 / 131** | 0 | **3.00** (was 4.27) | **3.00** (was 3.48) |
+| 3 | 5 / 21 / 39 | 0 | 4.70 (was 5.21) | 4.70 (was 4.59) |
+| 4 | **61 / 194 / 251** | **2.0 %** | **5.00** (was 6.45) | **5.00** (was 5.31) |
+| 5 | **61 / 212 / 255** | **7.3 %** | **7.00** (was 7.72) | 6.99 (was 6.74) |
+
+Three things go wrong at once. The generator starts failing — `MAX_ATTEMPTS = 256`, and bands 4 and
+5 reach it on 2 % and 7.3 % of seeds. The attempt count goes from a median of 2 to a median of 61,
+which is the search telling us the constraint is nearly unsatisfiable. And the surviving networks
+collapse onto the **bottom** of their `J` range, because the only topologies that satisfy the rule
+are the minimal ones — so bands 2 and 4 end up with *fewer* actionable junctions than they have
+today. The strengthened rule makes the game easier and the generator unreliable.
+
+The cause is structural and worth stating, because it constrains any future repair. Merge-free
+networks are trees except on the terminal row, where V2 lets two edges land on the same depot
+(§2.4, [`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)). Two
+branches of a tree reach disjoint depot sets, and disjoint non-empty sets are never comparable —
+so **every comparable pair comes from a shared depot.** Forbidding comparable pairs outright
+forbids shared depots outright, which is the same topology
+[`gameplay.md` §8.8](gameplay.md#88-45s-guarantee-is-narrowed-not-repaired--decided) already
+decided to keep and draw correctly rather than generate away. V13 asks for enough actionable
+junctions instead of all of them, and costs almost nothing (§6.2).
+
+### 5.2 Which rules actually reject anything
+
+Measured over 15,000 `generate()` calls (3,000 seeds × 5 bands), counting the rule each rejected
+candidate died on:
+
+| Band | `V6` | `V7` | `V8` | build failure | `V1` `V2` `V3` `V4` `V5` `V9` `V10` `V11` |
+|---|---|---|---|---|---|
+| 1 | 239 | 13,638 | 2,147 | 474 | **0** |
+| 2 | 1,545 | 729 | 5,837 | 934 | **0** |
+| 3 | 253 | 298 | 3,372 | 312 | **0** |
+| 4 | 1,004 | 326 | 3,871 | 392 | **0** |
+| 5 | 226 | 382 | 3,858 | 18 | **0** |
+
+**Three rules do the filtering. The other eight are structural tripwires**, and saying so is more
+honest than presenting eleven checks as if they were eleven filters:
+
+- **V1, V5** — `finalise` builds row `r+1` from the targets of row `r`, so every node has
+  in-degree ≥ 1 by construction and reachability follows by induction from row 0; the terminal row
+  is built under `buildRow`'s `covered()` check, which is what makes every depot fed. A depot
+  count other than `K` is impossible because the depot columns are a `K`-combination.
+- **V2, V4** — `buildRow` enforces the running `minTarget` and the `±1` column candidate list as it
+  searches; a candidate that violates either is never constructed.
+- **V3** — implied by V2, and already labelled as such since slice 0.
+- **V9** — row `r+1` is the deduplicated set of row `r`'s targets, and `tryBuild` returns `null`
+  when a non-terminal row exceeds `C` columns.
+- **V10, V11** — the depot palette is a permutation of `0…K-1` by construction; junction separation
+  is a property of the lattice pitch.
+
+This is not an argument for deleting them. It is an argument about **how they are tested**. Slice 1
+enumerated every single-edge retarget of 200 band-3 levels and could not make `V5` or `V9` fire
+once, because an earlier rule always catches the mutation first — so those checks had never been
+executed against a violation, which is the same defect as a check that cannot fail. The audit must
+therefore invoke each rule's check **directly**, on a fixture built to violate that rule, rather
+than feeding a mutated level through `validate()`'s ordered cascade
+([AC-244](acceptance-criteria.md)).
 
 **What is deliberately *not* a rule:** there is no path-length-skew rule and no car-separation
 rule. Both are guaranteed by V2 (§2.4), and a rule that cannot fail is not a rule
 (`development-process.md:168`).
+
+**Integer geometry is a construction guard, not a validity rule.** §3.2 derives `colW` and `rowH`
+by division, and nothing in the search makes the result integral — the integrality of every shipped
+band is a property of the five rows in §6.1, so the first band-table edit that picks a non-divisor
+of 780 or 1200 would produce a level `generate()` accepts, with float node positions and a float
+`progress` accumulating inside the simulation. That is a broken *band table*, not an unlucky
+candidate, so retrying cannot fix it and it must **throw** rather than return a rule id
+([AC-218](acceptance-criteria.md)). It is therefore deliberately outside the V-numbering; `V13` is
+the actionable-junction floor above and nothing else.
 
 ---
 
@@ -380,30 +465,86 @@ rule. Both are guaranteed by V2 (§2.4), and a rule that cannot fail is not a ru
 
 ### 6.1 The table
 
-| Band | Levels | `C` | `K` | `R` | `pBranch` | `J` | `D` | `rowH` | `colW` | `diagLen` | Speed MLU/tick | LU/s | Interval | Jitter | Quota |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 1–4 | 3 | 3 | 3 | 0.85 | 3 | 2 | 400 | 300 | 521 | 3000 | 180 | 156 | ±12 | 16 |
-| 2 | 5–9 | 4 | 3 | 4 | 0.70 | 3–5 | 2–3 | 300 | 260 | 415 | 3200 | 192 | 138 | ±12 | 26 |
-| 3 | 10–15 | 4 | 4 | 4 | 0.80 | 4–6 | 2–3 | 300 | 260 | 415 | 3400 | 204 | 120 | ±18 | 36 |
-| 4 | 16–22 | 5 | 4 | 5 | 0.80 | 5–7 | 2–4 | 240 | 195 | 323 | 3600 | 216 | 108 | ±18 | 48 |
-| 5 | 23+ | 5 | 5 | 6 | 0.88 | 7–8 | 2–4 | 200 | 195 | 293 | 3800 | 228 | 96 | ±18 | 64 |
+| Band | Levels | `C` | `K` | `R` | `pBranch` | `J` | `Ja` | `D` | `rowH` | `colW` | `diagLen` | Speed MLU/tick | LU/s | Interval | Jitter | Quota | `SPAWN_SLACK` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1–4 | 3 | 3 | 3 | 0.85 | 3 | 3 | 2 | 400 | 300 | 521 | 3000 | 180 | 156 | ±12 | 16 | 8 |
+| 2 | 5–9 | 4 | 3 | 4 | 0.70 | 3–5 | 3 | 2–3 | 300 | 260 | 415 | 3200 | 192 | 138 | ±12 | 26 | 8 |
+| 3 | 10–15 | 4 | 4 | 4 | 0.80 | 4–6 | 4 | 2–3 | 300 | 260 | 415 | 3400 | 204 | 120 | ±18 | 36 | 9 |
+| 4 | 16–22 | 5 | 4 | 5 | 0.80 | 5–7 | 5 | 2–4 | 240 | 195 | 323 | 3600 | 216 | 108 | ±18 | 48 | 9 |
+| 5 | 23+ | 5 | 5 | 6 | 0.88 | 7–8 | 7 | 2–4 | 200 | 195 | 293 | 3800 | 228 | 96 | ±18 | 64 | 10 |
 
-`D` is `[Dmin, Dmax]` over all root-to-depot paths. `J` is the junction count.
+`D` is `[Dmin, Dmax]` over all root-to-depot paths. `J` is `[Jmin, Jmax]`, the count of junctions
+**drawn**. `Ja` is the floor on junctions that are **actionable** — V13, §5 — and it is a minimum,
+not a range: a level may exceed it. `SPAWN_SLACK` is not a free parameter; it is derived per band
+in [`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed)
+and reproduced here only so the whole per-band vector reads from one table.
+
+**`Ja` is set to `Jmin`, and that is not a coincidence of convenience.** It is close to the most
+the topology can carry: measured with V13 in force, `Ja` comes out at exactly its floor in 100 % of
+levels at bands 1, 2, 4 and 5, and at 4 or 5 at band 3. The reason is that actionable junctions are
+bounded by what there is to decide — with `K` colours a path of decisions can sort at most `K`
+destinations, so actionable `J` tracks `K`, not the drawn junction count. **Above the floor, the
+band table's `J` axis is mostly the `K` axis in disguise.** [`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order)'s escalation ladder already leans
+on `K` for the two biggest steps; this says the `J` steps are doing less than they appear to, and
+whoever next pulls a lever should reach for `K` or `interval` before `pBranch`.
 
 ### 6.2 Measured generator behaviour
 
-Measured with a faithful prototype of §4 over **3,000 seeds per band**, 15,000 runs total:
+Measured over **3,000 seeds per band**, 15,000 runs total, against the shipped generator with V13
+in force:
 
-| Band | Valid networks | Attempts: median / p95 / max | Distinct networks | `J` distribution | `D` range |
-|---|---|---|---|---|---|
-| 1 | 3000 / 3000 | 5 / 19 / 68 | 37 | J=3: 100 % | 2 |
-| 2 | 3000 / 3000 | 3 / 11 / 32 | 1022 | J=3: 17 %, 4: 38 %, 5: 44 % | 2–3 |
-| 3 | 3000 / 3000 | 2 / 6 / 17 | 690 | J=4: 20 %, 5: 37 %, 6: 43 % | 2–3 |
-| 4 | 3000 / 3000 | 2 / 8 / 17 | 1883 | J=5: 11 %, 6: 32 %, 7: 57 % | 2–4 |
-| 5 | 3000 / 3000 | 2 / 7 / 17 | 951 | J=7: 29 %, 8: 71 % | 2–4 |
+| Band | Valid networks | Attempts: median / p95 / max | Distinct networks | `J` distribution | `Ja` distribution | `D` range |
+|---|---|---|---|---|---|---|
+| 1 | 3000 / 3000 | 5 / 19 / 50 | 190 | J=3: 100 % | 3: 100 % | 2 |
+| 2 | 3000 / 3000 | 3 / 11 / 27 | 1867 | J=3: 18 %, 4: 37 %, 5: 45 % | 3: 100 % | 2–3 |
+| 3 | 3000 / 3000 | 2 / 7 / 16 | 1802 | J=4: 13 %, 5: 40 %, 6: 48 % | 4: 26 %, 5: 74 % | 2–3 |
+| 4 | 3000 / 3000 | 3 / 10 / 22 | 2678 | J=5: 4 %, 6: 25 %, 7: 71 % | 5: 100 % | 2–4 |
+| 5 | 3000 / 3000 | 2 / 9 / 23 | 2236 | J=7: 3 %, 8: 97 % | 7: 100 % | 2–4 |
 
-**Band 1's network space is genuinely small** — 37 distinct networks, because `C = 3`, `R = 3`
-and `J = 3` leaves little to vary. Band 1 is four levels long, so this is acceptable, but it
+**What V13 cost.** The same generator without V13, at the same 3,000 seeds per band: attempts
+`5 / 3 / 2 / 2 / 2` median, `19 / 11 / 6 / 8 / 6` p95 and `50 / 27 / 14 / 17 / 20` max; distinct
+networks `190 / 1867 / 1981 / 2773 / 2507`; `J` distributions `3:100 %` / `3:18 4:37 5:45` /
+`4:20 5:39 6:41` / `5:11 6:32 7:57` / `7:29 8:71`; decorative junctions
+`0.0 / 29.6 / 13.5 / 26.7 / 14.1 %` of drawn `J`. So V13 costs:
+
+- **No exhaustions and no material attempt cost.** Median attempts move `5/3/2/2/2` → `5/3/2/3/2`,
+  p95 `19/11/6/8/6` → `19/11/7/10/9`, worst case 50 against a `MAX_ATTEMPTS` budget of 256 and an
+  [AC-203](acceptance-criteria.md) ceiling of 128. Bands 1 and 2 come out **bit-identical** — their
+  networks already satisfied the floor — which matters because band 1 has the smallest space in the
+  game, 37 edge topologies, and is the band a stricter rule would have broken first.
+- **Under 11 % of network variety.** Distinct signatures fall by 0 / 0 / 9 / 3 / 11 %, all far
+  above [AC-234](acceptance-criteria.md)'s floors of 30 and 500.
+- **A shift in the `J` distribution toward the top of each range**, which is why the `J` rows above
+  differ from slice 0's and why [AC-211](acceptance-criteria.md)'s 5-point tolerance is measured
+  against *this* table, not the old one.
+
+**Actionable junctions, measured rather than assumed.** A *lazy-optimal oracle* is the reference
+reading, and it is normative because §6.2 is cited by [AC-243](acceptance-criteria.md): at each
+tick, for every car that will transition onto a branch node during that tick's advance, if the
+junction's currently open branch cannot reach that car's colour, flip it — and never otherwise.
+This is what a perfect player does, it delivers every car at every band, and the junctions it never
+flips are the junctions the level never asked about.
+
+| Band | drawn `J`, mean | live junctions, mean / min | flipped ≥ 2×, mean / min | levels below `Ja` |
+|---|---|---|---|---|
+| 1 | 3.00 | 2.98 / 2 | 2.93 / 2 | 1.6 % |
+| 2 | 4.30 | 3.48 / 2 | 2.99 / 2 | 0.2 % |
+| 3 | 5.34 | 4.81 / 4 | 4.70 / 3 | 0.0 % |
+| 4 | 6.65 | 5.54 / 4 | 4.98 / 4 | 0.0 % |
+| 5 | 7.95 | 7.07 / 6 | 6.95 / 5 | 0.2 % |
+
+Two things to read here. First, live count still trails drawn `J` — decorative junctions are
+allowed above the floor, and that is deliberate: they are real branches that real cars take, they
+are part of reading the board, and §5.1 shows that eliminating them costs the generator more than
+they cost the player. Second, a residue of levels plays below `Ja` even with V13 in force, at
+1.6 % and 0.2 % at bands 1, 2 and 5. **That residue is spawn order, not topology**, and no static
+rule removes it: a junction can be structurally actionable and still never be exercised, because
+which colours reach it depends on how the upstream junctions were left. It is bounded and it is now
+reported every audit run rather than being invisible, which is the most that is available.
+
+**Band 1's network space is genuinely small** — 190 distinct signatures over 3,000 seeds, and only
+37 distinct *edge topologies* once the depot-colour permutation is factored out, because `C = 3`,
+`R = 3` and `J = 3` leaves little to vary. Band 1 is four levels long, so this is acceptable, but it
 means a repeat is possible. Hence:
 
 > **V12 (cross-level rule).** A level's network signature — the sorted edge list plus the
@@ -423,6 +564,12 @@ the constrained bot measures the true value.
 | 3 | 0.500 /s | 2.7 | 0.68 | 3.8 |
 | 4 | 0.556 /s | 3.2 | 0.89 | 3.8 |
 | 5 | 0.625 /s | 3.3 | 1.03 | 4.1 |
+
+The **cars in flight** column is a mean. The *maximum* is what sizes the spawn schedule, and it is
+derived separately in
+[`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed) —
+`5 / 5 / 6 / 6 / 7` against an observed worst of `4 / 5 / 5 / 5 / 6`. The two columns are not in
+conflict; reading the mean as the maximum is how the spawn margin came to be one car at band 5.
 
 The estimate assumes a junction is in the wrong state half the time, which overstates the true
 rate because consecutive same-colour cars inherit a correct junction. The measured value from
@@ -747,12 +894,12 @@ too easy.
 
 **R2 — Every band must be harder than the one below it, measurably.** A band boundary exists to
 escalate; if band 3 is not harder than band 2 for the same player model, the boundary is
-decoration and §5.1's escalation table is a story rather than a design. **Each band's clear rate
+decoration and [`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order)'s escalation table is a story rather than a design. **Each band's clear rate
 must be at least 4 percentage points below the band above it.** Four points is the smallest gap
 that is not sampling noise: the binomial standard error at `p ≈ 0.8` over 1,000 seeds is 1.3 pp,
 so 4 pp is about three standard errors.
 
-**R3 — No band boundary may be a wall.** §5.1 adds exactly one axis per step up the ladder — a
+**R3 — No band boundary may be a wall.** [`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order) adds exactly one axis per step up the ladder — a
 column, a colour, a row. One axis should not cost a quarter of the player's runs. **No adjacent
 pair of bands may differ by more than 15 percentage points.**
 
@@ -825,6 +972,18 @@ duration of about 76 s, which breaks §7.3's 98–122 s band — a band that cur
 seed. **A lever is only pulled if the sweep shows both targets satisfied after the pull.** A
 change that fixes §7.2 and breaks §7.3 has not fixed anything.
 
+**Every lever move re-derives the spawn margin.** `SPAWN_SLACK` is a function of `interval`,
+`speedMluPerTick`, `R` and the band's geometry
+([`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed)),
+and the two levers below that move `interval` move it. A lever pull is not applied until
+`SPAWN_SLACK` has been recomputed from the new parameters **and**
+[AC-139](acceptance-criteria.md)'s oracle sweep has been re-run and still shows a margin of at
+least 2 spawns at every band. Slice 1 is the worked example: the flat
+`SPAWN_SLACK = 8` had eroded to a margin of one car at band 5 without anything failing, and the
+"clear rate too high" lever below — raise `quota`, then cut `interval` — was pointed straight at
+what was left. Treat the margin as a target that binds alongside §7.2 and §7.3, not as a constant
+that happens to hold.
+
 **Lever 0 — the iso-duration lever. Try this first whenever the clear rate is out of band and the
 duration is in band.** Duration is
 `≈ SPAWN_LEAD/60 + (quota - 1)·interval/60 + transit`, so the product `(quota - 1)·interval` is
@@ -858,14 +1017,18 @@ being true. There is no upper bound on `interval` other than §7.3.
   fewer decisions per car). Do **not** reduce speed — a slower car shortens nothing and a faster
   spawn rate is what makes it hard; reducing speed shortens the planning horizon relative to the
   spawn rate and pushes the game toward reaction.
-- **Clear rate too high:** increase `quota`, then raise `pBranch`, then add a colour (`K`) if the
-  band's `C` allows it.
+- **Clear rate too high:** increase `quota`, then add a colour (`K`) if the band's `C` allows it,
+  then raise `pBranch`. *`pBranch` is last, and it is the weakest of the three: §6.1 shows that
+  actionable junctions track `K` rather than the drawn junction count, so raising `pBranch` buys
+  scenery and tap targets more reliably than it buys decisions. If it is pulled, AC-242 and AC-243
+  are re-measured with it — a `pBranch` rise that moves `J` without moving `Ja` has not made the
+  band harder.*
 - **Median time above band:** reduce `quota`. It is the only term that moves duration without
   changing how the level feels.
 - **Median time below band:** increase `quota`.
 - **R2 violated (a band is not harder than the one below it):** the fix is never a clear-rate
   lever on the offending band alone. Two adjacent bands that measure the same are one band; the
-  correction is to §5.1's escalation — move an axis from the step above down into the step that
+  correction is to [`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order)'s escalation — move an axis from the step above down into the step that
   is not escalating.
 
 **What is not a lever.** `BOT_WORKING_SET`, `BOT_MEMORY_TICKS` and every other constant in §7.1
@@ -879,7 +1042,10 @@ a human player* is shown to be wrong, and then every target is re-read, not just
 
 | Tool | What it must assert |
 |---|---|
-| `tools/generator-audit.mjs --seeds 5000` | V1–V12 hold for every band × seed; zero `GEN_EXHAUSTED`; report attempt-count percentiles and distinct-network counts per band. |
+| `tools/generator-audit.mjs --seeds 5000` | V1–V13 hold for every band × seed; zero `GEN_EXHAUSTED`; report attempt-count percentiles, per-rule rejection counts (§5.2) and distinct-network counts per band. |
+| `tools/generator-audit.mjs --rule-injection` | For each of V1–V11 and V13, a fixture that violates that rule, with the rule's check invoked **directly** rather than through `validate()`'s cascade, confirmed to reject it ([AC-244](acceptance-criteria.md)). Eight of the twelve are unreachable through `generate()` (§5.2) and this is the only place their checks are ever executed against a violation. |
+| `tools/generator-audit.mjs --actionable --seeds 3000` | Per band: mean and minimum live-junction count under §6.2's lazy-optimal oracle, the share of levels below `Ja`, the mean count of junctions flipped twice or more, and the decorative-junction share of drawn `J` ([AC-243](acceptance-criteria.md)). |
+| `tools/spawn-margin.mjs --seeds 2000` | Per band, both oracle variants, two misroutes injected: the worst `max(nextSpawn)` and the resulting margin against `spawns.length`, which must be ≥ 2 ([AC-139](acceptance-criteria.md)). Re-run after every §7.4 lever move. |
 | `tools/bot.mjs --seeds 1000` | Unconstrained clear rate = 100 %; constrained clear rate within §7.2's table **and** satisfying R2 and R3's shape rules; measured taps/s per band. |
 | `tools/bot.mjs --attention-report` | Per band, per 1,000 seeds: mean glances/s, mean focus events/s, the split between `BOT_SWITCH_TICKS` and `BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, and the count of misroutes caused by a flip the bot made for a car it was holding onto a car it was not (`breaksHeldCar` could not see). These are the numbers that say *why* a band lands where it does, and without them a missed target is unexplainable. |
 | `tools/pacing.mjs` | Completion-time median / p95 / max per band against §7.3. |

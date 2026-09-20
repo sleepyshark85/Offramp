@@ -88,9 +88,18 @@ state produced when the same two inputs are supplied in the opposite array order
 
 **AC-112 · Cars spawn on their scheduled tick**
 **Given** `level.spawns[i] = {index:i, tick:t, colour:c}`,
-**When** the simulation reaches tick `t`,
-**Then** exactly one car appears with `id === i`, `colour === c`, `edgeId === level.entryEdgeId`
-and `progress === 0`.
+**When** the tick whose `state.tick` is `t` has been stepped,
+**Then** the returned state contains exactly one car with `id === i` and `colour === c`; it is on
+`level.entryEdgeId` with `progress === level.speedMluPerTick`; no car with `id === i` existed in
+the state returned by the previous tick; and the returned `events` contain exactly one
+`{type:'spawn', tick:t, carId:i, colour:c}`.
+*`progress === 0` is not observable by any caller: spawn is step 3 of
+[`gameplay.md` §2.5](gameplay.md#25-stepstate-inputs--exactly-one-tick) and the advance is step 4,
+so the car has always moved once by the time `step()` returns. Slice 1's wording asked for a value
+that exists only between two statements inside `step()`, and the developer correctly implemented
+the observable behaviour and flagged the AC instead of matching it. `speedMluPerTick` is the right
+value because the entry edge is `ENTRY_LEN = 100,000` MLU, far longer than one tick of travel at
+any band, so the spawning car cannot transition on its spawn tick.*
 
 **AC-113 · The spawn schedule is a pure function of the seed**
 **Given** the same `(seed, band)`,
@@ -103,11 +112,21 @@ and `progress === 0`.
 **Then** `spawns[i+1].tick > spawns[i].tick` for every `i`, and the minimum gap over 1,000 seeds
 per band is at least `interval - 2*jitter` ticks.
 
-**AC-115 · Colour bag prevents runs of three**
-**Given** the spawn colour sequence of any generated level,
+**AC-115 · Colour bag prevents runs of three, and balances within a level**
+**Given** the spawn colour sequence of **one** generated level, at any band and any seed,
 **When** it is scanned,
-**Then** no three consecutive entries share a colour, and over 1,000 seeds the per-colour counts
-differ by at most `K` across the whole sequence.
+**Then** (a) no three consecutive entries share a colour, and (b) across that one level's
+`SPAWN_COUNT` entries the most-used colour's count exceeds the least-used colour's count by **at
+most 1** — spread `0` when `K` divides `SPAWN_COUNT` and exactly `1` otherwise. The tolerance is 1,
+not `K`, and it is exact rather than statistical: the bag deals `floor(SPAWN_COUNT / K)` complete
+bags in which every colour appears equally often, and the `SPAWN_COUNT mod K` leftover entries come
+from one shuffled bag and are therefore distinct colours.
+*The aggregate-over-seeds reading of this clause is **withdrawn**. Slice 1 measured the aggregate
+spread over 1,000 seeds at 34 (band 2) and 43 (band 5) — both bands where `K` does not divide
+`SPAWN_COUNT`, so the leftover is a fresh uniform draw and the spread is ordinary multinomial noise
+with σ ≈ 15. There is no bias to remove and no tolerance below which that reading would be a check
+rather than a coin toss. The per-level reading above is a theorem about the bag, so it holds at
+every seed and fails the moment the bag is replaced by independent draws.*
 
 **AC-116 · Correct delivery scores and counts**
 **Given** a car entering a depot whose `depotColour` equals the car's colour,
@@ -161,7 +180,11 @@ the tick and step 5 runs the terminal check exactly once, afterwards.
 **AC-123 · The spawn array is never exhausted**
 **Given** a constrained-bot run over 1,000 seeds per band,
 **When** each level ends,
-**Then** `state.nextSpawn < level.spawns.length` in every run.
+**Then** `state.nextSpawn < level.spawns.length` at **every tick** of every run — not only at the
+final tick. The engine throws `SPAWN_EXHAUSTED` when `nextSpawn` *reaches* `spawns.length`, so the
+last scheduled car is a reserve that is never needed; see AC-139 for the margin this AC leaves and
+[`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed) for
+the derivation that sizes it.
 
 **AC-124 · Minimum car separation**
 **Given** any seeded run at any band,
@@ -238,6 +261,29 @@ two `misrouted` events are emitted, `lives === 0` and not `-1`, `score` is uncha
 **Then** it is `'running'` throughout step 4 on every tick, and changes only at step 5 — no
 arrival is ever skipped because an earlier arrival in the same tick ended the level.
 
+**AC-138 · Every junction starts on branch 0**
+**Given** a freshly created state for any generated level at any band,
+**When** `state.open` is read before any `step()`,
+**Then** every entry is `0`, so every junction points at `node.out[0]` — the lower-column branch
+([`gameplay.md` §2.3](gameplay.md#23-the-graph)) — and `state.open.length === level.junctions.length`.
+*This is a design decision, not an allocation default: see
+[`gameplay.md` §4.8](gameplay.md#48-how-a-level-opens). A build that seeded `open` from the level
+seed would pass every other AC in this document and would change how every level opens.*
+
+**AC-139 · The spawn schedule keeps a measured margin**
+**Given** an oracle router — perfect routing, unlimited taps — run over 2,000 seeds per band, in
+both its shortest-path and its longest-path variant, with the `LIVES - 1 = 2` misroutes a winning
+run is allowed injected at the first two opportunities,
+**When** the maximum `state.nextSpawn` reached in each run is recorded,
+**Then** `level.spawns.length - max(nextSpawn) >= 2` in **every** run at **every** band.
+*Slice 1 measured this margin at `3 / 2 / 2 / 2 / 1` under the flat `SPAWN_SLACK = 8`, with band 5
+seed 160 consuming 71 of 72 spawns and 30 of 5,000 band-5 seeds finishing with a margin of exactly
+1 — one spawn interval, 1.6 s, from an uncaught throw in the middle of the hardest band. The
+per-band derivation in [`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed)
+restores it to `3 / 2 / 3 / 3 / 3`. This AC is the reason the derivation exists, and
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed) requires it to be re-run after
+every lever move.*
+
 ---
 
 ## 200 — Generation
@@ -291,7 +337,9 @@ maximum ≤ 128.
 **AC-210 · V6 — every junction is decisive**
 **Given** any branch node,
 **When** the reachable depot-colour set of each of its two branches is computed,
-**Then** the two sets differ.
+**Then** the two sets differ. *Differing is a weaker property than mattering — where one set
+strictly contains the other, optimal play never has to leave the default. AC-242 and AC-243 are
+what hold the band table's difficulty claim; this AC only forbids the outright no-op junction.*
 
 **AC-211 · V7 — junction count in band range**
 **Given** 1,000 generated levels per band,
@@ -329,7 +377,14 @@ differ.
 
 **AC-218 · Integer geometry**
 **Given** any generated level,
-**Then** every node's `x` and `y`, and every edge's `lengthMlu`, satisfy `Number.isInteger`.
+**Then** every node's `x` and `y`, every edge's `lengthMlu`, and the level's `colW`, `rowH` and
+`diagLen` all satisfy `Number.isInteger`; **and given** a band-table row whose `C` or `R` is not a
+divisor of `LANE_SPAN` or of `DEPOT_Y - ROW0_Y`, **then** level construction **throws** rather than
+returning a level. *The throw is the point. Slice 1 injected `R = 7` and got a level back: 18 nodes
+with fractional `y`, 17 edges with fractional `lengthMlu`, and by tick 683 a car holding
+`progress = 1371.4285714285797` — a float inside the simulation, which is the one thing the
+fixed-point rule of [`gameplay.md` §2.2](gameplay.md#22-position-fixed-point-integers-along-an-edge)
+exists to prevent, arriving silently through a band-table edit rather than through a code change.*
 
 **AC-219 · Serialisation round-trip**
 **Given** any generated level,
@@ -443,6 +498,45 @@ whose clear rate barely moves when attention is made free is not measuring atten
 **Then** AC-221 – AC-231 are **all** re-run and all pass. A change that moves a clear rate into
 band while moving a completion-time median out of band has not been applied; it has been
 proposed and rejected.
+
+**AC-242 · V13 — the actionable junction floor**
+**Given** any generated level at band `b`,
+**When** every branch node's two reachable-colour sets are compared,
+**Then** the number of branch nodes whose two sets are **incomparable** — neither contains the
+other — is at least the band's `Ja` in [`generation.md` §6.1](generation.md#61-the-table):
+**3 / 3 / 4 / 5 / 7** for bands 1–5. A junction whose sets are comparable is *decorative*: the
+superset branch serves every colour the subset branch does, so a perfect player never has to flip
+it. *Before this rule, decorative junctions were `0.0 / 29.6 / 13.5 / 26.7 / 14.1 %` of all drawn
+junctions over 3,000 seeds per band; with it they are `0.0 / 29.6 / 11.4 / 25.0 / 12.2 %` and every
+level clears the floor. The rule constrains the generator rather than describing it: it is the
+reason the minimum actionable count is `3 / 3 / 4 / 5 / 7` instead of `3 / 3 / 3 / 3 / 5`.*
+
+**AC-243 · Actionable `J` is measured per run, not assumed from the table**
+**Given** `tools/generator-audit.mjs --actionable --seeds 3000` per band, which drives each level
+with the lazy-optimal oracle of
+[`generation.md` §6.2](generation.md#62-measured-generator-behaviour) and records the set of
+junctions that oracle flips at least once,
+**Then** it reports, per band: the mean and minimum live-junction count, the share of levels whose
+live count is below `Ja`, and the mean count of junctions flipped **twice or more**; and the
+measured values satisfy — live count `>= Ja - 1` in **100 %** of runs, and `>= Ja` in at least
+**95 %**. *Measured with V13 in force: mean live `2.98 / 3.48 / 4.81 / 5.54 / 7.07`, minimum
+`2 / 2 / 4 / 4 / 6`, below-`Ja` share `1.6 / 0.2 / 0.0 / 0.0 / 0.2 %`. The residue at bands 1 and 2
+is a spawn-order effect, not a topology one, and no static rule removes it: a junction can be
+structurally actionable and still not be exercised by one particular colour sequence. This AC
+exists so that residue stays visible and bounded instead of being invisible, which is what it was
+through slices 0 and 1.*
+
+**AC-244 · Every validity rule is proven able to fire**
+**Given** the eleven checks `V1`–`V11` plus `V13`,
+**When** the audit's rule-injection suite runs,
+**Then** for **each** rule there is a fixture that the rule's own check rejects, and the check is
+invoked **directly** rather than through `validate()`'s ordered cascade. *Only `V6`, `V7` and `V8`
+ever reject a candidate that `tryBuild` produced — measured over 15,000 `generate()` calls, with
+zero rejections attributed to `V1`, `V2`, `V3`, `V4`, `V5`, `V9`, `V10` or `V11`. Those are
+structural tripwires, not filters ([`generation.md` §5](generation.md#5-validity-rules-what-rejects-a-candidate)),
+and running them through the cascade means an earlier rule catches the fixture first — which is
+why slice 1's blind pass could not make `V5` or `V9` fire from any single-edge mutation of 200
+band-3 levels. A tripwire whose check has never been executed against a violation is not a check.*
 
 ---
 
@@ -769,9 +863,14 @@ discarded until it completes.
 [`gameplay.md` §2.1](gameplay.md#21-tick-rate),
 **Then** `n === 3`, `step()` is called exactly **3** times, and the accumulator is left holding
 exactly **0 ms** — 50 ms is three whole ticks at 60 Hz and the remainder is zero, not 0.33 ms.
-*Slice 0 asserted a 0.33 ms remainder, which is arithmetically false.* The divide-first form
-`Math.floor(acc / (1000 / TICK_HZ))` returns **2** here, because `1000 / 60` is
-`16.666666666666668` in IEEE 754; see AC-816.
+*Slice 0 asserted a 0.33 ms remainder, which is arithmetically false.*
+
+**50 ms does not distinguish the two conversion forms.** An earlier revision of this AC claimed the
+divide-first form `Math.floor(acc / (1000 / TICK_HZ))` returns **2** here. It does not: `50 / (1000/60)`
+is exactly `3` in IEEE 754 — bit pattern `0x4008000000000000`, no rounding error at all — so both
+forms floor to 3. The claim reached this document from a verification report that had checked it
+with Python's float `//`, which is computed from `fmod` and is not `floor(a/b)`. AC-816 states what
+is actually true of the two forms and why the requirement is a source rule.
 
 **AC-806 · A very slow frame is capped**
 See AC-127; on device, a 2 s stall must not produce a visible teleport of any car by more than
@@ -819,13 +918,42 @@ flip in at least one spawn sequence over 1,000 seeds — i.e. no level is won by
 **Given** an accumulator of 0 ms and a frame delta of 55 ms,
 **Then** `step()` is called exactly **3** times and the accumulator retains **5 ms**; and given a
 following frame delta of 12 ms (accumulator 17 ms), `step()` is called exactly **1** more time.
+*The shipped accumulator is carried in tick units rather than milliseconds, so "5 ms" is observed
+as `0.3` ticks; the two statements are the same number and either form satisfies this AC.*
 *This is the companion to AC-805: AC-805 pins the zero-remainder case and this pins a non-zero
 one, so a build that drops the remainder entirely passes neither.*
 
-**AC-816 · The divide-first form is proven to fail AC-805**
-**Given** the React layer's tick conversion temporarily replaced by
-`n = Math.floor(acc / (1000 / TICK_HZ))`,
-**When** AC-805 is run,
-**Then** it **fails**, reporting `n === 2` against the required 3; and it passes again once the
-integer-first form is restored. *`docs/development-process.md:136` — a check that cannot fail is
-not a check, and this is the specific fault AC-805 exists to catch.*
+**AC-816 · The tick conversion is integer-first, checked at the source**
+**Given** the module that converts elapsed wall time to ticks (`src/engine/clock.js`),
+**When** its conversion expression is read,
+**Then** it multiplies before it divides — the elapsed quantity is scaled by `TICK_HZ` and then
+divided by `1000` — and no sub-expression of the form `1000 / TICK_HZ` exists anywhere in the
+ticking path. *This is a source check, and it is a source check on purpose.*
+
+**Why this cannot be a behavioural check.** The two forms are indistinguishable everywhere the
+shipped clock can report:
+
+- Over integer-millisecond deltas from 1 to 2,000 they disagree exactly 15 times, and the **first**
+  is **250 ms** — integer-first 15 ticks, divide-first 14.
+- `MAX_CATCHUP_TICKS = 8` clamps every delta at or above `8 × 1000 / 60 = 133.34 ms` (AC-127), so
+  250 ms returns 8 ticks under either form. Every disagreement sits above the clamp.
+- Below the clamp the forms agree not only on integers: over 5,000,000 random fractional
+  accumulator values in `[0, 133.33)` there were **zero** disagreements.
+
+So no input to `advanceClock` produces different output under the two forms, and an AC of the shape
+"inject the divide-first form and watch AC-805 fail" is a check that **cannot pass**. The previous
+revision of this AC was exactly that, written in good faith from the wrong number corrected in
+AC-805 — the mirror image of a check that cannot fail, and just as useless. Integer-first still
+ships, for the ordinary reason that it cannot drift as `TICK_HZ` or the clamp changes, and that is
+a property of the source, so the source is where it is asserted. AC-805 and AC-815 remain the
+behavioural checks: a build that drops or mis-rounds the remainder fails both.
+
+**AC-817 · A non-finite or negative frame delta is dropped, not accumulated**
+**Given** an accumulator holding a valid value,
+**When** `advanceClock` is called with `NaN`, `+Infinity`, `-Infinity` or a negative delta,
+**Then** it returns `0` ticks, the accumulator it returns is finite, and the **next** call with a
+normal 16.7 ms delta returns ticks again.
+*`NaN` fails both the `< 0` and the `> MAX_CATCHUP_TICKS` guard, so without an explicit finiteness
+test one bad frame — which an uninitialised `lastFrameTime` in the React layer produces exactly —
+poisons the accumulator and freezes the simulation for the rest of the session. Slice 1 reproduced
+that freeze. The behaviour now exists in the engine; this AC is what keeps it there.*

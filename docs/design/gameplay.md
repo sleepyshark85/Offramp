@@ -148,6 +148,17 @@ state = {
 }
 ```
 
+**The initial junction vector is normative, not an allocation default.** `open` starts as
+`length = level.junctions.length` zeros, so every junction points at `node.out[0]` — the
+lower-column branch (§2.3) — until the player taps it ([AC-138](acceptance-criteria.md)). §4.8
+gives the reasoning and the opening window this creates.
+
+`rng` is carried so the determinism contract has something to compare
+([AC-125](acceptance-criteria.md)), and it is **constant for the whole run**: the spawn schedule is
+materialised at level construction (§2.7), so nothing draws from the spawn stream during play. Do
+not read a constant field as evidence that the stream is live; if a future change makes the stream
+live, §2.7 changes first.
+
 ### 2.5 `step(state, inputs)` — exactly one tick
 
 `inputs` is the array of taps stamped with `state.tick`. The order of operations is normative.
@@ -278,20 +289,61 @@ mulberry32(s):   // returns a generator of uint32
 using rejection sampling would cost a variable number of draws, which is a determinism hazard
 for no benefit.
 
-**Spawn count.** `SPAWN_COUNT = quota + 8`. A level can be won with at most `LIVES - 1 = 2`
-misroutes, so at most `quota + 2` cars ever need to resolve. Eight is slack; the engine asserts
-`nextSpawn` never reaches `SPAWN_COUNT` ([AC-123](acceptance-criteria.md)).
+**Spawn count.** `SPAWN_COUNT = quota + SPAWN_SLACK(band)`, and the slack is **derived**, not
+chosen. Slice 1 measured the flat `SPAWN_SLACK = 8` down to a margin of **one car** at band 5 —
+seed 160 consumed 71 of 72 spawns, and 30 of 5,000 band-5 seeds finished one spawn interval from an
+uncaught `SPAWN_EXHAUSTED` throw in the middle of a level a player was winning. The old
+justification — "at most `quota + 2` cars ever need to resolve, eight is slack" — is not wrong so
+much as incomplete: it counts the cars that *resolve* and forgets the cars still *in flight* when
+the quota-completing car lands, which is about 4 at band 3 and 5–6 at band 5.
+
+The schedule has to cover three things and one reserve:
+
+```
+transitMax(band)  = ceil( (ENTRY_LEN + R * max(rowH, diagLen)) * MLU / speedMluPerTick )
+                    // ticks, the longest root-to-depot journey in the band
+
+inFlightMax(band) = floor( transitMax / interval ) + 2
+                    // one car per interval of transit, +1 for the partial interval,
+                    // +1 because jitter can pull one spawn forward across the boundary
+
+SPAWN_SLACK(band) = (LIVES - 1)        // the misroutes a winning run is allowed
+                  + inFlightMax(band)  // still on the network when the quota is met
+                  + 1                  // reserve: the engine throws when nextSpawn REACHES
+                                       // spawns.length, so the last entry must never be spawned
+```
+
+| Band | `transitMax` | `interval` | `inFlightMax` | observed max in flight | `SPAWN_SLACK` | `SPAWN_COUNT` |
+|---|---|---|---|---|---|---|
+| 1 | 555 | 156 | 5 | 4 | **8** | 24 |
+| 2 | 550 | 138 | 5 | 5 | **8** | 34 |
+| 3 | 518 | 120 | 6 | 5 | **9** | 45 |
+| 4 | 477 | 108 | 6 | 5 | **9** | 57 |
+| 5 | 489 | 96 | 7 | 6 | **10** | 74 |
+
+Bands 1 and 2 are unchanged at 8; bands 3–5 gain one or two cars. Measured with an oracle router
+over 2,000 seeds per band in both its shortest-path and longest-path variant, with the two allowed
+misroutes injected, the worst `nextSpawn` reached is `21 / 32 / 42 / 54 / 71`, which under the
+derived counts leaves a margin of **3 / 2 / 3 / 3 / 3** spawns
+([AC-139](acceptance-criteria.md)). The engine asserts `nextSpawn` never reaches `SPAWN_COUNT`
+([AC-123](acceptance-criteria.md)).
+
+The derivation matters more than the numbers it currently produces. Every difficulty lever in
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed) moves a term in it — raising
+`quota` does not, but cutting `interval` raises `inFlightMax`, and a slower speed or a deeper band
+raises `transitMax`. With the slack written as a literal, a lever pull walks through the margin
+silently; written as a derivation, it recomputes.
 
 **Spawn ticks.**
 
 ```
-JITTER (ticks) is a band constant (generation.md §5)
+JITTER (ticks) is a band constant (generation.md §6.1)
 tick[i] = SPAWN_LEAD + i * INTERVAL + nextInt(2*JITTER + 1) - JITTER
 ```
 
 The jitter exists so the spawn stream is not a metronome. A perfectly regular beat lets a player
 pattern-match a rhythm instead of attending to the cars, which is the opposite of the game's
-subject. Because `INTERVAL - 2*JITTER >= 60` for every band (§5), `tick[i+1] > tick[i]` strictly,
+subject. Because `INTERVAL - 2*JITTER >= 60` for every band (generation.md §6.1), `tick[i+1] > tick[i]` strictly,
 always — the schedule can never invert or collide.
 
 **Spawn colours — a bag, not a coin.**
@@ -534,24 +586,73 @@ criterion, not an aspiration ([AC-220](acceptance-criteria.md)).
 Being clearable by an omniscient bot proves nothing about playability. That is what the
 constrained bot is for.
 
+### 4.8 How a level opens
+
+**Every junction starts pointing left.** `state.open` is all zeros at tick 0, and `node.out[0]` is
+always the lower-column branch (§2.3), so an untouched network sends every car to the leftmost
+depot it can reach ([AC-138](acceptance-criteria.md)). This was an unstated implementation default
+through slices 0 and 1; it is a rule now, and the alternative — seeding `open` from the level seed
+so each level opens differently — is rejected.
+
+Three reasons:
+
+1. **It is one rule the player learns once.** "Nothing I have touched points left" is legible from
+   the first level and stays true for the rest of the game. A per-level random opening is a fresh
+   reading task in the first two seconds of every level, and those two seconds are the only quiet
+   ones the level has.
+2. **It keeps `createState` a pure function of the level with no draw of its own.** The spawn
+   stream stays the only gameplay PRNG (§2.7), which is what makes a run reproducible from
+   `{seed, band, inputs}` alone (§2.8).
+3. **It is inspectable.** A replay, a screenshot and a bug report all start from the same known
+   configuration, and a level's opening state can be reasoned about without running the seed.
+
+**The window this creates.** The first car enters at `SPAWN_LEAD = 90` ticks and crosses the
+`ENTRY_LEN = 100` LU entry edge before it reaches the row-0 node, which is the first junction it
+can meet:
+
+| Band | entry-edge transit | first decision at | wall time |
+|---|---|---|---|
+| 1 | 34 ticks | tick 124 | 2.07 s |
+| 2 | 32 | 122 | 2.03 s |
+| 3 | 30 | 120 | 2.00 s |
+| 4 | 28 | 118 | 1.97 s |
+| 5 | 27 | 117 | **1.95 s** |
+
+So the player has at least **1.95 s** from the first tick to read the board and set the first
+junction if the default is wrong for the first car — comfortably above the ~350 ms of reaction plus
+tap that §4.6 budgets, and the *only* moment in a level where the board is empty while a decision
+is pending. If a future change raises speed or lowers `SPAWN_LEAD` far enough to push this below
+1.0 s, the opening stops being free and this section is what has to be re-argued.
+
 ---
 
 ## 5. Difficulty
 
 Five bands. Level `N` maps to a band, and the band supplies every parameter.
 
-| Band | Levels | Colours `K` | Columns `C` | Rows `R` | Junctions `J` | Depth `D` | Speed (MLU/tick) | Speed (LU/s) | Interval (ticks) | Jitter | Quota |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 1–4 | 3 | 3 | 3 | 3 | 2 | 3000 | 180 | 156 (2.60 s) | ±12 | 16 |
-| 2 | 5–9 | 3 | 4 | 4 | 3–5 | 2–3 | 3200 | 192 | 138 (2.30 s) | ±12 | 26 |
-| 3 | 10–15 | 4 | 4 | 4 | 4–6 | 2–3 | 3400 | 204 | 120 (2.00 s) | ±18 | 36 |
-| 4 | 16–22 | 4 | 5 | 5 | 5–7 | 2–4 | 3600 | 216 | 108 (1.80 s) | ±18 | 48 |
-| 5 | 23+ | 5 | 5 | 6 | 7–8 | 2–4 | 3800 | 228 | 96 (1.60 s) | ±18 | 64 |
+| Band | Levels | Colours `K` | Columns `C` | Rows `R` | Junctions drawn `J` | Junctions actionable `Ja` | Depth `D` | Speed (MLU/tick) | Speed (LU/s) | Interval (ticks) | Jitter | Quota |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1–4 | 3 | 3 | 3 | 3 | ≥3 | 2 | 3000 | 180 | 156 (2.60 s) | ±12 | 16 |
+| 2 | 5–9 | 3 | 4 | 4 | 3–5 | ≥3 | 2–3 | 3200 | 192 | 138 (2.30 s) | ±12 | 26 |
+| 3 | 10–15 | 4 | 4 | 4 | 4–6 | ≥4 | 2–3 | 3400 | 204 | 120 (2.00 s) | ±18 | 36 |
+| 4 | 16–22 | 4 | 5 | 5 | 5–7 | ≥5 | 2–4 | 3600 | 216 | 108 (1.80 s) | ±18 | 48 |
+| 5 | 23+ | 5 | 5 | 6 | 7–8 | ≥7 | 2–4 | 3800 | 228 | 96 (1.60 s) | ±18 | 64 |
 
 `J` and `D` ranges are measured outcomes of the generator over 3,000 seeds per band, not targets
 ([`generation.md` §5](generation.md#6-difficulty-parameters-per-band)). `D` is the number of
 junctions on a root-to-depot path; a band's range means different colours in the same level take
 different numbers of decisions, which is deliberate — some colours are a rest.
+
+**`J` and `Ja` are different claims and only `Ja` is a difficulty claim.** `J` counts the junctions
+the player can see and tap. `Ja` counts the ones a perfect player has to flip: where one branch's
+reachable colours are a strict superset of the other's, the superset branch serves every colour the
+subset branch does and the junction never has to move. Slice 1 measured that up to 30 % of drawn
+junctions were decorative in that sense, so a band advertising `J = 5–7` was in places delivering
+three decisions. `Ja` is now a validity rule
+([`generation.md` §5](generation.md#5-validity-rules-what-rejects-a-candidate), V13) and a measured
+one ([AC-242](acceptance-criteria.md), [AC-243](acceptance-criteria.md)). A decorative junction is
+not worthless — it is a real branch a car takes and a real thing to read — but it is scenery, and
+the difficulty table may not be paid for it.
 
 ### 5.1 What escalates, and in what order
 
@@ -669,10 +770,26 @@ players see is a mode that rots: it is not exercised in development, not screens
 caught when it breaks. An accessibility setting increases glyph **size and opacity**; it does not
 turn the glyph on. The glyph never changes the rules ([`ui.md` §6](ui.md#6-colour-blind-support)).
 
-### 8.4 Infinite spawn stream, bounded level — **decided**
-The spawn schedule contains `quota + 8` cars rather than exactly `quota`. With exactly `quota`,
-one misroute makes the quota unreachable and lives become decorative. With slack, a misroute
-costs a life and roughly one extra spawn interval, which is what lives are for.
+### 8.4 Spawn slack is derived, not chosen — **decided**
+The spawn schedule contains more cars than `quota`. With exactly `quota`, one misroute makes the
+quota unreachable and lives become decorative; with slack, a misroute costs a life and roughly one
+extra spawn interval, which is what lives are for. That part was right in slice 0.
+
+The number was not. Slice 0 wrote `quota + 8` and called eight cars comfortable slack, on an
+argument that counted only the cars that have to *resolve* (`quota` deliveries plus the two
+misroutes a winning run is allowed) and omitted the cars still *in flight* when the last delivery
+lands — 4 to 6 of them, depending on band. Slice 1 measured the consequence: band 5 seed 160
+consumed 71 of its 72 spawns, and 30 of 5,000 band-5 seeds finished with a margin of exactly one
+car. Nothing had crashed; the margin had simply been spent without anyone noticing, and
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed)'s normative response to a too-high
+clear rate — raise `quota`, then cut `interval` — drives straight through what was left.
+
+§2.7 now derives the slack from the three quantities that consume it, so the same lever that used
+to spend the margin silently now recomputes it. The derived values are `8 / 8 / 9 / 9 / 10`, which
+restores a measured margin of `3 / 2 / 3 / 3 / 3` against a worst case of `21 / 32 / 42 / 54 / 71`
+([AC-139](acceptance-criteria.md)). The lesson generalises past this number: **a safety constant
+that a normative lever moves through must be written as a function of the lever, not as a
+literal.**
 
 ### 8.5 **Owner recommendation — not a blocker.** Haptics default
 Slice 5 adds haptics. The recommendation is **haptics on by default**: a light impact on a
