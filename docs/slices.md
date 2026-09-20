@@ -4,7 +4,7 @@
 what the next action is. `docs/development-process.md` says *how* work is done; this says *where
 it is*.
 
-Last updated: slice 1b, design round 4 committed (`2f85acb`).
+Last updated: developer round 3 committed (`ecabc26`). 102 tests green.
 
 ---
 
@@ -28,32 +28,50 @@ Last updated: slice 1b, design round 4 committed (`2f85acb`).
 
 ## → The next action
 
-**Developer round 3.** The designer has specified four rounds of changes that are not yet in code.
-Everything below is decided and committed in `docs/design/`; none of it is implemented.
+**Designer round 5 is running: the row-0 bimodality.** Everything below it is blocked on that
+answer.
 
-1. **Geometry:** `ROW0_Y` 160 → **220**, `DEPOT_Y` 1360 → **1420** (so `ENTRY_LEN` = 160 LU).
-   Route height stays 1200. Only `y` translates, so no topology, tap target or `diagLen` changes.
-2. **`SPAWN_SLACK` becomes per-band: `8 / 9 / 9 / 9 / 10`.** Band 2 is 9, not 8 — it crosses an
-   integer boundary under the new `transitMax`.
-3. **V13** — at least `Ja` junctions must have incomparable colour sets, `Ja = 3/3/4/5/7`.
-4. **New ACs to implement:** AC-112 (reworded), AC-115 (per-level, tolerance 1), AC-138 (initial
-   `open` all zeros), AC-139 (spawn margin ≥ 2 under injected misroutes), AC-244 (each validity
-   rule invoked directly on a violating fixture), AC-245 (first-decision floor ≥ 40 ticks),
-   AC-411 (depot row clearance), AC-242/AC-243 (static and dynamic actionable-`J`).
-5. **Known stale spots:** `tools/bot.mjs:248` hard-codes `ENTRY_LEN = 100` in its row-0
-   diagnostic. `test/geometry.test.js`'s row-y table needs +60. `test/bot.test.js` AC-240 needs
-   the new headroom clause.
-6. **`test/bot.test.js:263`** — the band-1 assertion loosened to "> 0 cleared" during slice 1b.
-   Band 1 now measures 98.0 %, in band. **Re-tighten it to a real threshold.** This was carried
-   forward explicitly and this is the moment it asked for.
-7. **Missing harnesses:** `tools/spawn-margin.mjs` (AC-139) and `tools/layout-sweep.mjs`
-   (`development-process.md` §9, AC-604 — that one is slice 2) do not exist.
-8. **Then re-measure everything in one sweep** — V13 and the geometry change both alter the level
-   population, so every generator-derived number is stale.
+Round 3 implemented the entry-geometry translation, V13, per-band `SPAWN_SLACK` and eight new
+ACs. AC-240 now passes at every band with headroom, AC-245 holds, pacing is in band, 102 tests
+green. **It did not fix the thing underneath.** Measured at 400 seeds/band with
+`tools/bot.mjs --entry-window`:
 
-**After that, and only after that:** close the clear-rate gap using `generation.md` §7.4's lever
-order, starting at Lever 0 (iso-duration: raise `interval`, rescale `quota`). Not before the
-sweep, and never by touching a bot constant — §7.4 forbids it.
+| Band | cleared when row 0 is a **branch** | cleared when row 0 is a **pass** |
+|---|---|---|
+| 1 | 96.7 % | 99.5 % |
+| 2 | 66.7 % | 100 % |
+| 3 | 17.6 % | 100 % |
+| 4 | **0.3 %** | 96.6 % |
+| 5 | **0 %** | 22.0 % |
+
+Band 4 swings 96 points on one structural coin flip the generator throws at level-creation time.
+A parameter that yields either ~96 % or ~0 % is not a difficulty dial. **The defect is the
+bimodality, not the clear rate** — if fixing it leaves rates below target, that is a lever
+problem for a later round.
+
+Mechanism, as far as it has been traced: the cold deadline at band 4 is 18 ticks, a glance costs
+6, and the sweep is round-robin over ascending car id — so the newest car, which has the tightest
+deadline, is visited last. With ~4 cars in flight that is ~24 ticks against an 18-tick deadline.
+Sweep latency scales with cars in flight; the deadline shrinks with speed; they cross between
+bands 3 and 4.
+
+**After the designer answers:** developer round 4 implements it and re-measures the sweep. Then,
+and only then, the difficulty levers — `generation.md` §7.4, starting at Lever 0 (iso-duration:
+raise `interval`, rescale `quota`), never by touching a bot constant.
+
+**Then slice 1 merges to `main`** and slice 2 begins.
+
+### Still outstanding regardless
+
+- `tools/layout-sweep.mjs` does not exist (`development-process.md` §9, AC-604). It is slice 2,
+  and AC-411's device-matrix clause waits on it.
+- `eas init` has never been run — `app.json` has no `extra.eas.projectId`, so no device build
+  exists and tier 5 has never happened.
+- Two of the design's numbers do not reproduce from this code — band 2's clear rate (77.9 %
+  against a stated 79.3 %) and three distinct-signature counts, one lower each. Both trace to the
+  design's figures coming from patched scratch copies rather than from `src/`. Immaterial to any
+  verdict, but it means **§7.2.4 and §6.2's tables are not re-derivable from the repo**, and a
+  future round should re-state them from a real run.
 
 ---
 
