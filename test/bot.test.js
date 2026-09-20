@@ -25,9 +25,12 @@ import {
   BOT_SWITCH_TICKS,
   BOT_URGENCY_TICKS,
   BOT_WORKING_SET,
+  SWEEP_ONSET,
+  SWEEP_ROUND_ROBIN,
   botTick,
   evaluate,
   makeBot,
+  makeDecisionTracker,
   nextJunction,
   playLevel,
   replay,
@@ -173,26 +176,182 @@ test('AC-236 · the bot is deterministic, and draws exactly once per glance', ()
   }
 });
 
-test('the glance sweep is a cyclic pass over car ids, not an urgency ordering', () => {
-  // §7.1.5's note: the sweep runs from the car nearest the depots back up to the newest.
+test('§7.1.5 D3 · the sweep is a capture, then a cyclic pass over car ids', () => {
+  // Two rules in one procedure, and the test has to separate them. A car that has never been
+  // glanced at goes next — exactly once, since maxSeen is monotone — and the round-robin
+  // cursor is NOT moved by that; when there is no such car the sweep runs from the car nearest
+  // the depots back up to the newest, which is frequently the wrong order and is the point.
   const level = generate(4, 5);
   const masks = reachableColourMasks(level);
   const bot = makeBot(level.seed);
   let state = createState(level);
-  const seen = [];
+  let glances = 0;
+  let captures = 0;
+  let roundRobin = 0;
   while (state.phase === 'running' && state.tick < 3000) {
-    const before = bot.cursor;
+    const cursorBefore = bot.cursor;
+    const maxSeenBefore = bot.maxSeen;
     const drawsBefore = bot.stats.draws;
+    const capturesBefore = bot.stats.captures;
+    const ids = state.cars.map((c) => c.id);
     const inputs = botTick(level, masks, state, bot);
-    if (bot.stats.draws > drawsBefore && state.cars.length > 1) {
-      const ids = state.cars.map((c) => c.id);
-      const expected = before === null ? ids[0] : (ids.find((i) => i > before) ?? ids[0]);
-      seen.push([bot.cursor, expected]);
+
+    if (bot.stats.draws > drawsBefore) {
+      glances += 1;
+      const unseen = ids.find((i) => i > maxSeenBefore);
+      if (unseen !== undefined) {
+        captures += 1;
+        assert.equal(bot.stats.captures, capturesBefore + 1, 'tick ' + state.tick);
+        assert.equal(bot.maxSeen, unseen, 'the capture took the wrong car at tick ' + state.tick);
+        assert.equal(bot.cursor, cursorBefore, 'the capture moved the cursor at tick ' + state.tick);
+        // It costs a full glance, and a full acquire when it escalates. A captured car has
+        // never been glanced at, so it cannot be in mem and E1's cheap switch is unreachable.
+        const busy = bot.busyUntil - state.tick;
+        assert.ok(
+          busy === BOT_SCAN_TICKS || busy === BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS,
+          'a capture cost ' + busy + ' ticks at tick ' + state.tick,
+        );
+      } else {
+        roundRobin += 1;
+        assert.equal(bot.stats.captures, capturesBefore, 'a capture with nothing new to see');
+        assert.equal(bot.maxSeen, maxSeenBefore, 'the round-robin moved maxSeen');
+        const expected = cursorBefore === null ? ids[0] : (ids.find((i) => i > cursorBefore) ?? ids[0]);
+        assert.equal(bot.cursor, expected, 'the round-robin is not cyclic at tick ' + state.tick);
+      }
     }
     state = step(state, inputs);
   }
-  assert.ok(seen.length > 50);
-  for (const [got, want] of seen) assert.equal(got, want);
+  assert.ok(glances > 50, 'only ' + glances + ' glances observed');
+  assert.ok(captures > 10, 'only ' + captures + ' onset captures observed');
+  assert.ok(roundRobin > captures, 'the sweep was mostly captures, which is not a sweep');
+});
+
+test('AC-247 · onset capture is an ordering and nothing more', () => {
+  // Four separate ways for D3 to decay into the free-attention repair §7.1.8 rejects twice.
+  // Everything but the control is observed from OUTSIDE botTick: the cursor and busyUntil are
+  // read before and after each call, because the bot's own bookkeeping is not evidence about
+  // the bot. The 1,000-seed form is `node tools/bot.mjs --ac247`.
+  const N = 12;
+  for (let band = 1; band <= 5; band += 1) {
+    let spawned = 0;
+    let captures = 0;
+    let distinct = 0;
+    let cursorMoved = 0;
+    let oddBusy = 0;
+    let multiPerTick = 0;
+    let glancesOn = 0;
+    let secondsOn = 0;
+    let glancesRr = 0;
+    let secondsRr = 0;
+    for (let seed = 0; seed < N; seed += 1) {
+      const level = generate(seed, band);
+      let prevCaptures = 0;
+      let prevCursor = null;
+      const r = playLevel(level, 'constrained', {
+        sweepMode: SWEEP_ONSET,
+        onBotTick: (bot, sim) => {
+          if (bot.stats.captures > prevCaptures) {
+            if (bot.stats.captures !== prevCaptures + 1) multiPerTick += 1;
+            if (bot.cursor !== prevCursor) cursorMoved += 1;
+            const busy = bot.busyUntil - sim.tick;
+            if (busy !== BOT_SCAN_TICKS && busy !== BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS) {
+              oddBusy += 1;
+            }
+            prevCaptures = bot.stats.captures;
+          }
+          prevCursor = bot.cursor;
+        },
+      });
+      spawned += r.state.nextSpawn;
+      captures += r.attention.captures;
+      distinct += r.attention.capturedDistinct;
+      glancesOn += r.attention.glances;
+      secondsOn += r.attention.seconds;
+      const ctl = playLevel(level, 'constrained', { sweepMode: SWEEP_ROUND_ROBIN });
+      glancesRr += ctl.attention.glances;
+      secondsRr += ctl.attention.seconds;
+    }
+    // 1 — once per car, not once per tick. Fewer captures than spawns is the tail of cars
+    // still in flight when the level ended and never glanced at; more would be the defect.
+    assert.equal(multiPerTick, 0, 'band ' + band + ': two captures on one tick');
+    assert.equal(captures, distinct, 'band ' + band + ': a car was captured twice');
+    assert.ok(captures <= spawned, 'band ' + band + ': more captures than cars');
+    assert.ok(captures / spawned > 0.99, 'band ' + band + ': captures/car ' + captures / spawned);
+    // 2 — the cursor is untouched.
+    assert.equal(cursorMoved, 0, 'band ' + band + ': the capture clobbered the sweep cursor');
+    // 3 — a full BOT_SCAN_TICKS is paid, and a full BOT_ACQUIRE_TICKS when it escalates.
+    assert.equal(oddBusy, 0, 'band ' + band + ': a capture did not cost a full glance');
+    // 4 — it comes OUT of the attention budget rather than adding to it.
+    const gOn = glancesOn / secondsOn;
+    const gRr = glancesRr / secondsRr;
+    const drift = (100 * Math.abs(gOn - gRr)) / gRr;
+    assert.ok(drift < 2, 'band ' + band + ': glances/s moved ' + drift.toFixed(2) + ' %');
+  }
+});
+
+/**
+ * AC-246, as tools/bot.mjs --entry-window measures it: every junction a car actually crosses
+ * is classified as that car's FIRST decision or a LATER one, and p is the share of each class
+ * the car left on a branch that cannot reach its colour.
+ */
+function measureAC246(band, seeds, sweepMode) {
+  let firstN = 0;
+  let firstBad = 0;
+  let laterN = 0;
+  let laterBad = 0;
+  let walkFailures = 0;
+  let quota = 0;
+  for (let seed = 0; seed < seeds; seed += 1) {
+    const level = generate(seed, band);
+    quota = level.quota;
+    const tracker = makeDecisionTracker(level, reachableColourMasks(level));
+    playLevel(level, 'constrained', { sweepMode, decisions: tracker });
+    const t = tracker.totals;
+    firstN += t.firstN;
+    firstBad += t.firstBad;
+    laterN += t.laterN;
+    laterBad += t.laterBad;
+    walkFailures += t.walkFailures;
+  }
+  const pFirst = (100 * firstBad) / firstN;
+  const pLater = (100 * laterBad) / laterN;
+  return { pFirst, pLater, gap: pFirst - pLater, ceiling: 50 / quota, firstN, laterN, walkFailures };
+}
+
+test('AC-246 · the first decision is as reliable as every other decision', () => {
+  // The in-suite sample; the reading AC-246 is decided on is `tools/bot.mjs --entry-window
+  // --seeds 1000`. The ceiling is 0.25 * (2/quota) — a quarter of the band's per-car error
+  // budget — read from the generated level so that a §7.4 lever that moves `quota` moves it.
+  for (let band = 1; band <= 5; band += 1) {
+    const m = measureAC246(band, 40, SWEEP_ONSET);
+    assert.equal(m.walkFailures, 0, 'band ' + band + ': a crossing could not be reconstructed');
+    assert.ok(m.firstN > 100 && m.laterN > 100, 'band ' + band + ': too few decisions to measure');
+    assert.ok(
+      m.gap <= m.ceiling,
+      'band ' + band + ': p_first ' + m.pFirst.toFixed(2) + '% - p_later ' + m.pLater.toFixed(2)
+        + '% = ' + m.gap.toFixed(2) + ' pp against a ceiling of ' + m.ceiling.toFixed(2),
+    );
+  }
+});
+
+test('AC-246 · the check fails under the fault it exists to catch', () => {
+  // Never trust a green check you have not seen fail (development-process.md:136). The fault
+  // is round 3's shipped sweep — a pure round-robin with no onset capture — which visits a
+  // newly spawned car LAST, after every car already on screen.
+  //
+  // It must fail at bands 2-5 and PASS at band 1, and band 1 passing is correct rather than a
+  // weakness: at quota = 16 the per-car budget is 12.5 % and the defect's gap there does not
+  // reach a quarter of it. The check fails exactly where the defect was.
+  const verdicts = [];
+  for (let band = 1; band <= 5; band += 1) {
+    const m = measureAC246(band, 40, SWEEP_ROUND_ROBIN);
+    verdicts.push(band + ': ' + m.gap.toFixed(2) + ' pp vs ' + m.ceiling.toFixed(2));
+    if (band === 1) {
+      assert.ok(m.gap <= m.ceiling, 'band 1 failed under the injection: ' + verdicts[0]);
+    } else {
+      assert.ok(m.gap > m.ceiling, 'band ' + band + ' passed under the injection: ' + verdicts[band - 1]);
+    }
+  }
 });
 
 test('§7.1.5 C1 · a focus is released on every path, including when it can do nothing', () => {
@@ -227,9 +386,10 @@ test('§7.1.6 · breaksHeldCar ranges over the working set and nothing else', ()
   // forgotten, and it never sees it coming. If that never happened, the bot would not be
   // modelling divided attention at all.
   // Named seeds, not a sample: these are the ones the blind spot actually shows up on. They
-  // were re-found after slice 1b's geometry change and V13 moved the level population at
-  // bands 3-5; seed 160 at band 5 is the only one of the old five that survived it.
-  for (const [band, seed] of [[4, 107], [4, 232], [5, 32], [5, 35], [5, 160]]) {
+  // are re-found whenever the level population or the sweep order moves — slice 1b's geometry
+  // change and V13 took out four of five, and §7.1.5 D3's onset capture took out the rest,
+  // because which cars the bot is holding when it taps is exactly what D3 reorders.
+  for (const [band, seed] of [[4, 32], [4, 37], [4, 65], [5, 6], [5, 14], [5, 16]]) {
     const r = playLevel(generate(seed, band), 'constrained');
     assert.ok(
       r.attention.unseenMisroutes > 0,
@@ -253,12 +413,16 @@ test('AC-240 · removing the attention constraints raises the clear rate where t
   //
   // AC-240's headroom clause: a 20 pp rise needs 20 pp of headroom, so a band the unmodified
   // bot already clears above 80 % is reported n/a rather than failed — that is a ceiling, not
-  // insensitivity. Band 1 now sits there. Any band AT OR BELOW 80 % that does not rise is a
-  // real failure, which is what slice 1b's +2.0 and +7.4 pp at bands 4 and 5 were.
+  // insensitivity. Any band AT OR BELOW 80 % that does not rise is a real failure, which is
+  // what slice 1b's +2.0 and +7.4 pp at bands 4 and 5 were.
+  //
+  // Bands 1-3 all sit above the ceiling under §7.1.5 D3 and are now skipped every run, so
+  // band 4 is in this list and not only in the sweep: with bands 1-3 alone the `asserted > 0`
+  // guard below was the only thing failing, and a test that asserts nothing is not a test.
   const N = 150;
   let asserted = 0;
   const report = [];
-  for (const band of [1, 2, 3]) {
+  for (const band of [1, 2, 3, 4]) {
     let base = 0;
     let free = 0;
     for (let seed = 0; seed < N; seed += 1) {

@@ -58,6 +58,15 @@ export const BOT_NO_ATTENTION = Object.freeze({
   memory: Infinity,
 });
 
+/**
+ * §7.1.5 D3's sweep. `onset` is the normative rule: a car that has never been glanced at goes
+ * next, exactly once, at full price. `roundrobin` is round 3's shipped sweep, kept only so
+ * that AC-246 and AC-247 can inject the defect they exist to catch — it is NOT a bot constant
+ * and nothing selects it except a fault injection (§8, AC-246's note).
+ */
+export const SWEEP_ONSET = 'onset';
+export const SWEEP_ROUND_ROBIN = 'roundrobin';
+
 /** Hard stop far beyond any legal run length, so a stall is a failure rather than a hang. */
 const MAX_RUN_TICKS = 20000;
 
@@ -148,13 +157,21 @@ function routedCorrectly(level, open, car) {
 // --- §7.1.4 bot state ----------------------------------------------------------------------
 
 export function makeBot(seed, overrides = {}) {
+  // `sweepMode` is not one of §7.1.3's constants and must not reach `K`: the constants are the
+  // instrument, the sweep is the procedure.
+  const { sweepMode = SWEEP_ONSET, ...attention } = overrides;
+  if (sweepMode !== SWEEP_ONSET && sweepMode !== SWEEP_ROUND_ROBIN) {
+    throw new Error('BAD_SWEEP_MODE: ' + sweepMode);
+  }
   return {
-    K: { ...BOT_CONSTANTS, ...overrides },
+    K: { ...BOT_CONSTANTS, ...attention },
+    sweepMode,
     rng: makeStream(mix32(seed, BOT_SALT)),
     busyUntil: 0,
     focus: null,
     mem: [],
     cursor: null,
+    maxSeen: -1, // §7.1.4 — the highest id ever glanced at; how an un-glanced onset is found
     lastTapTick: -BOT_MIN_TAP_GAP,
     // Instrumentation (AC-235, AC-236, AC-239). Never read by the procedure.
     stats: {
@@ -174,6 +191,9 @@ export function makeBot(seed, overrides = {}) {
       tapsBlockedByLockout: 0,
       tapsBlockedBySafeWindow: 0,
       taps: 0,
+      captures: 0, // §7.1.5 D3 onset captures — AC-247
+      capturedIds: new Set(), // distinct cars captured; size must equal `captures`
+      glancedIds: new Set(), // distinct cars ever glanced at; size must equal `captures`
       tapCars: [], // { tick, junctionId, carId } — AC-232 / AC-235 evidence
       endangered: new Set(), // cars a flip for a held car put on a losing branch while unheld
       unseenMisroutes: 0,
@@ -259,7 +279,33 @@ export function botTick(level, masks, sim, bot) {
   // ── D. GLANCE.
   bot.busyUntil = T + K.scan; // D1
   if (sim.cars.length === 0) return []; // D2
-  bot.cursor = nextCarId(sim.cars, bot.cursor); // D3
+
+  // D3 — onset capture, then the round-robin sweep. A car that has never been glanced at goes
+  // next, EXACTLY ONCE (`maxSeen` is monotone), and the cursor is NOT moved: clobbering it
+  // restarted the sweep at the newest car every spawn and starved everything older, which is
+  // the defect in one of §7.1.8's rejected variants. This buys an ORDERING and nothing else —
+  // the glance below still costs K.scan and the focus still costs K.acquire in full.
+  let glanceAt = null;
+  if (bot.sweepMode === SWEEP_ONSET) {
+    // sim.cars is ascending by id (gameplay.md §2.4), so the first match is the smallest.
+    for (const car of sim.cars) {
+      if (car.id > bot.maxSeen) {
+        glanceAt = car.id;
+        break;
+      }
+    }
+  }
+  if (glanceAt !== null) {
+    bot.maxSeen = glanceAt;
+    st.captures += 1;
+    st.capturedIds.add(glanceAt);
+  } else {
+    bot.cursor = nextCarId(sim.cars, bot.cursor);
+    glanceAt = bot.cursor;
+    if (glanceAt > bot.maxSeen) bot.maxSeen = glanceAt;
+  }
+  st.glancedIds.add(glanceAt);
+
   const r = bot.rng.next(); // D4 — the one and only draw
   st.draws += 1;
   st.glances += 1;
@@ -267,7 +313,7 @@ export function botTick(level, masks, sim, bot) {
     st.lapses += 1;
     return [];
   }
-  const c = carById.get(bot.cursor); // D5
+  const c = carById.get(glanceAt); // D5
   const j = nextJunction(level, c);
   if (j === null) {
     const i = bot.mem.findIndex((e) => e.carId === c.id);
@@ -317,6 +363,99 @@ function recordEndangered(level, masks, sim, bot, junctionNode, focusedCarId) {
   }
 }
 
+// --- AC-246: first-decision reliability ------------------------------------------------------
+
+/** Does `edgeId` lead, eventually, to a depot of `colour`? */
+function edgeReaches(level, masks, edgeId, colour) {
+  return ((masks[level.edges[edgeId].to] >> colour) & 1) === 1;
+}
+
+/**
+ * AC-246, measured rather than inferred. Every junction a car ACTUALLY CROSSES is classified
+ * as that car's **first** decision or as a **later** one, and `p_first` / `p_later` are the
+ * shares of each class the car left on a branch that cannot reach its colour.
+ *
+ * The crossings are recovered from the simulation rather than predicted: between two ticks a
+ * car's `edgeId` changes, and the path from the end of its previous edge to the start of its
+ * current one under `state.open` — which is the junction state this tick's movement actually
+ * used, because inputs are applied at step 2 and cars advance at step 4 — is unique. Nothing
+ * here re-implements the bot's intent; it reads where cars went.
+ *
+ * "Decision" has two defensible readings in AC-246's parenthesis and this measures both:
+ *   - `colour` (primary): the two branches differ in whether they reach THIS car's colour.
+ *     This is `evaluate`'s own test (§7.1.6, `k0 === k1` is NOTHING), so it counts exactly the
+ *     junctions that are a question for the car crossing them.
+ *   - `sets` (reported alongside): the two branches differ in their reachable-colour SETS,
+ *     the literal reading of "differ in which depot colours they reach", which also counts
+ *     junctions that are a decision for some other colour but not for this car.
+ * The verdict is taken on `colour`; `sets` is printed so the reading cannot change the answer
+ * without that being visible.
+ */
+export function makeDecisionTracker(level, masks) {
+  const prevEdge = new Map();
+  const hadFirstColour = new Set();
+  const hadFirstSets = new Set();
+  const t = {
+    firstN: 0, firstBad: 0, laterN: 0, laterBad: 0,
+    setsFirstN: 0, setsFirstBad: 0, setsLaterN: 0, setsLaterBad: 0,
+    crossings: 0, walkFailures: 0,
+  };
+
+  function record(car, node, tookEdgeId) {
+    t.crossings += 1;
+    const bad = !edgeReaches(level, masks, tookEdgeId, car.colour) ? 1 : 0;
+    const k0 = edgeReaches(level, masks, node.out[0], car.colour);
+    const k1 = edgeReaches(level, masks, node.out[1], car.colour);
+    if (k0 !== k1) {
+      if (hadFirstColour.has(car.id)) {
+        t.laterN += 1;
+        t.laterBad += bad;
+      } else {
+        hadFirstColour.add(car.id);
+        t.firstN += 1;
+        t.firstBad += bad;
+      }
+    }
+    if (masks[level.edges[node.out[0]].to] !== masks[level.edges[node.out[1]].to]) {
+      if (hadFirstSets.has(car.id)) {
+        t.setsLaterN += 1;
+        t.setsLaterBad += bad;
+      } else {
+        hadFirstSets.add(car.id);
+        t.setsFirstN += 1;
+        t.setsFirstBad += bad;
+      }
+    }
+  }
+
+  return {
+    totals: t,
+    observe(state) {
+      for (const car of state.cars) {
+        const prev = prevEdge.get(car.id);
+        prevEdge.set(car.id, car.edgeId);
+        if (prev === undefined || prev === car.edgeId) continue;
+        let edgeId = prev;
+        let guard = 0;
+        while (edgeId !== car.edgeId) {
+          if ((guard += 1) > 64) {
+            t.walkFailures += 1;
+            break;
+          }
+          const node = level.nodes[level.edges[edgeId].to];
+          if (node.kind === 'depot') {
+            t.walkFailures += 1;
+            break;
+          }
+          const took = node.out[node.kind === 'branch' ? state.open[node.junctionId] : 0];
+          if (node.kind === 'branch') record(car, node, took);
+          edgeId = took;
+        }
+      }
+    },
+  };
+}
+
 // --- unconstrained ---------------------------------------------------------------------------
 
 /** Every junction set for whichever car reaches it soonest. No limits at all. */
@@ -351,15 +490,19 @@ function unconstrainedInputs(level, masks, state) {
  * Play one level to a terminal phase.
  * mode: 'constrained' | 'unconstrained' | 'never'
  * opts.attention: overrides for the §7.1.3 constants (AC-240 only).
+ * opts.sweepMode: SWEEP_ONSET (default) or SWEEP_ROUND_ROBIN (AC-246/AC-247 injection only).
  * opts.onTick(state, before, inputs): per-tick observer, used by the near-miss measurement.
  * opts.onBotTick(bot, sim, inputs): per-tick observer of the BOT's own state (AC-235).
+ * opts.decisions: a tracker from makeDecisionTracker(), fed the post-step state (AC-246).
  */
 export function playLevel(level, mode = 'constrained', opts = {}) {
   const masks = reachableColourMasks(level);
-  const bot = makeBot(level.seed, opts.attention || {});
+  const overrides = { ...(opts.attention || {}) };
+  if (opts.sweepMode) overrides.sweepMode = opts.sweepMode;
+  const bot = makeBot(level.seed, overrides);
   let state = createState(level);
   const inputs = [];
-  const { onTick, onBotTick } = opts;
+  const { onTick, onBotTick, decisions } = opts;
 
   while (state.phase === 'running' && state.tick < MAX_RUN_TICKS) {
     let tickInputs;
@@ -388,6 +531,7 @@ export function playLevel(level, mode = 'constrained', opts = {}) {
         if (!state.cars.some((c) => c.id === id)) bot.stats.endangered.delete(id);
       }
     }
+    if (decisions) decisions.observe(state);
     if (onTick) onTick(state, before, tickInputs);
   }
 
@@ -417,6 +561,9 @@ function summariseAttention(bot, ticks) {
     glances: s.glances,
     draws: s.draws,
     lapses: s.lapses,
+    captures: s.captures,
+    capturedDistinct: s.capturedIds.size,
+    glancedDistinct: s.glancedIds.size,
     focusSwitch: s.focusSwitch,
     focusAcquire: s.focusAcquire,
     evictions: s.evictions,
