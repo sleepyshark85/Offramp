@@ -134,6 +134,27 @@ indicator. On a 21:9 Android with 245 pt of slack that is 135 pt above and 110 p
 The binding device is the **iPhone SE 1st generation at 320 × 568**. Everything in §4 is sized so
 that device passes.
 
+**Re-checked after slice 1b's `ENTRY_LEN` change, and nothing in this table moves.** `ROW0_Y` and
+`DEPOT_Y` each went down 60 LU while the route height stayed at 1200
+([`generation.md` §3.2](generation.md#32-site-coordinates)), so `DESIGN_W`, `DESIGN_H`, `colW`,
+`rowH` and therefore `scale`, `slackY`, the junction target and the car body are all the numbers
+already printed above. What changed is where the content sits **inside** the design rectangle: it
+now spans `y = 60 … 1590` instead of `60 … 1530`, so the clearance below the depot body falls from
+70 LU to 10.
+
+| Device | `scale` | depot bottom, LU | clearance to `DESIGN_H`, pt | plus slack below + gutter | total below the depot |
+|---|---|---|---|---|---|
+| iPhone SE (1st) | 0.3025 | 1590 | 3.0 | 0.0 + 8 | **11.0 pt** |
+| iPhone 15/16 | 0.3930 | 1590 | 3.9 | 29.7 + 8 | 41.6 pt |
+| Tall Android 21:9 | 0.4120 | 1590 | 4.1 | 110.3 + 8 | 122.4 pt |
+
+The binding case is again the SE 1st generation, at 11.0 pt of clear space between the depot body
+and the bottom of the screen — it has no home indicator and a zero bottom inset, which is why it
+is the one device where the design rectangle is height-bound with no slack at all. The depot's
+1.04 **receiving** scale (§7.4) reaches `y = 1593.4`, still inside the rectangle. A future change
+that pushes `DEPOT_Y + DEPOT_H` past 1600 is a layout change, not a geometry tweak, and belongs
+back in this table. ([AC-411](acceptance-criteria.md))
+
 ---
 
 ## 4. The play surface
@@ -155,6 +176,9 @@ that device passes.
 | `DEPOT_W` | 160 | 48.4 pt | 62.9 pt |
 | `DEPOT_H` | 170 | 51.4 pt | 66.8 pt |
 | `COMMIT_PREVIEW` | 260 | — | — |
+| `MOUTH_W` | 176 | 53.2 pt | 69.2 pt |
+| `MOUTH_FADE` | 36 | 10.9 pt | 14.1 pt |
+| `mouthLu` | per band, §7.6 | — | — |
 
 `CAR_W` (84) is narrower than `ROAD_W` (104), leaving a 10 LU shoulder on each side. `DEPOT_W`
 (160) is a constant rather than a fraction of `colW`, so the depot never collides with its
@@ -167,12 +191,20 @@ edge (narrowest margin is 30 LU).
 2. Road casing — every edge stroked at `ROAD_W + 2*ROAD_EDGE_W` in `--road-edge`
 3. Road surface — every edge stroked at `ROAD_W` in `--road`
 4. Lane dashes — every edge stroked at 3 LU, dash 20/28, in `--road-dash`
-5. Depot bodies and depot glyphs
-6. Junction markers, and the lead-highlight arc when armed (§7.3)
-7. Cars, ascending by id, each with body, roof glyph and shadow
-8. Transient effects sourced from `state.events` (§9)
+5. Junction markers, and the lead-highlight arc when armed (§7.3)
+6. Entry flares (§7.5) — beneath the cars, so a flare never dims the car whose arrival it marks
+7. **Cars**, ascending by id, each with body, roof glyph and shadow
+8. **Depot-mouth aprons** (§7.6) — one filled path for the opaque cores, then one `saveLayer`
+   for the fade segments
+9. Depot bodies and depot glyphs
+10. Transient effects sourced from `state.events` (§9)
 
-Cars are painted last so a car is never hidden by a junction marker.
+Cars are painted after junction markers, so **a car is never hidden by a junction marker** — that
+part is unchanged. Cars are painted *before* the depot layer, which is the change slice 1's
+measurement forced: a car drives **under** the depot mouth and under the depot body, which is
+what makes two cars converging on one depot impossible to see overlapping (§7.6,
+[`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)). Nothing else
+occludes a car.
 
 ### 4.3 The car
 
@@ -305,7 +337,7 @@ correct. The app declares `userInterfaceStyle: "dark"`.
 ### 6.1 Always on, never a rule
 
 Every car carries its colour's glyph. Every depot carries the same glyph on its face. **The
-glyph is always drawn** — it is not behind a setting ([`gameplay.md` §8.3](gameplay.md#83-always-on-colour-blind-glyphs-decided)).
+glyph is always drawn** — it is not behind a setting ([`gameplay.md` §8.3](gameplay.md#83-always-on-colour-blind-glyphs--decided)).
 A mode only some players see is a mode that is not exercised in development and not caught when
 it breaks.
 
@@ -411,8 +443,126 @@ through the top face band. States:
 
 ### 7.5 Car
 
-States: **spawning** (140 ms fade-in over the first 40 LU), **rolling** (steady), **delivered**
-(§9), **misrouted** (§9), **frozen** (level ended — 45 % opacity, no motion).
+States: **arriving** (see below), **rolling** (steady), **entering the mouth** (no change to the
+car at all — the apron of §7.6 passes over it), **frozen** (level ended — 45 % opacity, no
+motion). There is no *delivered* or *misrouted* car state: by the time either resolves the car is
+beneath the depot layer, and both outcomes are drawn by the depot and the mouth (§8.3, §8.4).
+
+**Arriving — the car appears at full opacity in a single frame.** No fade, no scale-up, no
+ramp of any kind on the car body itself. On the tick a car spawns it is drawn complete: full
+body fill, full glyph, full stroke, at the entry node.
+
+This replaces a 140 ms fade-in over the first 40 LU, and the reason is a rule, not a taste.
+[`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative) D3 says the player
+looks at a newly appeared car **next** rather than last, and that is what makes the first junction
+decision reachable at all
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision),
+§8.10). Attention is captured by an abrupt luminance transient; a gradual onset of the same
+magnitude does not capture it. A fade-in is exactly the manipulation that removes the effect the
+player model now depends on — so the drawing would have been quietly falsifying the design's own
+statement about the player. The fade was also spending 40 of the entry edge's 160 LU — a quarter
+of the only window in the game in which that car's colour can be read — on making the colour hard
+to read.
+
+**Entry flare.** The onset still needs to be *findable* in peripheral vision without the fade, so
+the transient is put somewhere it costs nothing: a ring at the entry node, `--text-mute` at 60 %
+alpha, outer radius 34 LU, 6 LU stroke, scaling 0.6 → 1.4 and fading to zero over 180 ms,
+`ease-out-quad`, drawn **beneath** the car layer (§4.2, step 6). It carries no colour information — the
+car body is the only thing that says which colour arrived — so it never competes with the match
+key and it is unaffected by the colour-blind settings of §6.
+
+### 7.6 The depot mouth
+
+**What this solves.** Every generated level, at every band, has at least one depot fed by two or
+three terminal edges — measured, 100 % of levels, max in-degree 3
+([`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)). Those edges
+converge geometrically, and the cars on them took different paths from the entry, so nothing
+constrains their relative timing. Measured: two cars came within a car length in 0–5 runs per
+1,000 by band, with a minimum centre-to-centre distance of **26 LU** against a 140 LU car — a
+complete overlap. The rules are fine. The picture is not, and the fix belongs here.
+
+**The treatment: the road runs under the depot.** Each depot is given a forecourt — an apron in
+`--depot` laid over the last stretch of every terminal edge that feeds it — and the car layer is
+painted beneath it (§4.2). A car does not fade, pop or shrink; it drives into the building.
+
+```
+        col c-1        col c         col c+1
+           ╲             │             ╱
+            ╲            │            ╱          ← ordinary road, cars drawn on top
+             ╲           │           ╱
+        ─────╳───────────╳───────────╳─────      ← mouth line: last mouthLu of each terminal edge
+              ╲▒▒▒▒▒▒▒▒▒▒│▒▒▒▒▒▒▒▒▒▒╱            ← MOUTH_FADE: apron alpha 0 → 100 %
+               ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓             ← apron core, --depot, opaque
+                ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓              ← cars are UNDER all of this
+                 ┌─────────────────┐
+                 │▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀│             ← DEPOT_W × DEPOT_H, §7.4, unchanged
+                 │        ●        │
+                 └─────────────────┘
+```
+
+**Geometry.**
+
+```
+mouthLu     per band, below — LU of arc length measured back from the depot node
+MOUTH_W     = 176   // apron stroke width
+MOUTH_FADE  = 36    // LU of alpha ramp at the leading end
+```
+
+`MOUTH_W = 176` because a car body's diagonal is `sqrt(140² + 84²) = 163.3` LU: a 176 LU stroke
+contains a car at any heading, so no corner of a car can poke out of the side of the apron. It is
+also 16 LU wider than `DEPOT_W`, so the forecourt reads as a flare into the building rather than
+as a stripe that happens to be the same width.
+
+| Band | `colW` | `rowH` | straight terminal edge | diagonal terminal edge | **`mouthLu`** | apron as % of the straight edge | clear road left below the junction row |
+|---|---|---|---|---|---|---|---|
+| 1 | 300 | 400 | 400 | 521 | **180** | 45 % | 220 LU |
+| 2 | 260 | 300 | 300 | 415 | **160** | 53 % | 140 LU |
+| 3 | 260 | 300 | 300 | 415 | **160** | 53 % | 140 LU |
+| 4 | 195 | 240 | 240 | 323 | **150** | 63 % | 90 LU |
+| 5 | 195 | 200 | 200 | 293 | **140** | 70 % | 60 LU |
+
+`mouthLu` is not a taste value. It is the smallest multiple of 10 LU at which two converging
+terminal centrelines are at least `CAR_W = 84` LU apart, computed from the cubic of
+[`generation.md` §2.3](generation.md#23-edges) — that is, the point above which two cars cannot be
+side by side in the same place. The exact thresholds are 178 / 153 / 153 / 146 / 131 LU.
+
+**What it guarantees, measured against the curve rather than asserted.** With these values, for
+every pair of cars on converging terminal edges with **both** centres outside the apron:
+
+| | Band 1 | Band 2 | Band 3 | Band 4 | Band 5 |
+|---|---|---|---|---|---|
+| Worst residual overlap, diagonal vs straight | 10.9 % | 9.4 % | 9.4 % | 10.2 % | 8.5 % |
+| Worst residual overlap, diagonal vs opposite diagonal | 0 % | 0 % | 0 % | 0 % | 0 % |
+| Minimum centre-to-centre distance | 91 LU | 97 LU | 97 LU | 95 LU | 102 LU |
+
+So the measured 26 LU total overlap can only occur beneath the apron, where it cannot be seen,
+and the worst thing that remains visible is a corner of one car clipping a corner of another by
+about a tenth of a body — which reads as one car passing another, because that is what it is.
+**A full geometric guarantee is not available and is not claimed:** an apron large enough to
+prove zero overlap for every configuration would need to be about 210–270 LU deep, longer than
+the terminal edge itself at bands 4 and 5. ([AC-513](acceptance-criteria.md))
+
+**Drawing it.** Two draws, in this order, both after the car layer:
+
+1. **Cores.** For every terminal edge, the sub-path covering its last `mouthLu - MOUTH_FADE` LU,
+   stroked at `MOUTH_W`, round cap and round join. All of a level's cores go into **one** `Path`
+   and are filled once in `--depot` at 100 %, so overlapping lobes cannot stack.
+2. **Fades.** For every terminal edge, the `MOUTH_FADE` stretch immediately above its core,
+   stroked at `MOUTH_W` with a linear gradient in `--depot` running 0 % → 100 % alpha along the
+   edge tangent. These are drawn inside a single `saveLayer`, so where two fade segments overlap
+   the alpha does not accumulate into a visible lens.
+
+Both paths are built once per level, at level load, from the same cubics the roads are drawn
+from. Nothing here is per-frame work and nothing here reads simulation state.
+
+**Constraint the band table must keep satisfying:** `mouthLu <= rowH - JUNCTION_MARK_R - 12`, so
+the apron never reaches the junction marker at the top of a straight terminal edge. The tightest
+band is 5: `200 - 46 - 12 = 142`, against `mouthLu = 140`. ([AC-514](acceptance-criteria.md))
+
+**What the player loses, and what replaces it.** A car disappears `mouthLu / speed` before it
+resolves — 0.61 s at band 5, 1.00 s at band 1. It loses nothing it could act on: a car on a
+terminal edge is past its last junction and no tap can change its fate. What it would lose is the
+*confirmation*, and that moves to the mouth: see §8.3 and §8.4.
 
 ---
 
@@ -427,15 +577,23 @@ over the same 120 ms. Ripple ring, 160 ms. Light haptic. **Communicates:** your 
 this is where the next car goes.
 
 ### 8.3 Car delivered
-Car translates 60 LU into the depot while scaling 1.00 → 0.60 and fading to 0 over 220 ms,
-`ease-in-quad`. Depot plays **receiving**. Quota bar fills over 180 ms `ease-out-cubic`. Score
-counts up over 300 ms. **Communicates:** that one is banked.
+The car is already beneath the apron (§7.6), so the confirmation is carried by the mouth and the
+depot. A **mouth glow** — the apron core redrawn in the car's colour at 55 % alpha — fades in over
+90 ms and out over 130 ms, `ease-out-cubic`. Depot plays **receiving**. Quota bar fills over
+180 ms `ease-out-cubic`. Score counts up over 300 ms. **Communicates:** that one is banked, and
+which colour it was.
 
 ### 8.4 Car misrouted
-Car breaks into six 26 LU fragments that scatter 60–110 LU and fade over 320 ms,
-`ease-out-quad`. Depot plays **rejecting**. A 3 pt `--alert` screen-edge vignette flashes to 30 %
-and back over 180 ms. One life pip drains over 240 ms. Error haptic. **Communicates:** a life is
-gone and this depot was the wrong one — the depot desaturating names the mistake.
+The shatter originates at the **mouth line** of the terminal edge the car came down — the last
+point at which the car was visible — not at the depot node, so the wrong colour is seen arriving
+at the wrong depot rather than appearing from under it. Six 26 LU fragments in the car's colour
+scatter 60–110 LU, biased upward and outward along the edge tangent, and fade over 320 ms,
+`ease-out-quad`. Fragments are transient effects (draw order step 10) and are therefore drawn
+**over** the apron and the depot; this is the one thing that is. Depot plays **rejecting**. A
+3 pt `--alert` screen-edge vignette flashes to 30 % and back over 180 ms. One life pip drains
+over 240 ms. Error haptic. **Communicates:** a life is gone and this depot was the wrong one —
+the colour of the fragments and the depot desaturating together name the mistake.
+([AC-515](acceptance-criteria.md))
 
 ### 8.5 Last life
 When `lives === 1`, the life-pip row takes a 1.6 s `ease-in-out-sine` opacity pulse between 1.00
@@ -485,13 +643,14 @@ out each beat. No simulation ticks advance during either
 
 | Event | Duration | Easing | What it communicates |
 |---|---|---|---|
-| Car spawn fade-in | 140 ms | `linear` | A new car exists; its colour is now readable |
+| Car arrival | 1 frame | none | A new car exists — an abrupt onset, because §7.5's capture claim depends on it |
+| Entry flare | 180 ms | `ease-out-quad` | Where the new car arrived, findable peripherally, carrying no colour |
 | Junction blade rotate | 120 ms | `ease-out-cubic` | The tap landed |
 | Junction tap ripple | 160 ms | `ease-out-quad` | The tap was received at *this* junction |
 | Junction arm (lead arc) | 180 ms fade in | `ease-out-cubic` | This car is committing to this branch |
-| Car delivered | 220 ms | `ease-in-quad` | Banked |
+| Depot mouth glow | 90 ms in + 130 ms out | `ease-out-cubic` | Banked — and in which colour |
 | Depot receiving pulse | 220 ms | `ease-out-cubic` | This depot accepted it |
-| Car misrouted shatter | 320 ms | `ease-out-quad` | Lost |
+| Car misrouted shatter | 320 ms | `ease-out-quad` | Lost — thrown from the mouth line, in the car's colour |
 | Depot rejecting flash | 90 ms + 260 ms | `linear`, `ease-out-cubic` | Wrong depot — and which one |
 | Life pip drain | 240 ms | `ease-out-cubic` | A life is gone |
 | Edge vignette flash | 180 ms | `ease-out-quad` | Something bad, peripherally |
@@ -564,7 +723,7 @@ tick, 16.7 ms**.
 |---|---|---|---|
 | Symbol size | Standard / Large | Standard | `GLYPH_CAR` 48→66 LU, `GLYPH_DEPOT` 64→88 LU, car-glyph opacity 78 %→100 % |
 | Reduce motion | Off / On | follows `AccessibilityInfo.isReduceMotionEnabled` | Shatter → 120 ms fade; vignette flash → static 180 ms tint; panel spring → 120 ms fade; last-life pulse → static border; count-up → instant |
-| Haptics | On / Off | **On** ([`gameplay.md` §8.5](gameplay.md#85-owner-recommendation-not-a-blocker-haptics-default)) | Light impact on flip, error notification on misroute, success on level clear |
+| Haptics | On / Off | **On** ([`gameplay.md` §8.5](gameplay.md#85-owner-recommendation--not-a-blocker-haptics-default)) | Light impact on flip, error notification on misroute, success on level clear |
 | Sound | On / Off | On | Slice 5 |
 
 **Reduce motion never removes information.** Every effect it changes has a static replacement

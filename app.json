@@ -15,14 +15,31 @@
       "supportsTablet": false
     },
     "android": {
-      "package": "com.sleepyshark.offramp"
+      "package": "com.sleepyshark.offramp",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0B0E13"
+      }
     },
     "owner": "sleepyshark.85",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#10151C",
+    "backgroundColor": "#0B0E13",
     "plugins": [
-      "expo-audio"
-    ]
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0B0E13",
+          "imageWidth": 260
+        }
+      ]
+    ],
+    "icon": "./assets/icon.png",
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    }
   }
 }

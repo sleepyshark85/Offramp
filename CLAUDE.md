@@ -12,6 +12,22 @@ Road networks are **procedurally generated**, not authored.
 **Stack:** Expo SDK 56, React Native 0.85, React 19, `@shopify/react-native-skia` 2.6.2.
 JavaScript, not TypeScript. iPhone first; Android is a first-class target that comes free.
 
+## Start here
+
+**Read [`docs/slices.md`](docs/slices.md) first.** It is the live ledger: what is done, what is in
+flight, and the exact next action. This file says what the project *is* and what its rules are;
+that one says where the work has got to.
+
+Current position, in one line: slices 0 and 1 are built and green on branch `slice-1-engine`
+(draft PR #1); four rounds of design changes are committed and **not yet implemented**; `main`
+carries slice 0 only.
+
+The squad in `.claude/agents/` is invoked by name — `game-designer`, `game-developer`,
+`game-tester`. They are registered at session start, so a session that created them cannot use
+them by name; a fresh session can.
+
+---
+
 ## The architectural rules everything rests on
 
 These are not style preferences. They are the load-bearing decisions.

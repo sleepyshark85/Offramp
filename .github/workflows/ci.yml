@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    name: Engine, generator and determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      - name: Unit and invariant tests
+        run: npm test
+
+      # Determinism is the load-bearing property (CLAUDE.md §3). This runs the
+      # engine in a second process and deep-compares, so a divergence that only
+      # appears across process boundaries — the kind that float accumulation
+      # and key-insertion order produce — fails here rather than on a phone.
+      - name: Determinism, in-process and cross-process
+        run: node tools/replay.mjs --seed 42
+
+      # A different architecture than the machine the numbers were measured on
+      # is exactly where a float would show up, so this is not redundant with
+      # the developer's local run.
+      - name: Generator audit
+        run: node tools/generator-audit.mjs --seeds 1500
+
+      # Eight of the twelve validity rules never reject anything generate() produces, so
+      # this is the only place their checks are ever executed against a violation (AC-244).
+      - name: Every validity rule proven able to fire
+        run: node tools/generator-audit.mjs --rule-injection
+
+      # The band table's difficulty claim is about ACTIONABLE junctions, not drawn ones.
+      - name: Actionable junctions under the lazy-optimal oracle (AC-243)
+        run: node tools/generator-audit.mjs --actionable --seeds 400
+
+      # SPAWN_SLACK is derived, and a lever pull or a geometry edit walks through the margin
+      # without failing anything else (AC-139).
+      - name: Spawn margin under injected misroutes
+        run: node tools/spawn-margin.mjs --seeds 300
+
+      - name: Unconstrained solver clears every level (AC-220)
+        run: node tools/bot.mjs --unconstrained --seeds 500
+
+      - name: Completion-time bands (AC-226 to AC-231)
+        run: node tools/pacing.mjs --seeds 300
+
+      - name: AC cross-references
+        run: node docs/design/check-ac-refs.mjs
+
+  bundle:
+    name: Bundles for iOS, Android and web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      # No Mac and no Xcode here: this proves the JS bundle resolves for each
+      # platform, which catches a bad import or a missing asset. It does not
+      # prove the native build — only EAS and a device do that
+      # (docs/device-testing.md).
+      - name: iOS bundle
+        run: npx expo export --platform ios --output-dir /tmp/export-ios
+      - name: Android bundle
+        run: npx expo export --platform android --output-dir /tmp/export-android
+      - name: Web bundle
+        run: npx expo export --platform web --output-dir /tmp/export-web
+
+      - name: CanvasKit wasm is published alongside the web bundle
+        run: test -s /tmp/export-web/canvaskit.wasm

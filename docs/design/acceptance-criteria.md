@@ -88,9 +88,18 @@ state produced when the same two inputs are supplied in the opposite array order
 
 **AC-112 · Cars spawn on their scheduled tick**
 **Given** `level.spawns[i] = {index:i, tick:t, colour:c}`,
-**When** the simulation reaches tick `t`,
-**Then** exactly one car appears with `id === i`, `colour === c`, `edgeId === level.entryEdgeId`
-and `progress === 0`.
+**When** the tick whose `state.tick` is `t` has been stepped,
+**Then** the returned state contains exactly one car with `id === i` and `colour === c`; it is on
+`level.entryEdgeId` with `progress === level.speedMluPerTick`; no car with `id === i` existed in
+the state returned by the previous tick; and the returned `events` contain exactly one
+`{type:'spawn', tick:t, carId:i, colour:c}`.
+*`progress === 0` is not observable by any caller: spawn is step 3 of
+[`gameplay.md` §2.5](gameplay.md#25-stepstate-inputs--exactly-one-tick) and the advance is step 4,
+so the car has always moved once by the time `step()` returns. Slice 1's wording asked for a value
+that exists only between two statements inside `step()`, and the developer correctly implemented
+the observable behaviour and flagged the AC instead of matching it. `speedMluPerTick` is the right
+value because the entry edge is `ENTRY_LEN = 160,000` MLU, far longer than one tick of travel at
+any band, so the spawning car cannot transition on its spawn tick.*
 
 **AC-113 · The spawn schedule is a pure function of the seed**
 **Given** the same `(seed, band)`,
@@ -103,11 +112,21 @@ and `progress === 0`.
 **Then** `spawns[i+1].tick > spawns[i].tick` for every `i`, and the minimum gap over 1,000 seeds
 per band is at least `interval - 2*jitter` ticks.
 
-**AC-115 · Colour bag prevents runs of three**
-**Given** the spawn colour sequence of any generated level,
+**AC-115 · Colour bag prevents runs of three, and balances within a level**
+**Given** the spawn colour sequence of **one** generated level, at any band and any seed,
 **When** it is scanned,
-**Then** no three consecutive entries share a colour, and over 1,000 seeds the per-colour counts
-differ by at most `K` across the whole sequence.
+**Then** (a) no three consecutive entries share a colour, and (b) across that one level's
+`SPAWN_COUNT` entries the most-used colour's count exceeds the least-used colour's count by **at
+most 1** — spread `0` when `K` divides `SPAWN_COUNT` and exactly `1` otherwise. The tolerance is 1,
+not `K`, and it is exact rather than statistical: the bag deals `floor(SPAWN_COUNT / K)` complete
+bags in which every colour appears equally often, and the `SPAWN_COUNT mod K` leftover entries come
+from one shuffled bag and are therefore distinct colours.
+*The aggregate-over-seeds reading of this clause is **withdrawn**. Slice 1 measured the aggregate
+spread over 1,000 seeds at 34 (band 2) and 43 (band 5) — both bands where `K` does not divide
+`SPAWN_COUNT`, so the leftover is a fresh uniform draw and the spread is ordinary multinomial noise
+with σ ≈ 15. There is no bias to remove and no tolerance below which that reading would be a check
+rather than a coin toss. The per-level reading above is a theorem about the bag, so it holds at
+every seed and fails the moment the bag is replaced by independent draws.*
 
 **AC-116 · Correct delivery scores and counts**
 **Given** a car entering a depot whose `depotColour` equals the car's colour,
@@ -129,8 +148,13 @@ unchanged, and a `delivered` event is emitted.
 **AC-119 · Misroute costs a life and no points**
 **Given** a car entering a depot whose colour differs from the car's,
 **When** the arrival resolves,
-**Then** `lives` decreases by 1, `misrouted` increases by 1, `streak` becomes 0, `score` is
-unchanged, and a `misrouted` event carrying both colours is emitted.
+**Then** `lives` becomes `max(0, lives - 1)`, `misrouted` increases by 1 unconditionally, `streak`
+becomes 0, `score` is unchanged, and a `misrouted` event carrying both colours is emitted.
+*The decrement is clamped, not conditional: the arrival always resolves and is always counted,
+and only the displayed life total is floored. See AC-121, AC-122, AC-136 and AC-801, which
+together were unsatisfiable under their slice-0 wording, and*
+[`gameplay.md` §2.6](gameplay.md#26-resolvearrival--the-single-place-scoring-happens) *for the
+resolution.*
 
 **AC-120 · Score is non-decreasing**
 **Given** a seeded fuzz run of 50,000 ticks with randomised taps,
@@ -139,18 +163,28 @@ unchanged, and a `misrouted` event carrying both colours is emitted.
 
 **AC-121 · Lives are non-increasing and floored**
 **Given** the same fuzz run,
-**Then** `lives` never increases and never goes below 0.
+**Then** `lives` never increases and never goes below 0 — including on a tick in which more
+misroutes resolve than there are lives remaining (AC-136). The floor is a property of the
+decrement in AC-119, not a separate clamp applied afterwards, so there is exactly one place in the
+engine where `lives` is written.
 
 **AC-122 · Terminal conditions, and their order**
 **Given** a tick in which the quota-completing car is delivered **and** another car is misrouted
 taking `lives` to 0,
 **When** the terminal check runs,
-**Then** `phase === 'won'`.
+**Then** `phase === 'won'`. Both arrivals resolved first: `delivered`, `misrouted`, `score` and
+`lives` all reflect both cars, because step 4 of
+[`gameplay.md` §2.5](gameplay.md#25-stepstate-inputs--exactly-one-tick) resolves every arrival in
+the tick and step 5 runs the terminal check exactly once, afterwards.
 
 **AC-123 · The spawn array is never exhausted**
 **Given** a constrained-bot run over 1,000 seeds per band,
 **When** each level ends,
-**Then** `state.nextSpawn < level.spawns.length` in every run.
+**Then** `state.nextSpawn < level.spawns.length` at **every tick** of every run — not only at the
+final tick. The engine throws `SPAWN_EXHAUSTED` when `nextSpawn` *reaches* `spawns.length`, so the
+last scheduled car is a reserve that is never needed; see AC-139 for the margin this AC leaves and
+[`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed) for
+the derivation that sizes it.
 
 **AC-124 · Minimum car separation**
 **Given** any seeded run at any band,
@@ -213,6 +247,47 @@ freeze.
 **When** it is imported and driven by `node --test` with no bundler and no React,
 **Then** it runs to completion.
 
+**AC-136 · Two misroutes on one tick with one life**
+**Given** `lives === 1` and two cars whose `progress` reaches the end of their edges into
+wrong-coloured depots on the same tick,
+**When** that tick is stepped,
+**Then** both arrivals resolve in ascending car id order, `misrouted` increases by **2**, exactly
+two `misrouted` events are emitted, `lives === 0` and not `-1`, `score` is unchanged, and
+`phase === 'lost'` after the terminal check of that tick.
+
+**AC-137 · The terminal check runs once, after every arrival**
+**Given** a seeded fuzz run of 50,000 ticks with randomised taps,
+**When** `phase` is sampled inside step 4 of every tick,
+**Then** it is `'running'` throughout step 4 on every tick, and changes only at step 5 — no
+arrival is ever skipped because an earlier arrival in the same tick ended the level.
+
+**AC-138 · Every junction starts on branch 0**
+**Given** a freshly created state for any generated level at any band,
+**When** `state.open` is read before any `step()`,
+**Then** every entry is `0`, so every junction points at `node.out[0]` — the lower-column branch
+([`gameplay.md` §2.3](gameplay.md#23-the-graph)) — and `state.open.length === level.junctions.length`.
+*This is a design decision, not an allocation default: see
+[`gameplay.md` §4.8](gameplay.md#48-how-a-level-opens). A build that seeded `open` from the level
+seed would pass every other AC in this document and would change how every level opens.*
+
+**AC-139 · The spawn schedule keeps a measured margin**
+**Given** an oracle router — perfect routing, unlimited taps — run over 2,000 seeds per band, in
+both its shortest-path and its longest-path variant, with the `LIVES - 1 = 2` misroutes a winning
+run is allowed injected at the first two opportunities,
+**When** the maximum `state.nextSpawn` reached in each run is recorded,
+**Then** `level.spawns.length - max(nextSpawn) >= 2` in **every** run at **every** band.
+*Slice 1 measured this margin at `3 / 2 / 2 / 2 / 1` under the flat `SPAWN_SLACK = 8`, with band 5
+seed 160 consuming 71 of 72 spawns and 30 of 5,000 band-5 seeds finishing with a margin of exactly
+1 — one spawn interval, 1.6 s, from an uncaught throw in the middle of the hardest band. The
+per-band derivation in [`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed)
+restored it to `3 / 2 / 3 / 3 / 3`. This AC is the reason the derivation exists, and
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed) requires it to be re-run after
+every lever move. It has been, for round 6's pull: with `SPAWN_SLACK` re-derived to
+`8 / 10 / 10 / 9 / 9` from the new `interval` column, the worst `max(nextSpawn)` over 2,000 seeds
+per band in both variants is `21 / 40 / 48 / 53 / 57` against `SPAWN_COUNT`
+`24 / 43 / 51 / 56 / 60`, leaving a margin of **3 at every band** and a worst margin of 3 over all
+20,000 runs.*
+
 ---
 
 ## 200 — Generation
@@ -266,7 +341,9 @@ maximum ≤ 128.
 **AC-210 · V6 — every junction is decisive**
 **Given** any branch node,
 **When** the reachable depot-colour set of each of its two branches is computed,
-**Then** the two sets differ.
+**Then** the two sets differ. *Differing is a weaker property than mattering — where one set
+strictly contains the other, optimal play never has to leave the default. AC-242 and AC-243 are
+what hold the band table's difficulty claim; this AC only forbids the outright no-op junction.*
 
 **AC-211 · V7 — junction count in band range**
 **Given** 1,000 generated levels per band,
@@ -304,7 +381,14 @@ differ.
 
 **AC-218 · Integer geometry**
 **Given** any generated level,
-**Then** every node's `x` and `y`, and every edge's `lengthMlu`, satisfy `Number.isInteger`.
+**Then** every node's `x` and `y`, every edge's `lengthMlu`, and the level's `colW`, `rowH` and
+`diagLen` all satisfy `Number.isInteger`; **and given** a band-table row whose `C` or `R` is not a
+divisor of `LANE_SPAN` or of `DEPOT_Y - ROW0_Y`, **then** level construction **throws** rather than
+returning a level. *The throw is the point. Slice 1 injected `R = 7` and got a level back: 18 nodes
+with fractional `y`, 17 edges with fractional `lengthMlu`, and by tick 683 a car holding
+`progress = 1371.4285714285797` — a float inside the simulation, which is the one thing the
+fixed-point rule of [`gameplay.md` §2.2](gameplay.md#22-position-fixed-point-integers-along-an-edge)
+exists to prevent, arriving silently through a band-table edit rather than through a code change.*
 
 **AC-219 · Serialisation round-trip**
 **Given** any generated level,
@@ -316,21 +400,30 @@ differ.
 **Then** the clear rate is **100 %** and the misroute count is **0** in every run.
 
 **AC-221 · Constrained bot clear rate — band 1**
-**Given** `tools/bot.mjs --seeds 1000 --band 1` with the constraints of
+**Given** `tools/bot.mjs --seeds 1000 --band 1` with the attention model of
 [`generation.md` §7.1](generation.md#71-the-constrained-solver-bot),
-**Then** the clear rate is within **92 – 100 %**.
+**Then** the clear rate is **≥ 95 %**. There is no upper bound at band 1
+([`generation.md` §7.2](generation.md#72-target-1--constrained-bot-clear-rate) R1).
 
 **AC-222 · Constrained bot clear rate — band 2**
-**Then** the clear rate is within **88 – 99 %**.
+**Then** the clear rate is within **86 – 97 %**.
 
 **AC-223 · Constrained bot clear rate — band 3**
-**Then** the clear rate is within **80 – 96 %**.
+**Then** the clear rate is within **76 – 92 %**.
 
 **AC-224 · Constrained bot clear rate — band 4**
-**Then** the clear rate is within **72 – 90 %**.
+**Then** the clear rate is within **66 – 85 %**.
 
 **AC-225 · Constrained bot clear rate — band 5**
-**Then** the clear rate is within **62 – 84 %**.
+**Then** the clear rate is within **55 – 78 %**.
+
+*AC-221 – AC-225's five windows have not moved since they were derived from R1–R4 and they are not
+going to; [`generation.md` §6.1](generation.md#61-the-table)'s `interval` and `quota` columns moved
+instead. Measured after round 6's lever pull, 1,000 seeds per band:
+`99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`, every band in window with at least 4.9 pp of margin to the
+nearer edge; at 2,000 seeds, `100.0 / 91.9 / 81.5 / 73.8 / 64.6 %`. The reading these replace is
+`99.9 / 99.3 / 97.2 / 68.9 / 2.6 %`, which failed AC-222, AC-223, AC-225,
+[AC-237](acceptance-criteria.md) and [AC-238](acceptance-criteria.md).*
 
 **AC-226 · Completion-time band — band 1**
 **Given** `tools/pacing.mjs` over 1,000 successful constrained-bot runs,
@@ -352,10 +445,14 @@ differ.
 **Given** every constrained-bot run across all bands and all sampled seeds,
 **Then** **no** run exceeds **130 s** of simulated time.
 
-**AC-232 · Bot constraints are enforced**
-**Given** the constrained bot's own input log,
-**Then** no two taps occur within 11 ticks, no tap occurs within 6 ticks of the tapped junction
-being reached by a car, and no tick contains more than one tap.
+**AC-232 · Bot motor constraints are enforced**
+**Given** the constrained bot's own input log and the per-tap record of which car the tap was made
+for,
+**Then** no two taps occur within `BOT_MIN_TAP_GAP = 11` ticks, no tap occurs within
+`BOT_LOCKOUT_TICKS = 6` ticks of **the car it was made for** reaching the tapped junction, and no
+tick contains more than one tap. *The lockout is scoped to the focused car; slice 0 phrased it over
+any car, which is a different constraint and not one the bot can evaluate without global
+knowledge.*
 
 **AC-233 · Tap rate is measured and reported**
 **Given** `tools/bot.mjs --seeds 1000` per band,
@@ -366,6 +463,212 @@ being reached by a car, and no tick contains more than one tap.
 **Given** 3,000 generated levels per band,
 **Then** the count of distinct network signatures is at least 30 for band 1 and at least 500 for
 bands 2–5.
+
+**AC-235 · The bot's attention bounds are enforced**
+**Given** `tools/bot.mjs --seeds 1000` per band with its bot state instrumented after every tick,
+**Then** `mem.length <= BOT_WORKING_SET = 3` on every tick of every run; no entry survives more
+than `BOT_MEMORY_TICKS = 120` ticks past its `seenTick`; the bot never emits a tap on a tick where
+`focus === null`; and every tap is for the car that was focused when the tap was emitted.
+
+**AC-236 · The bot is deterministic and seeded**
+**Given** the same `(seed, band)`,
+**When** `tools/bot.mjs` is run twice in one process and once in a fresh process,
+**Then** the three input streams are element-for-element identical, and the bot's PRNG has been
+drawn from exactly once per glance and never anywhere else — asserted by counting draws against
+the glance count.
+
+**AC-237 · R2 — every band is measurably harder than the one below it**
+**Given** the five clear rates of AC-221 – AC-225 over 1,000 seeds per band,
+**Then** each band's clear rate is at least **4 percentage points** below the band above it. *A
+run in which every band sits inside its own window but two adjacent bands measure within 4 points
+of each other is a failure: the ladder is not escalating.*
+
+**AC-238 · R3 — no band boundary is a wall**
+**Given** the same five clear rates,
+**Then** no adjacent pair differs by more than **15 percentage points**.
+
+*AC-237 and AC-238 are the pair round 6's lever pull was aimed at, and they are the pair that
+constrains it from both sides at once. Measured after the pull, the four drops are
+`8.4 / 10.0 / 7.4 / 8.1` pp — at least 3.4 pp clear of AC-237's floor and at least 5.0 pp clear of
+AC-238's ceiling — against `0.6 / 2.1 / 28.3 / 66.3` before it, which failed AC-237 at the first
+two pairs and AC-238 at the last two. At 2,000 seeds the drops read `8.0 / 10.4 / 7.8 / 9.2`.*
+
+**AC-239 · The attention report is emitted**
+**Given** `tools/bot.mjs --attention-report --seeds 1000` per band,
+**Then** it reports, per band: glances/s, focus events/s, the split between `BOT_SWITCH_TICKS` and
+`BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, and the
+count of misroutes caused by a flip the bot made for a held car that misrouted a car it was **not**
+holding. *Without these a missed target in AC-221 – AC-225 cannot be explained, only observed.*
+
+**AC-240 · The instrument is proven to be sensitive**
+**Given** the bot run at band 5 over 1,000 seeds with `BOT_WORKING_SET` raised to `Infinity`,
+`BOT_ACQUIRE_TICKS` and `BOT_SWITCH_TICKS` set to 0 and `BOT_MEMORY_TICKS` set to `Infinity` —
+every attention constraint removed, every timing constraint kept —
+**Then** the clear rate rises by at least **20 percentage points** over the unmodified bot.
+*This is the fault injection required by `docs/development-process.md:136`. It proves the
+attention model is what binds the measurement rather than something else wearing its name; a bot
+whose clear rate barely moves when attention is made free is not measuring attention.*
+
+*The rise is asserted wherever there is room for it to be asserted, and the reason is now a
+measured one rather than a convention. A 20 pp rise needs 20 pp of headroom, so the test is
+meaningless wherever the unmodified bot already clears above 80 %, and such a band is a ceiling,
+not insensitivity. A band whose
+unmodified rate is above 80 % is reported as `n/a (no headroom)` and is not a failure; any band at
+or below 80 % that fails to rise 20 pp **is**. Under [`generation.md` §6.1](generation.md#61-the-table)'s
+round-6 parameters the measured rises are `+0.1 / +7.9 / +17.9 / +25.0 / +31.7 pp` against clear
+rates of `99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`, so this AC **asserts at bands 4 and 5 and passes at
+both with more than 5 pp to spare** and reports `n/a` at bands 1–3. Band 3's unasserted `+17.9` is
+reported because it is evidence even where it is not a verdict; targeting band 3 below the 80 %
+line to bring it inside the assertion was priced and declined in
+[`generation.md` §7.4.1](generation.md#741-round-6s-lever-pull-and-the-thing-it-proved-on-the-way),
+because the ladder it produces leaves 1.4 pp of margin against [AC-238](acceptance-criteria.md). The failure this AC is for looks like slice 1b's:
+bands 4 and 5 rising `+2.0` and `+7.4 pp` from 19.7 % and 2.3 %, with plenty of headroom and
+nothing moving — which correctly located a deadline in the **game** that no player model could
+meet ([AC-245](acceptance-criteria.md)), not a fault in the bot.*
+
+**AC-241 · A lever pull satisfies both targets or is not a lever pull**
+**Given** any proposed change to a band's `quota`, `interval`, `pBranch` or `K` under
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed),
+**When** the change is applied,
+**Then** AC-221 – AC-231 are **all** re-run and all pass. A change that moves a clear rate into
+band while moving a completion-time median out of band has not been applied; it has been
+proposed and rejected.
+
+**AC-242 · V13 — the actionable junction floor**
+**Given** any generated level at band `b`,
+**When** every branch node's two reachable-colour sets are compared,
+**Then** the number of branch nodes whose two sets are **incomparable** — neither contains the
+other — is at least the band's `Ja` in [`generation.md` §6.1](generation.md#61-the-table):
+**3 / 3 / 4 / 5 / 7** for bands 1–5. A junction whose sets are comparable is *decorative*: the
+superset branch serves every colour the subset branch does, so a perfect player never has to flip
+it. *Before this rule, decorative junctions were `0.0 / 29.6 / 13.5 / 26.7 / 14.1 %` of all drawn
+junctions over 3,000 seeds per band; with it they are `0.0 / 29.6 / 11.4 / 25.0 / 12.2 %` and every
+level clears the floor. The rule constrains the generator rather than describing it: it is the
+reason the minimum actionable count is `3 / 3 / 4 / 5 / 7` instead of `3 / 3 / 3 / 3 / 5`.*
+
+**AC-243 · Actionable `J` is measured per run, not assumed from the table**
+**Given** `tools/generator-audit.mjs --actionable --seeds 3000` per band, which drives each level
+with the lazy-optimal oracle of
+[`generation.md` §6.2](generation.md#62-measured-generator-behaviour) and records the set of
+junctions that oracle flips at least once,
+**Then** it reports, per band: the mean and minimum live-junction count, the share of levels whose
+live count is below `Ja`, and the mean count of junctions flipped **twice or more**; and the
+measured values satisfy — live count `>= Ja - 1` in **100 %** of runs, and `>= Ja` in at least
+**95 %**. *Measured with V13 in force: mean live `2.98 / 3.48 / 4.81 / 5.54 / 7.07`, minimum
+`2 / 2 / 4 / 4 / 6`, below-`Ja` share `1.6 / 0.2 / 0.0 / 0.0 / 0.2 %`. The residue at bands 1 and 2
+is a spawn-order effect, not a topology one, and no static rule removes it: a junction can be
+structurally actionable and still not be exercised by one particular colour sequence. This AC
+exists so that residue stays visible and bounded instead of being invisible, which is what it was
+through slices 0 and 1.*
+
+**AC-244 · Every validity rule is proven able to fire**
+**Given** the eleven checks `V1`–`V11` plus `V13`,
+**When** the audit's rule-injection suite runs,
+**Then** for **each** rule there is a fixture that the rule's own check rejects, and the check is
+invoked **directly** rather than through `validate()`'s ordered cascade. *Only `V6`, `V7` and `V8`
+ever reject a candidate that `tryBuild` produced — measured over 15,000 `generate()` calls, with
+zero rejections attributed to `V1`, `V2`, `V3`, `V4`, `V5`, `V9`, `V10` or `V11`. Those are
+structural tripwires, not filters ([`generation.md` §5](generation.md#5-validity-rules-what-rejects-a-candidate)),
+and running them through the cascade means an earlier rule catches the fixture first — which is
+why slice 1's blind pass could not make `V5` or `V9` fire from any single-edge mutation of 200
+band-3 levels. A tripwire whose check has never been executed against a violation is not a check.*
+
+**AC-245 · The first-decision window clears its floor**
+**Given** any generated level at any band,
+**When**, for every entry-to-depot path, `L1` is taken as the arc length in LU from the entry node
+to the **first branch node** on that path, and
+`firstDecisionTicks = ceil(L1 * MLU / speedMluPerTick)`,
+**Then** `firstDecisionTicks >= 40` (667 ms) for every path in every level; **and** the minimum
+over 1,000 levels per band is exactly the entry-edge transit `54 / 50 / 48 / 45 / 43`, because
+`rows[0]` holds one node and 41–89 % of levels branch there.
+*This is the window §4.6 never computed. §4.6's 1.00 s is the separation between **two cars** at
+one junction; this is the time from **one car appearing** to its first decision, and a car's colour
+cannot be known before it spawns, so nothing about it can be prepared
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision)).
+The floor of 40 ticks is the player model of
+[`generation.md` §7.1.3](generation.md#713-constants) priced twice: 22 ticks to read a colour, act
+and leave the lockout runway, plus one more acquire of slack because a player who is mid-acquire on
+another car cannot start immediately. At `ENTRY_LEN = 100` the measured values were
+`34 / 32 / 30 / 28 / 27` — band 5 failed this floor by 13 ticks, on a junction every car in the
+level crosses, and the constrained bot emitted zero taps there across 269 levels that had one.*
+
+*This floor is **necessary and not sufficient**, and round 5 had to measure that to find it out. It
+prices the decision from the moment the player starts it and says nothing about how long they take
+to start — a term that grows with traffic while this one shrinks with speed
+([`generation.md` §7.1.7](generation.md#717-the-first-decision-deadline-and-why-the-bot-must-not-be-given-it-for-free)).
+With this AC passing at every band the first decision was still being answered wrongly 20.6 % of the
+time per car at band 4. [AC-246](acceptance-criteria.md) is the sufficient condition and this AC is
+the cheap static check that catches the same defect a generation earlier.*
+
+**AC-246 · The first decision is as reliable as every other decision**
+**Given** the constrained bot of [`generation.md` §7.1](generation.md#71-the-constrained-solver-bot)
+run over 1,000 seeds per band,
+**When** every junction a car actually crosses is classified as a **decision for that car** or not,
+where a junction is a decision for a car if and only if **exactly one of its two outgoing branches
+leads to a depot of that car's own colour** — the test `evaluate` itself applies
+([`generation.md` §7.1.6](generation.md#716-the-helper-functions), `k0 === k1` is NOTHING) — and
+each car's decisions are split into its **first** and its **later** ones, and `p_first` and
+`p_later` are the shares of each class that the car left on a branch that cannot reach its colour,
+**Then** `p_first - p_later <= 0.25 * (2 / quota)` at every band — **3.13 / 1.52 / 1.22 / 1.06 /
+0.98** percentage points for bands 1–5 — **and** both figures are reported per band whether or not
+the check passes.
+
+*The definition above is deliberate and it replaces a parenthesis that had two readings. "The first
+branch node on its path, where the two branches differ in which depot colours they reach" can mean
+**differ for this car's colour** or **differ in their reachable-colour sets**, and only the first
+is a working instrument. Under the set reading a junction counts as a decision for a car it poses
+no question to, so the class is diluted with crossings that cannot be got wrong; measured, the gap
+goes **negative at every band under both sweeps** — `−0.70 / −1.24 / −1.83 / −1.20 / −1.59` pp
+under the correct rule and `−0.49 / −1.34 / −1.26 / −0.75 / −0.47` pp under the round-robin
+injection this AC exists to catch. A check that passes its own fault injection at every band is not
+a check. The per-colour reading reproduces the design's numbers to two decimal places and fails the
+injection at bands 2–5, which is why it is the one written into the **When**.*
+*This is the guard [`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)
+argues for, and the threshold is derived rather than fitted: a level clears on at most `LIVES - 1`
+misroutes in `quota` cars, so `2/quota` is the band's per-car error budget and this allows the one
+decision that every car in the level must make to consume a quarter of it more than an ordinary
+one. It is stated in `p` and not in a clear rate because `p` is the unamplified quantity — the same
+1 pp drift shows up as anywhere between 0 and 60 points of clear rate depending on where the band
+sits, which is how an 8 pp gap survived two rounds of measurement while looking like a difficulty
+result. Measured under §7.1.5 D3 and §6.1's round-6 parameters, over 1,000 seeds per band:
+`-0.39 / -0.69 / -0.21 / +0.10 / +0.27` pp, passing everywhere, with band 5 — the tightest — at
+**28 %** of its ceiling, down from 81 % before the lever pull, because raising `interval` and
+cutting `quota` both loosen it. It remains the figure to re-read after any lever pull that moves
+`quota`, in both directions: a pull that raises `quota` tightens the ceiling, and
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed)'s lever-0 table shows the gap
+itself widening again past `interval = 126` at band 5, so this AC bounds lever 0 from above as well
+as below. The fault to inject is round 3's shipped sweep — pure round-robin, no onset capture —
+which reads `+1.23 / +7.55 / +8.18 / +8.34 / +9.02` pp and must fail this at bands **2, 3, 4 and
+5**. Band 1 passes under the injection and that is correct, not a weakness in the check: at
+`quota = 16` the per-car budget is 12.5 % and a 1.2 pp gap does not reach it. The check fails
+exactly where the defect was.*
+
+**AC-247 · Onset capture is an ordering and nothing more**
+**Given** a constrained-bot run at any band,
+**Then** over the whole run the count of captures — glances at a car that had never been glanced
+at before — is **exactly equal to the number of distinct cars captured**, and is **less than or
+equal to the number of cars that spawned**, so no car is captured twice and no tick produces more
+than one capture; the bot's round-robin `cursor` has the same value after a capture as before it;
+a capture sets `busyUntil` to `T + BOT_SCAN_TICKS` exactly as an ordinary glance does; and total
+glances per second differ from a pure round-robin run of the same seeds by less than 2 %.
+*Four separate ways for [`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative)
+D3 to decay into the free-attention repair that §7.1.8 rejects twice. The capture must fire once
+per car and not once per tick; it must not clobber the sweep, which is how one of §7.1.8's variants
+starved every older car; it must cost a full glance; and it must come **out of** the attention
+budget rather than adding to it.*
+
+*The first clause used to read "exactly the number of cars that spawned", and that is not
+achievable by any correct implementation: a car still in flight when the quota is met or the last
+life is lost is never glanced at, so the ratio of captures to spawns measures `0.993 – 0.997` and
+the AC fails on a bot that is behaving exactly as specified. `captures === distinct cars captured`
+is the identity that is actually true, and it catches the defect the clause was written for —
+a capture firing per tick instead of per car — **strictly harder**, because a per-tick capture
+breaks the identity on the very first car rather than only in aggregate. `captures <= spawned` is
+kept as the one-sided bound that survives the end-of-level truncation. Measured: captures per
+second `0.384 / 0.549 / 0.561 / 0.541 / 0.497` against spawn rates
+`0.385 / 0.556 / 0.566 / 0.545 / 0.500`, the identity holding on every one of 5,000 runs, and
+glances per second `7.20 / 5.97 / 5.74 / 5.45 / 5.53` against a round-robin's
+`7.19 / 6.05 / 5.82 / 5.52 / 5.57` — a drift of `+0.1 / −1.3 / −1.4 / −1.3 / −0.7 %`.*
 
 ---
 
@@ -473,14 +776,29 @@ declared support envelope rather than as a pass.
 **Given** any band,
 **Then** every depot's `x ± DEPOT_W/2` lies within `[0, 1000]`, with a margin of at least 30 LU.
 
+**AC-411 · The depot row stays inside the design rect vertically**
+**Given** any band,
+**Then** `DEPOT_Y + DEPOT_H <= DESIGN_H`, and the depot body at its 1.04 **receiving** scale (§7.4)
+also lies within `[0, DESIGN_H]`; **and given** the arithmetic sweep of
+[AC-401](acceptance-criteria.md)'s device matrix, **then** the clear space between the depot body
+and the bottom of the screen is at least **8 pt** on every supported configuration.
+*Slice 1b spent this margin deliberately: `DEPOT_Y` moved 1360 → 1420 to buy the 60 LU that
+[AC-245](acceptance-criteria.md) needs, taking the clearance below the depot from 70 LU to 10
+(`1420 + 170 = 1590` against `DESIGN_H = 1600`, receiving scale reaching 1593.4). It was free
+because nothing was drawn there; it is not free twice, and this AC is what makes the next attempt
+to spend it fail loudly. The binding device is the iPhone SE 1st generation at 11.0 pt
+([`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices)).*
+
 ---
 
 ## 500 — Visual
 
 **AC-501 · Draw order**
 **Given** a rendered frame,
-**Then** elements are painted in the order of [`ui.md` §4.2](ui.md#42-draw-order), and a car is
-never occluded by a junction marker or a depot.
+**Then** elements are painted in the order of [`ui.md` §4.2](ui.md#42-draw-order); a car is never
+occluded by a junction marker, by the road, by another car's shadow or by anything outside the
+depot layer; and a car **is** occluded by the depot-mouth apron and the depot body, which are the
+two things painted after it ([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
 
 **AC-502 · The car body is one colour fill**
 **Given** a rendered car,
@@ -533,6 +851,51 @@ cycle; at `lives >= 2` neither is present.
 **Then** the five car colours are `#FF852A`, `#89D9FF`, `#FF5386`, `#22C6AF`, `#A879FF` in that
 index order, and the chrome tokens match [`ui.md` §5.3](ui.md#53-surface-and-chrome-palette)
 character for character.
+
+**AC-513 · The depot mouth covers the convergence zone**
+**Given** any band and the `mouthLu` table of [`ui.md` §7.6](ui.md#76-the-depot-mouth),
+**When** every pair of positions on two terminal edges feeding the same depot is swept at 2 LU
+resolution with both car centres outside the apron,
+**Then** the minimum centre-to-centre distance is at least **91 LU**, the worst overlap of the two
+car bodies is at most **11 %** of a body, and diagonal-vs-opposite-diagonal pairs overlap by
+**0 %** — and in a seeded run of 1,000 levels per band, every pair of cars that comes within
+`CAR_L = 140` LU on converging terminal edges has both centres inside the apron.
+
+**AC-514 · The mouth never reaches a junction marker**
+**Given** the band table,
+**Then** `mouthLu <= rowH - JUNCTION_MARK_R - 12` for every band (tightest: band 5, 140 ≤ 142),
+and `MOUTH_W = 176 >= sqrt(CAR_L² + CAR_W²) = 163.3`, so no corner of a car at any heading
+protrudes from the side of the apron.
+
+**AC-515 · A misroute is legible from under the depot**
+**Given** a `misrouted` event,
+**Then** the shatter fragments originate at the mouth line of the terminal edge the car came down
+— not at the depot node — are filled with the **car's** colour, and are drawn over the apron and
+the depot body; and the rejecting depot desaturates over the same 350 ms
+([`ui.md` §8.4](ui.md#84-car-misrouted)).
+
+**AC-516 · The apron does not stack alpha**
+**Given** a depot fed by two or three terminal edges,
+**When** the frame is sampled inside the overlap of two apron fade segments,
+**Then** the sampled colour equals the colour of a single fade segment at the same alpha —
+the fades are composited in one `saveLayer` and the cores are one filled path
+([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
+
+**AC-517 · A car's arrival is an abrupt onset**
+**Given** the frame on which a car spawns and the frames after it,
+**Then** the car body, its glyph and its stroke are drawn at **full** opacity and full scale on the
+first frame the car exists, with no fade, ramp or scale-up applied to the car at any point on the
+entry edge; and the entry flare of [`ui.md` §7.5](ui.md#75-car) is drawn beneath the car layer and
+carries none of the car's colour.
+*The player model this design's targets are read off asserts that a newly appeared car is looked at
+**next** rather than last, and that is the only reason the first junction decision is reachable
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision),
+§8.10, [AC-246](acceptance-criteria.md)). Attention is captured by an abrupt luminance transient and
+a gradual onset of the same magnitude does not capture it, so a fade-in would make the drawing
+falsify the design's own claim about the player — silently, and in the one place it could not be
+detected from a clear rate. The 140 ms fade-in specified through slice 1b was also spending 40 of
+the entry edge's 160 LU making the colour unreadable inside the only window in which that car's
+colour can be read.*
 
 ---
 
@@ -631,10 +994,14 @@ analytics SDK.
 
 ## 800 — Failure and edge cases
 
-**AC-801 · The third misroute ends the level immediately**
+**AC-801 · The third misroute ends the level on that tick**
 **Given** `lives === 1`,
 **When** a car is misrouted,
-**Then** `phase` becomes `'lost'` on that same tick and no further car resolves.
+**Then** `phase` becomes `'lost'` at the terminal check of that same tick, and no car resolves on
+any **later** tick. Cars arriving in the **same** tick still resolve and are still counted
+(AC-122, AC-136) — the terminal check is step 5 and runs once, after step 4 has resolved every
+arrival. *Slice 0's wording said "no further car resolves", which read as an abort in the middle
+of step 4 and contradicted AC-122.*
 
 **AC-802 · Quota and misroute on the same tick is a win**
 See AC-122; this is the on-device expression of it — the level-complete overlay is shown, not the
@@ -650,10 +1017,21 @@ failure overlay.
 **Then** a 3-2-1 countdown of 3 × 600 ms runs, no `step()` is called during it, and taps are
 discarded until it completes.
 
-**AC-805 · A slow frame advances whole ticks**
-**Given** a 50 ms frame,
-**Then** `step()` is called exactly 3 times and 0.0 ticks of remainder are carried into the
-simulation (the 0.33 ms remainder stays in the React layer's accumulator).
+**AC-805 · A slow frame advances whole ticks, computed integer-first**
+**Given** an accumulator of 0 ms and a frame delta of 50 ms,
+**When** the React layer converts elapsed milliseconds to ticks using the normative form
+`n = Math.floor(acc * TICK_HZ / 1000)` from
+[`gameplay.md` §2.1](gameplay.md#21-tick-rate),
+**Then** `n === 3`, `step()` is called exactly **3** times, and the accumulator is left holding
+exactly **0 ms** — 50 ms is three whole ticks at 60 Hz and the remainder is zero, not 0.33 ms.
+*Slice 0 asserted a 0.33 ms remainder, which is arithmetically false.*
+
+**50 ms does not distinguish the two conversion forms.** An earlier revision of this AC claimed the
+divide-first form `Math.floor(acc / (1000 / TICK_HZ))` returns **2** here. It does not: `50 / (1000/60)`
+is exactly `3` in IEEE 754 — bit pattern `0x4008000000000000`, no rounding error at all — so both
+forms floor to 3. The claim reached this document from a verification report that had checked it
+with Python's float `//`, which is computed from `fmod` and is not `floor(a/b)`. AC-816 states what
+is actually true of the two forms and why the requirement is a source rule.
 
 **AC-806 · A very slow frame is capped**
 See AC-127; on device, a 2 s stall must not produce a visible teleport of any car by more than
@@ -696,3 +1074,47 @@ flip in at least one spawn sequence over 1,000 seeds — i.e. no level is won by
 **AC-814 · No level is won by never tapping**
 **Given** 1,000 seeds per band and a bot that never taps,
 **Then** the clear rate is 0 % at every band.
+
+**AC-815 · The accumulator carries a true remainder**
+**Given** an accumulator of 0 ms and a frame delta of 55 ms,
+**Then** `step()` is called exactly **3** times and the accumulator retains **5 ms**; and given a
+following frame delta of 12 ms (accumulator 17 ms), `step()` is called exactly **1** more time.
+*The shipped accumulator is carried in tick units rather than milliseconds, so "5 ms" is observed
+as `0.3` ticks; the two statements are the same number and either form satisfies this AC.*
+*This is the companion to AC-805: AC-805 pins the zero-remainder case and this pins a non-zero
+one, so a build that drops the remainder entirely passes neither.*
+
+**AC-816 · The tick conversion is integer-first, checked at the source**
+**Given** the module that converts elapsed wall time to ticks (`src/engine/clock.js`),
+**When** its conversion expression is read,
+**Then** it multiplies before it divides — the elapsed quantity is scaled by `TICK_HZ` and then
+divided by `1000` — and no sub-expression of the form `1000 / TICK_HZ` exists anywhere in the
+ticking path. *This is a source check, and it is a source check on purpose.*
+
+**Why this cannot be a behavioural check.** The two forms are indistinguishable everywhere the
+shipped clock can report:
+
+- Over integer-millisecond deltas from 1 to 2,000 they disagree exactly 15 times, and the **first**
+  is **250 ms** — integer-first 15 ticks, divide-first 14.
+- `MAX_CATCHUP_TICKS = 8` clamps every delta at or above `8 × 1000 / 60 = 133.34 ms` (AC-127), so
+  250 ms returns 8 ticks under either form. Every disagreement sits above the clamp.
+- Below the clamp the forms agree not only on integers: over 5,000,000 random fractional
+  accumulator values in `[0, 133.33)` there were **zero** disagreements.
+
+So no input to `advanceClock` produces different output under the two forms, and an AC of the shape
+"inject the divide-first form and watch AC-805 fail" is a check that **cannot pass**. The previous
+revision of this AC was exactly that, written in good faith from the wrong number corrected in
+AC-805 — the mirror image of a check that cannot fail, and just as useless. Integer-first still
+ships, for the ordinary reason that it cannot drift as `TICK_HZ` or the clamp changes, and that is
+a property of the source, so the source is where it is asserted. AC-805 and AC-815 remain the
+behavioural checks: a build that drops or mis-rounds the remainder fails both.
+
+**AC-817 · A non-finite or negative frame delta is dropped, not accumulated**
+**Given** an accumulator holding a valid value,
+**When** `advanceClock` is called with `NaN`, `+Infinity`, `-Infinity` or a negative delta,
+**Then** it returns `0` ticks, the accumulator it returns is finite, and the **next** call with a
+normal 16.7 ms delta returns ticks again.
+*`NaN` fails both the `< 0` and the `> MAX_CATCHUP_TICKS` guard, so without an explicit finiteness
+test one bad frame — which an uninitialised `lastFrameTime` in the React layer produces exactly —
+poisons the accumulator and freezes the simulation for the rest of the session. Slice 1 reproduced
+that freeze. The behaviour now exists in the engine; this AC is what keeps it there.*

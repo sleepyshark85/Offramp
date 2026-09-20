@@ -32,6 +32,9 @@ see §5.
 
 ## 2. The slice pipeline
 
+**Where the work actually is: [`slices.md`](slices.md).** The table below is the plan; that
+file is the state, and it is the one that goes stale if it is not updated at the end of a slice.
+
 ```
   design ─→ build ─→ test ─→ fix ─→ re-test ─→ commit
                        ↑                 │
@@ -184,6 +187,69 @@ A slice's PR was based on the previous slice's branch; both merged within second
 code never reached `main`.
 **Rule:** branch each slice from `main`. If stacking is genuinely necessary, merge in order
 and verify the result is on `main` afterwards.
+
+### 6.6 The verification that used the wrong operator
+
+The orchestrator reported that a naive `floor(50 / (1000/60))` yields 2 rather than 3, as
+evidence that a tick conversion had to be written integer-first. The check had been run, and it
+had printed 2 — in Python, using `//`. Python's float `//` is fmod-based and is **not**
+`floor(a/b)`. In the JavaScript the claim was actually about, `50/(1000/60)` is exactly `3`.
+
+The number was wrong, it went into a verification report, the designer took it in good faith, and
+one step later it was an acceptance criterion — AC-816 — requiring an implementation to produce a
+value no correct implementation can produce.
+
+**Rule:** run the check in the language the claim is about. An operator that is spelled the same
+in two languages is not the same operator, and "I executed it" is only worth something if what
+was executed is the thing being claimed.
+
+**Corollary, and the reason this is worse than §6.1:** a wrong number in a verification report
+does not stay there. Downstream it becomes a specification, and a specification derived from a
+bad measurement produces a check that cannot *pass* — §6.2 in mirror image. Verification output
+is an input to design, so it carries design's burden of proof.
+
+It was caught by the tester's blind pass, which was the one control positioned to catch it. That
+is the argument for the blind pass stated as a measured outcome rather than as a principle.
+
+### 6.7 Editing the spec underneath the pass that was testing it
+
+The designer revised five acceptance criteria while the tester was mid-run verifying the engine
+against them. Nothing was lost — the tester happened to check the amended ACs and confirmed
+them — but its report and the documents disagreed for a window, and reconciling them afterwards
+cost more than sequencing would have.
+
+**Rule:** while a verification pass is running, the artifacts it verifies against are frozen. Run
+the designer and the tester concurrently only when they touch disjoint documents, and when they
+do not, wait. Concurrency that saves ten minutes and costs an hour of reconciliation is not
+concurrency, it is a race.
+
+### 6.8 The difficulty lever that made a safety check vacuous
+
+A tuning pull — raising `interval` and rescaling `quota` — moved band 5's minimum car
+separation to 319.2 LU against a longest edge of 293. Two cars can share an edge only if the
+edge is longer than the separation they hold, so AC-124's assertion became **arithmetically
+unreachable at that band**: it could no longer observe the thing it asserts about.
+
+Nothing in the rules changed. No code was edited. A number in a difficulty table moved, and a
+safety check three files away stopped being able to fail.
+
+It was caught by the `assert(observations > 0)` guard that §6.2 put on every sweep — the test
+failed with *"band 5 never put two cars on one edge, so the assertion below never ran"*. The
+right fix was not to loosen it but to assert the **stronger** statement at that band: the count
+is exactly zero, with the arithmetic recorded, so a single sighting fails.
+
+**Rule:** a check's reachability is a function of the parameters, not only of the code. When a
+tuning value moves, the checks that depend on it have to be re-examined for whether they can
+still fail — and the only thing that makes that automatic is asserting that the sweep observed
+something.
+
+The same pull also exposed a check that had never asserted anything: AC-202 required a level's
+parameters to match the design's band table, and the test compared the generated level against
+the code's own constant, which it satisfies by construction. Every band-table edit had passed it
+silently.
+
+**Corollary:** a test that reads its expectation from the same source as the code under test is
+not a test. The design document is the expectation; transcribe it.
 
 ---
 
