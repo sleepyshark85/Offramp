@@ -1,0 +1,390 @@
+// Simulation ACs — AC-101 … AC-135, AC-801, AC-808, AC-809, AC-810.
+
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  LIVES,
+  MAX_CATCHUP_TICKS,
+  SCORE_DELIVERY,
+  SCORE_LIFE_BONUS,
+  SPAWN_SLACK,
+  STREAK_CAP,
+  TICK_HZ,
+} from '../src/engine/constants.js';
+import { createState, step, TRANSITION_STATS, resetTransitionStats } from '../src/engine/step.js';
+import { generate } from '../src/engine/generate.js';
+import { drive, twoDepotLevel } from './helpers.js';
+
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const ENGINE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'engine');
+
+test('AC-101 · TICK_HZ is the integer 60 and is defined once', () => {
+  assert.equal(TICK_HZ, 60);
+  assert.ok(Number.isInteger(TICK_HZ));
+  let definitions = 0;
+  for (const f of readdirSync(ENGINE_DIR)) {
+    const src = readFileSync(join(ENGINE_DIR, f), 'utf8');
+    definitions += (src.match(/TICK_HZ\s*=/g) || []).length;
+  }
+  assert.equal(definitions, 1);
+});
+
+test('AC-102 · one step is exactly one tick', () => {
+  let s = createState(twoDepotLevel());
+  for (let i = 0; i < 20; i += 1) {
+    const t = s.tick;
+    s = step(s, []);
+    assert.equal(s.tick, t + 1);
+  }
+});
+
+test('AC-103 · no floating point anywhere in the simulation after 10,000 ticks', () => {
+  const level = generate(99, 3);
+  let s = createState(level);
+  const inputsAt = (t) => (t % 37 === 0 ? [{ tick: t, junctionId: t % level.junctions.length }] : []);
+  for (let i = 0; i < 10000 && s.phase === 'running'; i += 1) s = step(s, inputsAt(s.tick));
+  for (const k of ['tick', 'rng', 'nextSpawn', 'delivered', 'misrouted', 'lives', 'score', 'streak', 'bestStreak']) {
+    assert.ok(Number.isInteger(s[k]), k + ' = ' + s[k]);
+  }
+  for (const car of s.cars) {
+    for (const k of ['id', 'colour', 'edgeId', 'progress']) assert.ok(Number.isInteger(car[k]));
+  }
+});
+
+test('AC-104 · a car is always on exactly one existing edge, inside it', () => {
+  const level = generate(5, 4);
+  let s = createState(level);
+  for (let i = 0; i < 3000 && s.phase === 'running'; i += 1) {
+    s = step(s, []);
+    for (const car of s.cars) {
+      const edge = level.edges[car.edgeId];
+      assert.ok(edge, 'edge exists');
+      assert.ok(car.progress >= 0 && car.progress < edge.lengthMlu);
+      assert.equal(Object.keys(car).length, 4);
+    }
+  }
+});
+
+test('AC-105 · a car not transitioning advances by exactly speedMluPerTick', () => {
+  const level = twoDepotLevel();
+  let s = createState(level);
+  s = step(s, []); // spawn + first advance
+  const before = s.cars[0].progress;
+  s = step(s, []);
+  assert.equal(s.cars[0].progress, before + level.speedMluPerTick);
+});
+
+test('AC-106 · a transition carries the remainder', () => {
+  const level = twoDepotLevel();
+  let s = createState(level);
+  let prev = null;
+  while (s.cars.length === 0 || s.cars[0].edgeId === level.entryEdgeId) {
+    prev = s;
+    s = step(s, []);
+  }
+  const old = prev.cars[0];
+  const now = s.cars[0];
+  assert.equal(now.edgeId, 1); // open defaults to 0 -> out[0]
+  assert.equal(now.progress, old.progress + level.speedMluPerTick - level.edges[0].lengthMlu);
+});
+
+test('AC-107/AC-109 · junction state is read at the transition, after this tick’s inputs', () => {
+  const level = twoDepotLevel();
+  // The car transitions during tick 33. A tap stamped at tick 33 must be honoured.
+  const withTap = drive(step, createState(level), new Map([[33, [{ tick: 33, junctionId: 0 }]]]), 34);
+  assert.equal(withTap.cars[0].edgeId, 2, 'took out[1] after the same-tick flip');
+  const without = drive(step, createState(level), new Map(), 34);
+  assert.equal(without.cars[0].edgeId, 1);
+});
+
+test('AC-108/AC-311 · a flip behind a car does not re-route it', () => {
+  const level = twoDepotLevel();
+  const late = drive(step, createState(level), new Map([[34, [{ tick: 34, junctionId: 0 }]]]), 160);
+  assert.equal(late.delivered, 1, 'still arrived at depot colour 0');
+  assert.equal(late.misrouted, 0);
+  const never = drive(step, createState(level), new Map(), 160);
+  assert.equal(never.delivered, 1);
+});
+
+test('AC-110 · two taps in one tick resolve by junction id, order-independently', () => {
+  const level = generate(11, 3);
+  assert.ok(level.junctions.length > 5);
+  const a = step(createState(level), [{ tick: 0, junctionId: 5 }, { tick: 0, junctionId: 2 }]);
+  const b = step(createState(level), [{ tick: 0, junctionId: 2 }, { tick: 0, junctionId: 5 }]);
+  assert.deepEqual(a.open, b.open);
+  assert.deepEqual(a.events.map((e) => e.junctionId), [2, 5]);
+  assert.deepEqual(a, b);
+});
+
+test('AC-111 · duplicate taps on one junction net out and emit two flips', () => {
+  const level = twoDepotLevel();
+  const s = step(createState(level), [{ tick: 0, junctionId: 0 }, { tick: 0, junctionId: 0 }]);
+  assert.equal(s.open[0], 0);
+  assert.equal(s.events.filter((e) => e.type === 'flip').length, 2);
+});
+
+test('AC-112 · cars spawn on their scheduled tick', () => {
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 7, colour: 1 }] });
+  let s = createState(level);
+  for (let i = 0; i < 7; i += 1) s = step(s, []);
+  assert.equal(s.cars.length, 0, 'nothing before tick 7');
+  s = step(s, []);
+  assert.equal(s.cars.length, 1);
+  assert.equal(s.cars[0].id, 0);
+  assert.equal(s.cars[0].colour, 1);
+  // progress is one tick of travel because spawn precedes advance within the tick.
+  assert.equal(s.cars[0].progress, level.speedMluPerTick);
+});
+
+test('AC-114 · spawn ticks strictly increase, gap >= interval - 2*jitter', () => {
+  for (let band = 1; band <= 5; band += 1) {
+    for (let seed = 0; seed < 250; seed += 1) {
+      const level = generate(seed, band);
+      for (let i = 1; i < level.spawns.length; i += 1) {
+        const gap = level.spawns[i].tick - level.spawns[i - 1].tick;
+        assert.ok(gap > 0, 'strictly increasing');
+        assert.ok(gap >= level.interval - 2 * level.jitter, 'gap ' + gap);
+      }
+    }
+  }
+});
+
+test('AC-115 · the colour bag never produces three in a row and stays balanced', () => {
+  for (let band = 1; band <= 5; band += 1) {
+    const counts = new Array(5).fill(0);
+    for (let seed = 0; seed < 300; seed += 1) {
+      const level = generate(seed, band);
+      const cs = level.spawns.map((s) => s.colour);
+      for (let i = 2; i < cs.length; i += 1) {
+        assert.ok(!(cs[i] === cs[i - 1] && cs[i] === cs[i - 2]), 'three in a row, band ' + band);
+      }
+      for (const c of cs) counts[c] += 1;
+    }
+    const used = counts.slice(0, generate(0, band).K);
+    const spread = Math.max(...used) - Math.min(...used);
+    const total = used.reduce((a, b) => a + b, 0);
+    assert.ok(spread <= total * 0.02, 'band ' + band + ' colour spread ' + spread + ' of ' + total);
+  }
+});
+
+test('AC-116/AC-117 · delivery scores, counts, and the streak cap', () => {
+  const spawns = [];
+  for (let i = 0; i < 14; i += 1) spawns.push({ index: i, tick: i * 60, colour: 0 });
+  const level = twoDepotLevel({ spawns, quota: 14 });
+  let s = createState(level);
+  const increments = [];
+  let prevScore = 0;
+  let prevDelivered = 0;
+  while (s.phase === 'running' && s.tick < 2000) {
+    s = step(s, []);
+    if (s.delivered !== prevDelivered) {
+      increments.push(s.score - prevScore);
+      prevScore = s.score;
+      prevDelivered = s.delivered;
+      assert.equal(s.streak, s.delivered);
+      assert.equal(s.lives, LIVES);
+    }
+  }
+  for (let n = 1; n <= 12; n += 1) {
+    assert.equal(increments[n - 1], SCORE_DELIVERY + 10 * Math.min(n - 1, STREAK_CAP), 'delivery #' + n);
+  }
+  assert.equal(increments[9], 190);
+  assert.equal(increments[11], 190);
+});
+
+test('AC-118 · the transition loop is single-pass over 20,000 ticks at every band', () => {
+  resetTransitionStats();
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(band * 13, band);
+    let s = createState(level);
+    let n = 0;
+    while (n < 20000) {
+      s = step(s, s.tick % 23 === 0 ? [{ tick: s.tick, junctionId: s.tick % level.junctions.length }] : []);
+      n += 1;
+      if (s.phase !== 'running') s = createState(level); // keep stepping, fresh run
+    }
+  }
+  assert.ok(TRANSITION_STATS.transitions > 0, 'the instrument observed transitions');
+  assert.equal(TRANSITION_STATS.maxPerCarTick, 1);
+});
+
+test('AC-119 · a misroute costs a life, no points, and resets the streak', () => {
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 1 }], quota: 5 });
+  let s = createState(level);
+  let ev = null;
+  while (s.tick < 200) {
+    s = step(s, []);
+    ev = s.events.find((e) => e.type === 'misrouted') || ev;
+  }
+  assert.equal(s.misrouted, 1);
+  assert.equal(s.lives, LIVES - 1);
+  assert.equal(s.score, 0);
+  assert.equal(s.streak, 0);
+  assert.ok(ev && ev.carColour === 1 && ev.depotColour === 0);
+});
+
+test('AC-122/AC-802 · quota and misroute on the same tick is a win', () => {
+  // Car 0 (colour 0) takes the long branch to depot colour 0; car 1 (colour 0) takes the
+  // short branch to depot colour 1. Both resolve on tick 153.
+  const level = twoDepotLevel({
+    spawns: [{ index: 0, tick: 0, colour: 0 }, { index: 1, tick: 20, colour: 0 }],
+    quota: 1,
+  });
+  let s = createState(level);
+  s.lives = 1;
+  const inputs = new Map([[40, [{ tick: 40, junctionId: 0 }]]]); // flip after car 0 passes
+  let arrivalTick = null;
+  while (s.phase === 'running' && s.tick < 300) {
+    s = step(s, inputs.get(s.tick) || []);
+    if (s.events.some((e) => e.type === 'delivered')) arrivalTick = s.tick - 1;
+  }
+  assert.equal(arrivalTick, 153);
+  assert.equal(s.delivered, 1);
+  assert.equal(s.misrouted, 1, 'both cars resolved on the same tick');
+  assert.equal(s.cars.length, 0, 'neither car was skipped by the removal pass');
+  assert.equal(s.lives, 0);
+  assert.equal(s.phase, 'won');
+});
+
+test('two deliveries on the same tick both resolve (mutation-during-iteration guard)', () => {
+  const level = twoDepotLevel({
+    spawns: [{ index: 0, tick: 0, colour: 0 }, { index: 1, tick: 20, colour: 1 }],
+    quota: 9,
+  });
+  let s = createState(level);
+  const inputs = new Map([[40, [{ tick: 40, junctionId: 0 }]]]);
+  while (s.phase === 'running' && s.tick < 300) s = step(s, inputs.get(s.tick) || []);
+  assert.equal(s.delivered, 2);
+  assert.equal(s.misrouted, 0);
+  assert.equal(s.cars.length, 0);
+});
+
+test('AC-120/AC-121 · score non-decreasing, lives non-increasing and floored', () => {
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(band * 7 + 1, band);
+    let s = createState(level);
+    let prev = s;
+    for (let i = 0; i < 4000; i += 1) {
+      const inputs = (i * 2654435761) % 11 === 0
+        ? [{ tick: s.tick, junctionId: (i * 40503) % level.junctions.length }]
+        : [];
+      s = step(s, inputs);
+      assert.ok(s.score >= prev.score && Number.isInteger(s.score) && s.score >= 0);
+      assert.ok(s.lives <= prev.lives && s.lives >= 0);
+      prev = s;
+      if (s.phase !== 'running') { s = createState(level); prev = s; }
+    }
+  }
+});
+
+test('AC-123 · the spawn array carries quota + 8 and is never exhausted in play', () => {
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(band, band);
+    assert.equal(level.spawns.length, level.quota + SPAWN_SLACK);
+  }
+});
+
+test('AC-126 · events do not accumulate', () => {
+  const level = generate(3, 2);
+  let s = createState(level);
+  for (let i = 0; i < 400; i += 1) {
+    s = step(s, i === 10 ? [{ tick: s.tick, junctionId: 0 }] : []);
+    for (const e of s.events) assert.equal(e.tick, s.tick - 1);
+  }
+});
+
+test('AC-129 · the engine has no clock, no randomness and no React', () => {
+  const banned = [/Date\.now/, /performance\.now/, /Math\.random/, /setTimeout/, /setInterval/, /from ['"]react/];
+  for (const f of readdirSync(ENGINE_DIR)) {
+    const src = readFileSync(join(ENGINE_DIR, f), 'utf8');
+    for (const re of banned) assert.ok(!re.test(src), f + ' contains ' + re);
+  }
+});
+
+test('AC-130/AC-131 · ids strictly ascending, no car on two edges, conservation holds', () => {
+  const level = generate(21, 5);
+  let s = createState(level);
+  for (let i = 0; i < 6000 && s.phase === 'running'; i += 1) {
+    s = step(s, i % 17 === 0 ? [{ tick: s.tick, junctionId: i % level.junctions.length }] : []);
+    let last = -1;
+    for (const c of s.cars) { assert.ok(c.id > last); last = c.id; }
+    assert.equal(s.cars.length, s.nextSpawn - s.delivered - s.misrouted);
+  }
+});
+
+test('AC-132 · the level-clear bonus is 50 per remaining life', () => {
+  const spawns = [];
+  for (let i = 0; i < 3; i += 1) spawns.push({ index: i, tick: i * 60, colour: 0 });
+  const level = twoDepotLevel({ spawns, quota: 2 });
+  const s = drive(step, createState(level), new Map(), 400);
+  assert.equal(s.phase, 'won');
+  assert.equal(s.lives, 3);
+  assert.equal(s.score, 100 + 110 + SCORE_LIFE_BONUS * 3);
+});
+
+test('AC-133 · cars in flight at level end are kept, unscored', () => {
+  const spawns = [{ index: 0, tick: 0, colour: 0 }, { index: 1, tick: 100, colour: 0 }];
+  const level = twoDepotLevel({ spawns, quota: 1 });
+  const s = drive(step, createState(level), new Map(), 400);
+  assert.equal(s.phase, 'won');
+  assert.equal(s.cars.length, 1, 'the second car is frozen in place');
+  assert.equal(s.delivered, 1);
+  assert.equal(s.misrouted, 0);
+});
+
+test('AC-801 · the last misroute ends the level on that tick', () => {
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 1 }], quota: 9 });
+  let s = createState(level);
+  s.lives = 1;
+  s = drive(step, s, new Map(), 400);
+  assert.equal(s.phase, 'lost');
+  assert.equal(s.lives, 0);
+  assert.equal(s.tick, 154, 'ended on the arrival tick, not later');
+});
+
+test('AC-808 · spawn exhaustion throws rather than stalling', () => {
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 0 }], quota: 99, slack: false });
+  assert.throws(() => step(createState(level), []), /SPAWN_EXHAUSTED/);
+});
+
+test('AC-809 · an empty input array advances the tick and changes no junction', () => {
+  const level = generate(2, 2);
+  const s0 = createState(level);
+  const s1 = step(s0, []);
+  assert.equal(s1.tick, 1);
+  assert.deepEqual(s1.open, s0.open);
+});
+
+test('AC-810 · step() after a terminal state returns a deeply equal state', () => {
+  const spawns = [{ index: 0, tick: 0, colour: 0 }];
+  const level = twoDepotLevel({ spawns, quota: 1 });
+  const done = drive(step, createState(level), new Map(), 400);
+  assert.notEqual(done.phase, 'running');
+  const again = step(done, [{ tick: done.tick, junctionId: 0 }]);
+  assert.deepEqual(again, done);
+});
+
+test('step() does not mutate the state it was given', () => {
+  const level = generate(4, 3);
+  const s0 = createState(level);
+  const snapshot = JSON.stringify({ ...s0, open: Array.from(s0.open), level: null });
+  step(s0, [{ tick: 0, junctionId: 0 }]);
+  assert.equal(JSON.stringify({ ...s0, open: Array.from(s0.open), level: null }), snapshot);
+});
+
+test('MAX_CATCHUP_TICKS is the design value', () => {
+  assert.equal(MAX_CATCHUP_TICKS, 8);
+});
+
+test('AC-135 · the engine entry point imports and runs in bare Node', async () => {
+  const engine = await import('../src/engine/index.js');
+  for (const name of ['step', 'apply', 'createState', 'generate', 'validate', 'advanceClock', 'mix32', 'checkInvariants']) {
+    assert.equal(typeof engine[name], 'function', 'index.js exports ' + name);
+  }
+  const s = engine.step(engine.createState(engine.generate(1, 1)), []);
+  assert.equal(s.tick, 1);
+});
