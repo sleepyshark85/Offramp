@@ -318,16 +318,16 @@ SPAWN_SLACK(band) = (LIVES - 1)        // the misroutes a winning run is allowed
 | Band | `transitMax` | `interval` | `inFlightMax` | observed max in flight | `SPAWN_SLACK` | `SPAWN_COUNT` |
 |---|---|---|---|---|---|---|
 | 1 | 575 | 156 | 5 | 4 | **8** | 24 |
-| 2 | 569 | 138 | 6 | 5 | **9** | 35 |
-| 3 | 536 | 120 | 6 | 5 | **9** | 45 |
-| 4 | 494 | 108 | 6 | 5 | **9** | 57 |
-| 5 | 505 | 96 | 7 | 6 | **10** | 74 |
+| 2 | 569 | 108 | 7 | 6 | **10** | 43 |
+| 3 | 536 | 106 | 7 | 6 | **10** | 51 |
+| 4 | 494 | 110 | 6 | 5 | **9** | 56 |
+| 5 | 505 | 120 | 6 | 5 | **9** | 60 |
 
-Band 1 is unchanged at 8; bands 2–5 gain one or two cars. Measured with an oracle router
-over 2,000 seeds per band in both its shortest-path and longest-path variant, with the two allowed
-misroutes injected, the worst `nextSpawn` reached is `21 / 32 / 42 / 54 / 71`, which under the
-derived counts leaves a margin of **3 / 3 / 3 / 3 / 3** spawns
-([AC-139](acceptance-criteria.md)). The engine asserts `nextSpawn` never reaches `SPAWN_COUNT`
+Measured with an oracle router over 2,000 seeds per band in both its shortest-path and
+longest-path variant, with the two allowed misroutes injected, the worst `nextSpawn` reached is
+`21 / 40 / 48 / 53 / 57`, which under the derived counts leaves a margin of
+**3 / 3 / 3 / 3 / 3** spawns ([AC-139](acceptance-criteria.md)), and the worst margin over all
+20,000 runs is 3. The engine asserts `nextSpawn` never reaches `SPAWN_COUNT`
 ([AC-123](acceptance-criteria.md)).
 
 The derivation matters more than the numbers it currently produces. Every difficulty lever in
@@ -336,12 +336,22 @@ The derivation matters more than the numbers it currently produces. Every diffic
 raises `transitMax`. With the slack written as a literal, a lever pull walks through the margin
 silently; written as a derivation, it recomputes.
 
-**It has now recomputed once, for a change that is not a lever.** `ENTRY_LEN` moved 100 → 160 LU
+**It recomputed once for a change that is not a lever.** `ENTRY_LEN` moved 100 → 160 LU
 for §4.6b, which is a term in `transitMax` — measured, `transitMax` rises 555/550/518/477/489 →
-575/569/536/494/505, and band 2's `inFlightMax` crosses an integer boundary at 569/138 = 4.12, so
-band 2's slack is 9 rather than 8. Nothing else in the table moves, and the observed maximum in
-flight is unchanged at `4 / 5 / 5 / 5 / 6` over 1,000 seeds per band. This is exactly the silent
-walk the derivation exists to catch, arriving through a *geometry* edit rather than a lever.
+575/569/536/494/505, and band 2's `inFlightMax` crossed an integer boundary at 569/138 = 4.12, so
+band 2's slack went to 9. This is exactly the silent walk the derivation exists to catch, arriving
+through a *geometry* edit rather than a lever.
+
+**And once for a change that is.** Round 6 pulled
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed)'s lever 0 at bands 2–5, which
+moves `interval` in both directions at once: down at bands 2 and 3, up at bands 4 and 5. The slack
+follows it — `8 / 9 / 9 / 9 / 10` → `8 / 10 / 10 / 9 / 9` — because `inFlightMax` is
+`floor(transitMax / interval) + 2` and bands 2 and 3 now carry a seventh car while band 5 carries
+one fewer. **Both directions matter and only one of them is a hazard.** Bands 2 and 3 needed more
+slack and the derivation supplied it without anyone noticing it was needed, which is the case
+slice 1 got wrong by hand. Band 5 needed less and the derivation gave that back, which is the case
+a hand-written constant never gets back. The margin was re-measured after the pull, not assumed:
+3 at every band, and 3 as the worst of 20,000 runs.
 
 **Spawn ticks.**
 
@@ -579,8 +589,12 @@ is about the gap between **two cars** at one junction. It says nothing about the
 **appearing** and its first decision, and §4.6b is the case it does not cover.
 
 Two cars arrive at the same junction only if they took the same path to it, so their arrival
-separation equals their spawn separation. The minimum across all bands is band 5's
-`96 - 36 = 60` ticks = **1.00 s**. Band 1 is 2.20 s.
+separation equals their spawn separation. The minimum across all bands is band 3's
+`106 - 36 = 70` ticks = **1.17 s**. Band 1 is 2.20 s. The full set is
+`2.20 / 1.40 / 1.17 / 1.23 / 1.40 s`, and it is not monotone because
+[`generation.md` §6.1](generation.md#61-the-table)'s `interval` column is not
+([`generation.md` §7.4.1](generation.md#741-round-6s-lever-pull-and-the-thing-it-proved-on-the-way));
+what this section claims is a floor, and the floor is 1.00 s.
 
 One second is comfortably above the sum of a human's visual reaction (~250 ms) and tap (~100 ms).
 **No band asks the player to re-flip one junction between two cars inside 400 ms.** The difficulty
@@ -722,10 +736,13 @@ Five bands. Level `N` maps to a band, and the band supplies every parameter.
 | Band | Levels | Colours `K` | Columns `C` | Rows `R` | Junctions drawn `J` | Junctions actionable `Ja` | Depth `D` | Speed (MLU/tick) | Speed (LU/s) | Interval (ticks) | Jitter | Quota |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 1–4 | 3 | 3 | 3 | 3 | ≥3 | 2 | 3000 | 180 | 156 (2.60 s) | ±12 | 16 |
-| 2 | 5–9 | 3 | 4 | 4 | 3–5 | ≥3 | 2–3 | 3200 | 192 | 138 (2.30 s) | ±12 | 26 |
-| 3 | 10–15 | 4 | 4 | 4 | 4–6 | ≥4 | 2–3 | 3400 | 204 | 120 (2.00 s) | ±18 | 36 |
-| 4 | 16–22 | 4 | 5 | 5 | 5–7 | ≥5 | 2–4 | 3600 | 216 | 108 (1.80 s) | ±18 | 48 |
-| 5 | 23+ | 5 | 5 | 6 | 7–8 | ≥7 | 2–4 | 3800 | 228 | 96 (1.60 s) | ±18 | 64 |
+| 2 | 5–9 | 3 | 4 | 4 | 3–5 | ≥3 | 2–3 | 3200 | 192 | **108 (1.80 s)** | ±12 | **33** |
+| 3 | 10–15 | 4 | 4 | 4 | 4–6 | ≥4 | 2–3 | 3400 | 204 | **106 (1.77 s)** | ±18 | **41** |
+| 4 | 16–22 | 4 | 5 | 5 | 5–7 | ≥5 | 2–4 | 3600 | 216 | **110 (1.83 s)** | ±18 | **47** |
+| 5 | 23+ | 5 | 5 | 6 | 7–8 | ≥7 | 2–4 | 3800 | 228 | **120 (2.00 s)** | ±18 | **51** |
+
+`Interval` and `Quota` are the two columns round 6 moved, and
+[`generation.md` §6.1](generation.md#61-the-table) carries the before-and-after in one place.
 
 `J` and `D` ranges are measured outcomes of the generator over 3,000 seeds per band, not targets
 ([`generation.md` §5](generation.md#6-difficulty-parameters-per-band)). `D` is the number of
@@ -747,13 +764,29 @@ the difficulty table may not be paid for it.
 
 | Step | What changes | Why that axis |
 |---|---|---|
-| 1 → 2 | Network widens (3→4 columns), gains a row, quota +10 | Teach that a path can be longer than two decisions before adding a colour |
-| 2 → 3 | **Fourth colour** | The biggest single jump; a new colour is a new thing to hold |
-| 3 → 4 | Network deepens (5 rows), more junctions | Depth, now that four colours are habitual |
-| 4 → 5 | **Fifth colour**, deepest network | The ceiling |
+| 1 → 2 | Network widens (3→4 columns), gains a row, **traffic rises sharply** (2.60 s → 1.80 s between cars), quota 16 → 33 | Level 5 is where the game stops being a tutorial. Band 1's sparseness is deliberate and is not a difficulty setting; this is the one step that spends the whole traffic budget at once |
+| 2 → 3 | **Fourth colour**, traffic rises again (1.80 s → 1.77 s) | A new colour is a new thing to hold. It is also, measured, the *weakest* of the four steps — see below |
+| 3 → 4 | Network deepens (5 rows), more junctions, **traffic eases** (1.77 s → 1.83 s) | Depth, now that four colours are habitual. Each car is a longer job, so the board thins to leave room for it |
+| 4 → 5 | **Fifth colour**, deepest network, traffic eases again (1.83 s → 2.00 s) | The ceiling. The longest jobs on the board, and the most of them to get right in a row |
 
-Speed, spawn interval and quota move monotonically at every step. Colour count and topology
-alternate, so that consecutive bands never feel like the same level with a bigger number.
+**Speed and quota move monotonically at every step. The spawn interval does not, and that is a
+measured result.** It falls through band 3 and then rises, because past band 3 each car takes
+enough attention that adding traffic on top of it takes the clear rate off a cliff rather than down
+a step —
+[`generation.md` §7.4.1](generation.md#741-round-6s-lever-pull-and-the-thing-it-proved-on-the-way)
+has the proof that no other parameter substitutes. What escalates monotonically across the whole
+ladder is **decisions per car** (2.0 / 2.5 / 2.7 / 3.2 / 3.3), **attention demanded** (measured
+focus events per second 1.80 / 2.36 / 2.65 / 3.09 / 3.30) and **cars that must be got right in a
+row** (quota 16 / 33 / 41 / 47 / 51). Colour count and topology alternate, so that consecutive
+bands never feel like the same level with a bigger number.
+
+**One honest note on the 2 → 3 step.** Measured at a common spawn interval, the fourth colour on
+its own is worth about 0.3 pp of per-car error against 0.8 and 1.5 pp for the two topology steps —
+the bot pays per *car held*, not per colour in the world, so a colour costs attention mainly
+through the deeper networks it makes possible. The step still reads as the game's biggest change to
+a player, because a fourth colour is a fourth thing to recognise and a fourth depot to remember,
+and that is why it stays where it is. But the difficulty it buys is bought by the topology that
+comes with it, and a future lever pull should not expect `K` to carry a band on its own.
 
 ### 5.2 Within a level
 
@@ -771,20 +804,24 @@ the streak resets and the player's own state of mind changes. That is enough.
 
 ### 5.3 Session length
 
-| Band | Nominal duration (zero misroutes) | With two misroutes | Design band |
-|---|---|---|---|
-| 1 | 49.4 s | 54.6 s | 42–62 s |
-| 2 | 67.3 s | 71.9 s | 58–78 s |
-| 3 | 79.3 s | 83.3 s | 70–92 s |
-| 4 | 93.2 s | 96.8 s | 84–106 s |
-| 5 | 109.1 s | 112.3 s | 98–122 s |
+| Band | Nominal duration (zero misroutes) | With two misroutes | Measured median | Design band |
+|---|---|---|---|---|
+| 1 | 49.4 s | 54.6 s | 49.3 s | 42–62 s |
+| 2 | 67.4 s | 71.0 s | 68.5 s | 58–78 s |
+| 3 | 80.0 s | 83.5 s | 81.6 s | 70–92 s |
+| 4 | 92.9 s | 96.6 s | 94.9 s | 84–106 s |
+| 5 | 108.3 s | 112.3 s | 110.8 s | 98–122 s |
 
 Nominal duration is `SPAWN_LEAD/60 + (quota - 1) * INTERVAL/60 + transit`, with transit measured
-for a typical two-diagonal path. Every figure is **0.26–0.33 s longer** than slice 1's, which is
-the 60 LU `ENTRY_LEN` gained in §4.6b divided by the band's speed. It is the whole cost of that
-change to this table: no design band moves, no median leaves
-[`generation.md` §7.3](generation.md#73-target-2--completion-time-band)'s window, and the 130 s
-absolute ceiling is untouched at 21 s of headroom.
+for a typical two-diagonal path.
+
+**Round 6's lever pull was chosen so that this table would not move, and it did not.** Lever 0
+holds `(quota - 1) * INTERVAL` while changing `INTERVAL` alone, so the nominal column shifts by at
+most 1.0 s at any band, every measured median is inside its design band, and the slowest run
+anywhere over 10,000 constrained-bot runs is 114.1 s against the 130 s ceiling
+([AC-231](acceptance-criteria.md)). This is the constraint that decides *which* lever is legal:
+moving band 5 to its clear-rate floor by cutting `quota` alone would have implied a 72 s level, and
+a hardest band shorter than its predecessor is not a ladder.
 
 **The band and its justification.** The brief's target is "about two minutes". Two minutes is the
 *ceiling*, not the mean, and treating it as the mean would be wrong: a first level that takes two
@@ -892,16 +929,22 @@ looking at a car, not at the junction they just tapped. This is designed on thro
 [`ui.md` §9](ui.md#9-motion-spec). If the owner prefers off-by-default, only the default
 value of one setting changes.
 
-### 8.6 **Owner recommendation — not a blocker.** Band 5 tap load
-The estimated sustained tap rate at band 5 is **1.03 taps/s** over 109 s. That is high, and it is
-the number most likely to come back from the tester as "too hard". The recommendation is to hold
-the parameters as specified and let the constrained bot arbitrate: if band 5's clear rate falls
-below the 55 % floor ([`generation.md` §7.2](generation.md#72-target-1--constrained-bot-clear-rate)),
-the first lever is the iso-duration pair — raise `interval` and cut `quota` together so the
-completion-time band, which passes today, keeps passing
-([`generation.md` §7.4](generation.md#74-when-a-target-is-missed)). Speed is never a lever:
-reducing it shortens the planning horizon relative to the spawn rate and pushes the game toward
-reaction. This ordering is normative so the fix is not reinvented under time pressure.
+### 8.6 Band 5 tap load — **closed by measurement**
+This was an owner recommendation through slices 0 and 1: the estimated sustained tap rate at band 5
+was **1.03 taps/s** over 109 s, which was high and was "the number most likely to come back from
+the tester as too hard". The recommendation was to hold the parameters and let the constrained bot
+arbitrate — and if band 5's clear rate fell below the 55 % floor, to pull the iso-duration pair
+first.
+
+**That is exactly what happened, and it closes the question.** Band 5's clear rate came in at
+2.6 % against the 55 % floor, round 6 pulled the iso-duration pair (`interval` 96 → 120, `quota`
+64 → 51), and the estimated tap rate fell to **0.83 /s** with the measured rate at **0.71 /s**
+against [AC-233](acceptance-criteria.md)'s 1.25 ceiling. Nothing about the recommendation needed
+deciding by the owner in the end; the clear rate decided it, which is what the instrument is for.
+Speed was never a lever and still is not: reducing it shortens the planning horizon relative to the
+spawn rate and pushes the game toward reaction. The lever order in
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed) is normative so the fix is not
+reinvented under time pressure, and §7.4.1 is the record of it being followed.
 
 ### 8.7 The bot is a model of attention, not of timing — **decided**
 Slice 0's constrained bot constrained only *when* it could tap. Slice 1 measured the consequence:

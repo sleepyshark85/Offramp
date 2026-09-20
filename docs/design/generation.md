@@ -513,10 +513,39 @@ the actionable-junction floor above and nothing else.
 | Band | Levels | `C` | `K` | `R` | `pBranch` | `J` | `Ja` | `D` | `rowH` | `colW` | `diagLen` | Speed MLU/tick | LU/s | Interval | Jitter | Quota | `SPAWN_SLACK` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 1–4 | 3 | 3 | 3 | 0.85 | 3 | 3 | 2 | 400 | 300 | 521 | 3000 | 180 | 156 | ±12 | 16 | 8 |
-| 2 | 5–9 | 4 | 3 | 4 | 0.70 | 3–5 | 3 | 2–3 | 300 | 260 | 415 | 3200 | 192 | 138 | ±12 | 26 | 9 |
-| 3 | 10–15 | 4 | 4 | 4 | 0.80 | 4–6 | 4 | 2–3 | 300 | 260 | 415 | 3400 | 204 | 120 | ±18 | 36 | 9 |
-| 4 | 16–22 | 5 | 4 | 5 | 0.80 | 5–7 | 5 | 2–4 | 240 | 195 | 323 | 3600 | 216 | 108 | ±18 | 48 | 9 |
-| 5 | 23+ | 5 | 5 | 6 | 0.88 | 7–8 | 7 | 2–4 | 200 | 195 | 293 | 3800 | 228 | 96 | ±18 | 64 | 10 |
+| 2 | 5–9 | 4 | 3 | 4 | 0.70 | 3–5 | 3 | 2–3 | 300 | 260 | 415 | 3200 | 192 | **108** | ±12 | **33** | 10 |
+| 3 | 10–15 | 4 | 4 | 4 | 0.80 | 4–6 | 4 | 2–3 | 300 | 260 | 415 | 3400 | 204 | **106** | ±18 | **41** | 10 |
+| 4 | 16–22 | 5 | 4 | 5 | 0.80 | 5–7 | 5 | 2–4 | 240 | 195 | 323 | 3600 | 216 | **110** | ±18 | **47** | 9 |
+| 5 | 23+ | 5 | 5 | 6 | 0.88 | 7–8 | 7 | 2–4 | 200 | 195 | 293 | 3800 | 228 | **120** | ±18 | **51** | 9 |
+
+**`interval` and `quota` moved in round 6 and nothing else in this table did.** The before and
+after, in one place, because it is the whole of what the developer has to change:
+
+| Band | `interval` was → is | `quota` was → is | `SPAWN_SLACK` was → is |
+|---|---|---|---|
+| 1 | 156 → **156** (unchanged) | 16 → **16** (unchanged) | 8 → **8** |
+| 2 | 138 → **108** | 26 → **33** | 9 → **10** |
+| 3 | 120 → **106** | 36 → **41** | 9 → **10** |
+| 4 | 108 → **110** | 48 → **47** | 9 → **9** |
+| 5 | 96 → **120** | 64 → **51** | 10 → **9** |
+
+`SPAWN_SLACK` is derived, not chosen; the column above is what
+[`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed)'s
+formula produces from the new `interval`s, and [AC-139](acceptance-criteria.md)'s oracle sweep has
+been re-run against it (§7.2.4). Every pull is §7.4's **lever 0** — the iso-duration pair — so each
+row's `(quota - 1) · interval` is within a second of what it was and §7.3's duration bands are
+untouched. **The generator is bit-identical:** `interval` and `quota` are consumed only by
+`spawnSchedule`, which draws from the `SPAWN_SALT` stream after the topology is built, so node
+lists, edge lists, junction lists and entry columns are unchanged over 500 seeds × 5 bands —
+verified by comparison, not assumed. §6.2, [AC-211](acceptance-criteria.md),
+[AC-234](acceptance-criteria.md), [AC-242](acceptance-criteria.md),
+[AC-243](acceptance-criteria.md) and [AC-245](acceptance-criteria.md) therefore did not move and
+did not need re-measuring.
+
+**`interval` is no longer monotone across the ladder, and that is a measured result rather than a
+preference.** It falls 156 → 108 → 106 and then *rises* to 110 and 120. §7.4's round-6 record
+contains the proof that it has to, [`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order)
+no longer claims otherwise, and what escalates instead is in §7.2.4.
 
 `D` is `[Dmin, Dmax]` over all root-to-depot paths. `J` is `[Jmin, Jmax]`, the count of junctions
 **drawn**. `Ja` is the floor on junctions that are **actionable** — V13, §5 — and it is a minimum,
@@ -602,19 +631,29 @@ means a repeat is possible. Hence:
 The sustained tap rate is the third difficulty metric. It is derived rather than targeted, and
 the constrained bot measures the true value.
 
-| Band | Spawn rate | Mean depth | Estimated taps/s | Cars in flight |
-|---|---|---|---|---|
-| 1 | 0.385 /s | 2.0 | 0.38 | 3.3 |
-| 2 | 0.435 /s | 2.5 | 0.54 | 3.5 |
-| 3 | 0.500 /s | 2.7 | 0.68 | 3.8 |
-| 4 | 0.556 /s | 3.2 | 0.89 | 3.8 |
-| 5 | 0.625 /s | 3.3 | 1.03 | 4.1 |
+| Band | Spawn rate | Mean depth | Estimated taps/s | Cars in flight, mean | Measured taps/s |
+|---|---|---|---|---|---|
+| 1 | 0.385 /s | 2.0 | 0.38 | 3.0 | 0.42 |
+| 2 | 0.556 /s | 2.5 | 0.69 | 4.3 | 0.61 |
+| 3 | 0.566 /s | 2.7 | 0.76 | 4.2 | 0.73 |
+| 4 | 0.545 /s | 3.2 | 0.87 | 3.8 | 0.70 |
+| 5 | 0.500 /s | 3.3 | 0.83 | 3.4 | 0.71 |
 
 The **cars in flight** column is a mean. The *maximum* is what sizes the spawn schedule, and it is
 derived separately in
 [`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed) —
-`5 / 5 / 6 / 6 / 7` against an observed worst of `4 / 5 / 5 / 5 / 6`. The two columns are not in
+`5 / 7 / 7 / 6 / 6` against an observed worst of `4 / 6 / 6 / 5 / 5`. The two columns are not in
 conflict; reading the mean as the maximum is how the spawn margin came to be one car at band 5.
+
+Two things changed here in round 6 and both are consequences of §6.1's `interval` column, not of
+anything in the generator. The spawn rate now **peaks at band 3** rather than at band 5, and the
+measured tap rate is flat at `0.70 – 0.73 /s` across bands 3–5 where it used to climb. Neither is a
+softening: [AC-233](acceptance-criteria.md)'s ceiling is 1.25 /s and band 5 now reads 0.71, which
+also retires [`gameplay.md` §8.6](gameplay.md#86-band-5-tap-load--closed-by-measurement)'s
+open recommendation — the tap load that was "the number most likely to come back from the tester as
+too hard" was removed by the lever the same section nominated. What rises monotonically instead is
+**focus events per second**, which is the quantity the bot actually pays for: measured
+`1.80 / 2.36 / 2.65 / 3.09 / 3.30` (§7.1.9).
 
 The estimate assumes a junction is in the wrong state half the time, which overstates the true
 rate because consecutive same-colour cars inherit a correct junction. The measured value from
@@ -718,9 +757,10 @@ BOT_SWITCH_TICKS  = 4    // 67 ms to re-focus a car already in the working set: 
 
 BOT_MEMORY_TICKS  = 120  // 2.00 s. An entry not refreshed for this long is dropped and the car's
                          //   colour must be re-observed at full price. Two seconds is shorter than
-                         //   band 1's spawn interval (2.60 s) and longer than band 5's (1.60 s),
-                         //   so memory alone can never carry the bot across the traffic stream,
-                         //   and it carries less of it as the bands get harder.
+                         //   band 1's spawn interval (2.60 s) and at most equal to every other
+                         //   band's (1.77 - 2.00 s after round 6), so memory spans at most one
+                         //   spawn interval anywhere in the game and can never carry the bot
+                         //   across the traffic stream.
 
 BOT_URGENCY_TICKS = 90   // 1.50 s. A glance at a car whose next junction is further away than this
                          //   does not escalate to a focus. It covers acquire (15) + tap gap (11) +
@@ -734,6 +774,14 @@ BOT_LAPSE_PCT     = 3    // 3 % of glances land on nothing — roughly one lost 
 
 BOT_SALT          = 0x5BF03635
 ```
+
+**`BOT_MEMORY_TICKS`' rationale moved in round 6 and the constant did not.** Under §6.1's previous
+`interval` column the ratio of memory to spawn interval was `0.77 / 0.87 / 1.00 / 1.11 / 1.25`, and
+the note above used to end "and it carries less of it as the bands get harder". Under the new
+column it is `0.77 / 1.11 / 1.13 / 1.09 / 1.00`, which no longer falls. The bound that the note was
+*for* — memory never spans more than one spawn interval, so it cannot substitute for looking —
+still holds at every band, and that is what is written above. The band table moved; the instrument
+did not, and §7.4 forbids the reverse.
 
 `BOT_LOOKAHEAD_CARS` from slice 0 is **deleted**. It was the constant that made the three
 readings possible: it described a window over a globally sorted list, and nothing said what the
@@ -848,16 +896,18 @@ statement about a person rather than a gift to the instrument, and all three are
   looking free; this does not touch it.
 - **It fires once per car.** `maxSeen` is monotone, so an onset captures attention on its first
   glance opportunity and never again; afterwards the car is an ordinary member of the
-  round-robin. Measured, captures are exactly one per spawned car — `0.38 / 0.43 / 0.50 / 0.55 /
-  0.62` per second against spawn rates of `0.385 / 0.435 / 0.500 / 0.556 / 0.625` — and 5.3 % to
-  12.6 % of all glances by band.
+  round-robin. Measured under §6.1's round-6 parameters, captures per second are
+  `0.384 / 0.549 / 0.561 / 0.541 / 0.497` against spawn rates of
+  `0.385 / 0.556 / 0.566 / 0.545 / 0.500` — one per spawned car, less the cars still in flight
+  when the level ends, which are never glanced at
+  ([AC-247](acceptance-criteria.md)) — and 5.3 % to 9.9 % of all glances by band.
 - **It is taken out of the same budget.** Total glances per second are unchanged
-  (`7.19 / 6.39 / 6.00 / 5.41 / 4.90` against `7.19 / 6.47 / 6.08 / 5.47 / 4.93`), so the
+  (`7.20 / 5.97 / 5.74 / 5.45 / 5.53` against a pure round-robin's
+  `7.19 / 6.05 / 5.82 / 5.52 / 5.57`, a drift of `+0.1 / −1.3 / −1.4 / −1.3 / −0.7 %`), so the
   capture is a *reallocation*. It is paid for by the rest of the board: working-set evictions
-  per second rise `0.000 / 0.032 / 0.137 / 0.377 / 0.665` → `0.000 / 0.046 / 0.201 / 0.486 /
-  0.759`, and the per-decision failure rate at junctions **other** than the first rises at bands
-  3–5. Attending to a newborn car costs the cars already in flight, which is the correct shape
-  for a model of divided attention.
+  per second rise `0.000 / 0.276 / 0.330 / 0.342 / 0.194` → `0.000 / 0.356 / 0.437 / 0.449 /
+  0.249`, a 29 – 32 % increase at every band that has any. Attending to a newborn car costs the
+  cars already in flight, which is the correct shape for a model of divided attention.
 
 **The cursor is not moved by a capture.** Clobbering it was the defect in one of §7.1.8's
 variants: it restarted the round-robin from the newest car every spawn and starved everything
@@ -969,11 +1019,18 @@ columns side by side:
 
 | Band | cold deadline (ticks) | round-robin scan cycle, `6 × cars in flight` | binds? |
 |---|---|---|---|
-| 1 | 27 | 20 | deadline wins |
-| 2 | 23 | 21 | marginal |
-| 3 | 21 | 23 | latency wins |
+| 1 | 27 | 18 | deadline wins |
+| 2 | 23 | 26 | latency wins |
+| 3 | 21 | 25 | latency wins |
 | 4 | 18 | 23 | latency wins |
-| 5 | 16 | 25 | latency wins |
+| 5 | 16 | 20 | latency wins |
+
+*The right-hand column is recomputed from §6.3's round-6 cars-in-flight means. The crossing moved
+**down** a band — band 2 is now on the latency side — because round 6's lever pull raised the
+traffic at bands 2 and 3 and lowered it at band 5. The left column did not move: it is set by
+`ENTRY_LEN` and the band's speed, neither of which round 6 touched. This is the diagnosis of the
+defect D3 repaired, kept because it is the argument for D3 existing, and D3 is what keeps the
+inequality from mattering.*
 
 **The deadline shrinks with speed; the latency grows with traffic; they cross between bands 2 and
 3.** `ENTRY_LEN = 160` moved the left column up by 20 ticks and the crossing moved up two bands
@@ -1010,7 +1067,11 @@ capture cue; new objects are prioritised, not deferred. §7.4 says a §7.1 rule 
 the model of a human player is shown to be wrong, and this is that case. The rule is in §7.1.5 D3
 and what it does and does not buy is in §7.1.2's table.
 
-**What it does to the measurement**, 1,000 seeds per band, the only change being D3. Every
+**What it does to the measurement**, 1,000 seeds per band, the only change being D3. *These two
+sweeps were taken under §6.1's **round-5** `interval` and `quota` columns, which is the point: the
+comparison is between two sweeps that differ in exactly one rule. Round 6 then moved the band table
+and re-read the same quantity under the new parameters — §7.2.4 has that reading, and this table is
+kept as the evidence for D3 rather than as a current figure.* Every
 junction a car actually crosses is classified as that car's **first** decision or a **later** one,
 and the figure is the share of each class the car left on a branch that cannot reach its colour —
 [AC-246](acceptance-criteria.md)'s definition, and the only definition of `p` used anywhere in
@@ -1051,23 +1112,35 @@ deletes the decision. D3 makes it reachable.
 
 Attention supply is 60 ticks per second. Demand is one focus per junction decision per car:
 
-| Band | cars/s | mean depth | focus events/s needed | cheapest cost each | dearest cost each | ticks/s demanded |
-|---|---|---|---|---|---|---|
-| 1 | 0.385 | 2.0 | 0.77 | 11 | 22 | 8 – 17 |
-| 2 | 0.435 | 2.5 | 1.09 | 11 | 22 | 12 – 24 |
-| 3 | 0.500 | 2.7 | 1.35 | 11 | 22 | 15 – 30 |
-| 4 | 0.556 | 3.2 | 1.78 | 11 | 22 | 20 – 39 |
-| 5 | 0.625 | 3.3 | 2.06 | 11 | 22 | 23 – 45 |
+| Band | cars/s | mean depth | focus events/s, lower bound | cheapest cost each | dearest cost each | ticks/s demanded | focus events/s, **measured** |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.385 | 2.0 | 0.77 | 11 | 22 | 8 – 17 | **1.80** |
+| 2 | 0.556 | 2.5 | 1.39 | 11 | 22 | 15 – 31 | **2.36** |
+| 3 | 0.566 | 2.7 | 1.53 | 11 | 22 | 17 – 34 | **2.65** |
+| 4 | 0.545 | 3.2 | 1.74 | 11 | 22 | 19 – 38 | **3.09** |
+| 5 | 0.500 | 3.3 | 1.65 | 11 | 22 | 18 – 36 | **3.30** |
 
 Cheapest is `BOT_SCAN_TICKS + BOT_SWITCH_TICKS + 1` (the car was still held); dearest is
 `BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS + 1` (it had been forgotten or evicted). Neither figure
 counts glances that land on a car needing nothing, which rise with the number of cars in flight.
-Band 1 sits at a quarter of supply; band 5 sits between 38 % and 75 % of supply *before* wasted
-glances, with 4.1 cars competing for 3 working-set slots so that the dearer figure dominates.
 
-The gradient is a property of the model, not of a tuned constant: the same fixed capacity is
-asked to cover more cars, more colours and more decisions per car at every step up the ladder.
-This is what §7.2's required *shape* is read against.
+**The last column was added in round 6 because the lower bound stopped being monotone and the
+measurement did not.** The bound assumes one focus per decision per car; it therefore reads
+`cars/s × depth` and nothing else, and after round 6's lever pull band 5 carries fewer cars per
+second than band 4 while being a harder board, so the bound inverts at 4 → 5. The measured rate
+does not: `1.80 / 2.36 / 2.65 / 3.09 / 3.30`, rising at every step. The difference between the two
+columns is **re-focus** — a car the bot comes back to because it could not finish with it the first
+time — and that is exactly what a harder board costs. Measured, focuses split into
+`BOT_SWITCH_TICKS` re-focuses and `BOT_ACQUIRE_TICKS` cold ones at
+`1.26 / 1.35 / 1.64 / 2.11 / 2.44` against `0.54 / 1.01 / 1.02 / 0.99 / 0.86` per second: the cold
+half is flat from band 2 up, and every bit of the gradient above it is the board asking to be
+looked at twice. Mean working-set occupancy rises with it, `1.47 / 2.44 / 2.59 / 2.65 / 2.61`
+against a capacity of 3.
+
+The gradient is still a property of the model rather than of a tuned constant — the same fixed
+capacity is asked to cover more decisions per car and more re-visits at every step up the ladder —
+but **the term that carries it is no longer the spawn rate**, and §7.2.4 is where that is stated as
+a design position rather than an observation. This is what §7.2's required *shape* is read against.
 
 #### 7.1.10 Why the clear rate is the wrong number to reason about, and which number is not
 
@@ -1082,25 +1155,83 @@ level asks `N` roughly independent per-car questions and the player answers each
 probability `p`, the clear rate is `P(Binomial(N, p) <= 2)` — a **threshold function of `p`**, with
 its knee at `p* = 2/N`:
 
-| Band | `quota` | `p* = 2/quota` | `p` that produces the band's easiest allowed clear rate | …its hardest | width of the window |
-|---|---|---|---|---|---|
-| 1 | 16 | 12.50 % | 0 % | 5.32 % | 5.32 pp |
-| 2 | 26 | 7.69 % | 2.63 % | 5.02 % | 2.40 pp |
-| 3 | 36 | 5.56 % | 2.81 % | 4.71 % | 1.90 pp |
-| 4 | 48 | 4.17 % | 2.79 % | 4.29 % | 1.50 pp |
-| 5 | 64 | 3.12 % | 2.53 % | 3.85 % | 1.33 pp |
+| Band | `quota` | `p* = 2/quota` | `p` that produces the band's easiest allowed clear rate | …its hardest | width of the window | measured `p` |
+|---|---|---|---|---|---|---|
+| 1 | 16 | 12.50 % | 0 % | 5.31 % | 5.31 pp | **0.92 %** |
+| 2 | 33 | 6.06 % | 2.06 % | 3.94 % | 1.89 pp | **2.53 %** |
+| 3 | 41 | 4.88 % | 2.47 % | 4.14 % | 1.67 pp | **2.88 %** |
+| 4 | 47 | 4.26 % | 2.85 % | 4.38 % | 1.53 pp | **3.38 %** |
+| 5 | 51 | 3.92 % | 3.18 % | 4.83 % | 1.66 pp | **3.80 %** |
 
 **Read the two inner columns as one interval and the consequence is the governing fact of this
-design: every one of bands 2–5 lies inside per-car failure rates of 2.5 % to 5.0 %, and band 1's
-only bound is 5.3 %.** Every difficulty statement this project makes is a claim about **2.5
-percentage points** of per-car reliability, and four of the five bands are stacked inside it.
+design: every band's whole allowed range of difficulty is under two percentage points of per-car
+reliability.** Every difficulty statement this project makes is a claim about one or two
+percentage points of per-car error, and no lever moves a band without moving that number.
+
+**This table is also where round 6's lever pull was decided, and the reason it is not just a
+retune.** Every number below is `P(Binomial(N, p) <= 2)` inverted for a given clear rate, so it is
+arithmetic a reader can re-derive in ten lines without running the game, and it should be
+re-derived rather than taken on trust.
+
+| | band 2 | band 3 | band 4 | band 5 | shape |
+|---|---|---|---|---|---|
+| **old quota** | 26 | 36 | 48 | 64 | |
+| old window floor | 2.63 % | 2.81 % | 2.79 % | 2.53 % | **not monotone** |
+| old window cap | 5.02 % | 4.71 % | 4.29 % | 3.85 % | **falls at every step** |
+| **new quota** | 33 | 41 | 47 | 51 | |
+| new window floor | 2.06 % | 2.47 % | 2.85 % | 3.18 % | **rises at every step** |
+| new window cap | 3.94 % | 4.14 % | 4.38 % | 4.83 % | **rises at every step** |
+
+A ladder whose bands get harder needs a per-car error rate that **rises**. Under the old quotas the
+caps **fell** while the floors did not even rise, so a rising `p` was squeezed from above: the
+whole of a four-band difficulty ladder had to fit between band 2's floor and band 5's cap, which is
+`[2.63 %, 3.85 %]` — **1.23 pp of room**. Under the new quotas the same span is
+`[2.06 %, 4.83 %]` — **2.78 pp**, 2.3× wider — and, more importantly, the floors and caps both step
+*with* the ladder instead of against it.
+
+**This is a statement about room, not about impossibility, and the distinction is worth getting
+right because it was got wrong once already.** §7.2 *was* satisfiable under the old quotas — the
+first draft of this subsection said it was not, and that was wrong. Search the model over monotone
+`p` ladders at 0.01 pp resolution for the one that maximises the *smallest* margin against
+§7.2.2's five windows and R2 and R3 together, and the old ladder's best case is `p = 3.23 %` at
+**all four** of bands 2–5, giving clear rates `100.0 / 95.0 / 89.0 / 79.8 / 65.8 %` and a minimum
+margin of **1.02 pp**. Two things follow, and they are the real finding:
+
+- The only way to satisfy §7.2 under the old quotas was to make bands 2–5 **equally hard per car**
+  and let `quota` alone produce the entire gradient. A rising `p` — which is what an escalating
+  ladder physically is, and what §7.1.9's attention arithmetic predicts — spends margin rather than
+  earning it.
+- **1.02 pp is not a measurable margin.** The binomial standard error on a 1,000-seed clear rate at
+  `p ≈ 0.8` is 1.3 pp, and on the *difference* of two rates it is about 1.8 pp. The best case
+  available under the old quotas sat inside one standard error of failing, so a run that passed and
+  a run that failed would have been the same design.
+
+The same solve under the new quotas gives a best case of **4.96 pp** of minimum margin at
+`p = 3.24 / 3.58 / 3.86 / 4.20 %` — a `p` that **rises**, which is the point: under the new quotas
+an escalating ladder is the optimum rather than the penalty. Both figures are the model's best
+case and neither is a prediction; what the table actually shipped *measures* is 3.4 pp (§7.2.4),
+and that is the number a tester holds this design to. **`quota` is not only a duration knob: it
+sets the per-car error budget, and the *shape* of the quota ladder decides how much room a monotone
+difficulty ladder has to live in.** That is the finding of round 6 and it is more durable than the
+five numbers it produced.
+
+**One limitation, stated because the rest of this subsection leans on the model.** The binomial
+treats a level's `quota` cars as independent trials, and they are not: level difficulty varies, so
+failures cluster and the measured clear rate sits *below* the model's for the same `p`. At the `p`
+column above, the model predicts `100.0 / 95.0 / 88.6 / 78.8 / 69.4 %` against a measured
+`99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`. The windows are therefore the right object for reasoning
+about **shape** — which direction a ladder's room runs, and how much of it there is — and the wrong
+object for predicting a clear rate. Every clear rate quoted anywhere in these documents is
+measured, never inverted from this table.
+
 Three things follow, and they are not negotiable by tuning:
 
 1. **Any structural bit that moves `p` by more than about a point is a switch, not a dial.** It
-   does not matter what the bit is. The dynamic range of bands 2–5 is **2.5 pp** — 2.53 % at the
-   easiest end of band 5's window to 5.02 % at the hardest end of band 2's. Before round 5 the
+   does not matter what the bit is. The dynamic range of bands 2–5 is **2.78 pp** — 2.06 % at the
+   easiest end of band 2's window to 4.83 % at the hardest end of band 5's, and any one band's own
+   range is under 1.9 pp. Before round 5 the
    first decision ran `1.23 / 3.71 / 6.42 / 8.35 / 11.80` pp worse than a later one (§7.1.8),
-   which at bands 2–5 is **1.5 to 4.7 times the width of that whole range**, on the one decision
+   which at bands 2–5 is **1.3 to 4.2 times the width of that whole range**, on the one decision
    every car in the level has to make. Of course the clear rate went to the rails. The 96-point
    swing was the amplifier working correctly on an 8-point input.
 2. **No difficulty lever can repair a defect of that size, and measuring it proves it.** Sweeping
@@ -1118,17 +1249,25 @@ Three things follow, and they are not negotiable by tuning:
    depending on where the band happens to sit. [AC-246](acceptance-criteria.md) is written in `p`
    for exactly this reason, and it is the only guard in the design that can fail *early*.
 
-**What survives after D3, and why it is allowed to.** The row-0 split does not go to zero: at
-1,000 seeds it reads `0.2 / 1.0 / 3.2 / 30.2 / 9.2` pp. The residue at band 4 is not a reliability
-gap — `p_first` and `p_later` are both 1.54 % — it is that a level whose
-row-0 node is a branch **asks every car one more question**, and one more question per car is what
-the difficulty ladder is made of. Conditioned the other way round at band 4 — over buckets of at
-least 20 levels each — the mean junction depth over paths spreads the clear rate by **36.2 pp**
-(88.0 % at depth 3.00 against 51.8 % at 3.25) and drawn `J` spreads it by 12.0 pp (77.1 % at
-`J = 6` against 65.1 % at `J = 7`); the row-0 bit's 30.2 pp now sits *between* them instead of
-dwarfing both at 95.3. It has stopped being a coin flip and become one unit of depth, which is
-what it physically is. A design that wanted it smaller than that would have to stop varying depth,
-and §6.1 is built on varying depth.
+**What survives after D3, and why it is allowed to.** The row-0 split does not go to zero. Under
+§6.1's round-6 parameters, at 1,000 seeds, it reads `0.2 / 4.8 / 17.3 / 25.5 / 29.0` pp — larger at
+bands 2 and 3 than round 5's `0.2 / 1.0 / 3.2 / 30.2 / 9.2`, and for a reason that is the opposite
+of a regression: round 5's bands 2 and 3 were pressed against the 99 % ceiling where no structural
+bit can separate anything, and band 5's 9.2 pp was the floor doing the same thing from below. The
+split is now **monotone in band**, which is the shape a unit of extra depth should have.
+
+The residue is not a reliability gap — [AC-246](acceptance-criteria.md) passes at every band
+(§7.2.4) — it is that a level whose row-0 node is a branch **asks every car one more question**,
+and one more question per car is what the difficulty ladder is made of. Conditioned the other way
+round at band 4, over 1,500 seeds in buckets of at least 20 levels each, the mean junction depth
+over paths spreads the clear rate by **31.3 pp** (93.3 % at depth 2.67 against 62.0 % at 3.25) and
+drawn `J` spreads it by 24.3 pp (93.3 % at `J = 5` against 69.0 % at `J = 7`); the row-0 bit's
+26.7 pp sits *between* them, as it did in round 5. At band 5 the comparison is weaker and the
+reason is visible in the same data: 89 % of band-5 levels have a mean depth of exactly 3.33, so
+there is almost no depth variation left for the row-0 bit to be measured against, and its 30.2 pp
+is simply the largest structural variable that band has. It has stopped being a coin flip and
+become one unit of depth, which is what it physically is. A design that wanted it smaller than that
+would have to stop varying depth, and §6.1 is built on varying depth.
 
 ### 7.2 Target 1 — constrained-bot clear rate
 
@@ -1212,50 +1351,104 @@ band 4 at 0.4 % on one arm and 95.7 % on the other (§7.1.10). This is the first
 the first decision is as reliable as every other decision, which is the condition under which the
 clear rate is a statement about difficulty at all.
 
-1,000 seeds per band, `ENTRY_LEN = 160`, V13 in force, §7.1.5 D3 as written:
+Round 5's reading, taken under the previous `interval` and `quota` columns, was
+`99.9 / 99.3 / 97.2 / 68.9 / 2.6 %` — bands 1 and 4 in band, bands 2 and 3 above it, band 5 far
+below, R2 failing at 1→2 (0.6 pp) and 2→3 (2.1 pp) and R3 failing at 3→4 (28.3 pp) and 4→5
+(66.3 pp). That was the first reading this project ever took on an instrument that had passed its
+own sensitivity guard, and it was the brief for round 6's lever pull. **The targets did not move
+and are not going to**, for the reason §7.2 opens with; §6.1 moved.
 
-| Band | clear rate | §7.2.2 band | row-0 split in clear rate | `p_first` − `p_later` | AC-246 ceiling | median s |
-|---|---|---|---|---|---|---|
-| 1 | **99.9 %** | ≥ 95 % — **in band** | 0.2 pp | −0.39 pp | 3.13 | 49.3 |
-| 2 | 99.3 % | 86–97 % — **above** | 1.0 pp | −0.20 pp | 1.92 | 67.7 |
-| 3 | 97.2 % | 76–92 % — **above** | 3.2 pp | +0.04 pp | 1.39 | 79.9 |
-| 4 | 68.9 % | 66–85 % — **in band** | 30.2 pp | +0.00 pp | 1.04 | 95.2 |
-| 5 | 2.6 % | 55–78 % — **below** | 9.2 pp | +0.63 pp | 0.78 | 112.1 |
+1,000 seeds per band, `ENTRY_LEN = 160`, V13 in force, §7.1.5 D3 as written, §6.1's round-6
+`interval` and `quota`:
 
-Against the previous reading of `98.3 / 77.9 / 40.1 / 20.3 / 2.0 %`, with splits of
-`3.8 / 32.7 / 80.1 / 95.3 / 19.8` pp and AC-246 gaps of `+1.23 / +3.71 / +6.42 / +8.35 / +11.80`.
-**Band 5's `+0.63` against a ceiling of `0.78` is the thinnest margin in the table and is the one
-number here to watch on the next lever pull**, because lever 0 moves `quota` and the ceiling is a
-function of `quota`: raising `interval` and cutting `quota` *loosens* it, which is the direction
-the band needs anyway, but cutting `interval` anywhere would tighten it. **The targets have not moved and are not going to**, for the
-reason §7.2 opens with. What has changed is that the numbers above are now readable: bands 1 and 4
-are in band, bands 2 and 3 are above it, band 5 is far below it, and each of those is a difficulty
-statement that a §7.4 lever can act on — which §7.1.10 demonstrates by sweeping one.
+| Band | clear rate | §7.2.2 band | margin to nearer edge | per-car `p` | row-0 split | `p_first` − `p_later` | AC-246 ceiling | median s |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **99.9 %** | ≥ 95 % — **in band** | +4.9 | 0.92 % | 0.2 pp | −0.39 pp | 3.13 | 49.3 |
+| 2 | **91.5 %** | 86–97 % — **in band** | +5.5 | 2.53 % | 4.8 pp | −0.69 pp | 1.52 | 68.5 |
+| 3 | **81.5 %** | 76–92 % — **in band** | +5.5 | 2.88 % | 17.3 pp | −0.21 pp | 1.22 | 81.6 |
+| 4 | **74.1 %** | 66–85 % — **in band** | +8.1 | 3.38 % | 25.5 pp | +0.10 pp | 1.06 | 94.9 |
+| 5 | **66.0 %** | 55–78 % — **in band** | +11.0 | 3.80 % | 29.0 pp | +0.27 pp | 0.98 | 110.8 |
 
-**R2 and R3 both fail, and differently from before.** R2's ≥ 4 pp gradient fails at 1→2 (0.6 pp)
-and 2→3 (2.1 pp) because bands 1–3 are all pressed against the ceiling; R3's ≤ 15 pp wall rule
-fails at 3→4 (28.3 pp) and 4→5 (66.3 pp). Both are now what they claim to be — statements that the
-*ladder* is mis-spaced — rather than artefacts of a bit the generator flips. **Closing them is
-§7.4's lever order, starting at lever 0, and it is the next round's work and not this one's.** The
-shape of the answer is visible in §7.1.10's lever sweep: band 5's clear rate is a smooth, monotone
-function of `interval` at a fixed duration, which is the property a tunable band has and the
-previous gauge did not.
+| pair | drop | R2 (≥ 4 pp) | R3 (≤ 15 pp) |
+|---|---|---|---|
+| 1→2 | 8.4 pp | **pass**, +4.4 of margin | **pass**, 6.6 to spare |
+| 2→3 | 10.0 pp | **pass**, +6.0 | **pass**, 5.0 |
+| 3→4 | 7.4 pp | **pass**, +3.4 | **pass**, 7.6 |
+| 4→5 | 8.1 pp | **pass**, +4.1 | **pass**, 6.9 |
 
-Completion times are unaffected by D3 and remain in band at every level: medians
-`49.3 / 67.7 / 79.9 / 95.2 / 112.1 s` against §7.3's windows, slowest cleared run anywhere
-113.4 s against the 130 s ceiling.
+**Every clear rate is in band, R2 and R3 pass at all four pairs, and the smallest margin anywhere
+in the table is 3.4 pp.** Re-read at 2,000 seeds the table is `100.0 / 91.9 / 81.5 / 73.8 / 64.6 %`
+with drops of `8.0 / 10.4 / 7.8 / 9.2` — every verdict identical, and every figure inside one
+binomial standard error of the 1,000-seed reading, which is the check that the ladder is a property
+of the design and not of a sample.
+
+**What the per-car column says, and why it is the one to read.** `p` runs
+`0.92 / 2.53 / 2.88 / 3.38 / 3.80 %`, rising at every step, and each value sits inside its own
+band's window from §7.1.10 — at least **0.41 pp above each floor and 1.00 pp below each cap**
+(band 3 is the tightest from below, band 4 from above). That is the ladder working the way the
+design says it works: an unamplified per-car quantity that rises monotonically, read through a
+threshold that turns it into the five clear rates above. It is also the number a regression should
+be stated in, for §7.1.10's reason. **The windows are not a predictor** — §7.1.10's closing
+paragraph says why the binomial sits above the measurement — so this is a statement that the
+ladder has room on both sides, not a derivation of the clear rates in the table above, which are
+measured.
+
+**AC-246 is looser everywhere and loosest where it used to be tightest.** Gaps
+`−0.39 / −0.69 / −0.21 / +0.10 / +0.27` pp against ceilings `3.13 / 1.52 / 1.22 / 1.06 / 0.98`.
+Band 5 was the number to watch — round 5 left it at 81 % of its ceiling — and lever 0 moved it in
+the direction §7.4 predicted, to **28 %**, because raising `interval` and cutting `quota` both help
+it. The check has not lost its teeth: under the round-robin injection the same run reads
+`+1.23 / +7.55 / +8.18 / +8.34 / +9.02` pp and fails at bands 2, 3, 4 and 5, with band 1 correctly
+passing (§8).
+
+**Completion times are inside §7.3's window at every band**, which is what makes this a lever pull
+rather than a trade: medians `49.3 / 68.5 / 81.6 / 94.9 / 110.8 s`, p95
+`52.1 / 71.5 / 84.0 / 97.2 / 113.0 s`, and the slowest run anywhere — cleared or not, over 10,000
+runs — **114.1 s** against [AC-231](acceptance-criteria.md)'s 130 s ceiling. The unconstrained bot
+still clears 100 % at every band with zero misroutes ([AC-220](acceptance-criteria.md)), the
+measured tap rate is `0.42 / 0.61 / 0.73 / 0.70 / 0.71 /s` against
+[AC-233](acceptance-criteria.md)'s 1.25 ceiling, and [AC-139](acceptance-criteria.md)'s spawn
+margin, re-derived and re-run over 2,000 seeds per band in both oracle variants, is **3 at every
+band** — better than the `3 / 3 / 3 / 3 / 3` it replaced only in that its worst case is now
+identical rather than merely adequate.
+
+**What escalates, now that `interval` does not.** This is the design position the new table commits
+to and it should be argued with rather than absorbed. Through bands 1 to 3 the spawn rate rises,
+`0.385 → 0.556 → 0.566 /s`; from band 3 to band 5 it *falls*, to `0.545` and `0.500`. What rises
+across the whole ladder is the demand each car makes — decisions per car `2.0 / 2.5 / 2.7 / 3.2 /
+3.3`, measured focus events per second `1.80 / 2.36 / 2.65 / 3.09 / 3.30` (§7.1.9), per-car error
+`0.92 / 2.53 / 2.88 / 3.38 / 3.80 %` — and the number of cars that have to be got right in a row,
+`quota` at `16 / 33 / 41 / 47 / 51`. The late bands are not quieter; they are boards where each car
+is a longer job and the traffic has to thin to leave room for it. **Traffic was carrying the ladder
+and it could not carry it past band 3**, which §7.4's round-6 record proves rather than asserts.
+
+**What is not fixed by this, and should not be mistaken for fixed.** [AC-240](acceptance-criteria.md)
+still only *asserts* at bands 4 and 5, because its 80 % headroom rule excludes any band clearing
+above that and band 3 now reads 81.5 %. It passes where it asserts, by +25.0 and +31.7 pp against a
+20 pp floor — more headroom than round 5's reading gave it — and band 3's unasserted rise measures
++17.9 pp, which is consistent with the model and is reported. Buying band 3 into AC-240's range
+would mean targeting it below 80 %, which costs the ladder most of its margin against R3 at 2→3;
+that trade was priced and declined, and it is recorded in §7.4 so that it is a decision rather than
+an oversight.
 
 ### 7.3 Target 2 — completion-time band
 
 Measured over successful constrained-bot runs, in seconds of simulated time (`ticks / 60`).
 
-| Band | Nominal | Median must fall in | p95 ceiling | Absolute ceiling, any seed |
-|---|---|---|---|---|
-| 1 | 49.1 s | 42 – 62 s | 68 s | **130 s** |
-| 2 | 67.0 s | 58 – 78 s | 86 s | **130 s** |
-| 3 | 79.0 s | 70 – 92 s | 100 s | **130 s** |
-| 4 | 92.9 s | 84 – 106 s | 114 s | **130 s** |
-| 5 | 108.8 s | 98 – 122 s | 126 s | **130 s** |
+| Band | Nominal | Median must fall in | Measured median | p95 ceiling | Measured p95 | Absolute ceiling, any seed |
+|---|---|---|---|---|---|---|
+| 1 | 49.4 s | 42 – 62 s | 49.3 s | 68 s | 52.1 s | **130 s** |
+| 2 | 67.4 s | 58 – 78 s | 68.5 s | 86 s | 71.5 s | **130 s** |
+| 3 | 80.0 s | 70 – 92 s | 81.6 s | 100 s | 84.0 s | **130 s** |
+| 4 | 92.9 s | 84 – 106 s | 94.9 s | 114 s | 97.2 s | **130 s** |
+| 5 | 108.3 s | 98 – 122 s | 110.8 s | 126 s | 113.0 s | **130 s** |
+
+**The design bands did not move in round 6 and the nominals barely did**, which is the whole point
+of §7.4's lever 0: `(quota - 1) · interval` is held while `interval` alone carries the difficulty.
+The nominal column is
+`SPAWN_LEAD/60 + (quota - 1) · interval/60 + transit`, with the same per-band transit
+[`gameplay.md` §5.3](gameplay.md#53-session-length) uses, and it shifts by at most 1.0 s at any
+band. The slowest run anywhere, cleared or not, over 10,000 runs is 114.1 s.
 
 The 130 s absolute ceiling is the two-minute promise made measurable, with 10 s of headroom for
 the two misroutes a winning run may contain. No seed at any band may exceed it
@@ -1304,15 +1497,26 @@ quota'    = 1 + round( (quota - 1) * interval / interval' )
 ```
 
 This lowers (or raises) difficulty while holding the completion time where it already passes.
-Worked, for band 5 at `interval = 96`, `quota = 64`, `SPAWN_LEAD = 90` ticks and a measured
-transit of 6.5 s:
+Worked, for band 5 as it stood before round 6 — `interval = 96`, `quota = 64`, `SPAWN_LEAD = 90`
+ticks and a measured transit of 6.8 s — with the measured clear rate at each stop, 1,000 seeds:
 
-| `interval'` | `quota'` | nominal duration | inside §7.3's 98–122 s? |
-|---|---|---|---|
-| 96 (today) | 64 | 108.8 s | yes |
-| 108 | 57 | 108.8 s | yes |
-| 120 | 51 | 108.0 s | yes |
-| 132 | 47 | 109.2 s | yes |
+| `interval'` | `quota'` | nominal duration | inside §7.3's 98–122 s? | clear rate | AC-246 gap / ceiling |
+|---|---|---|---|---|---|
+| 96 (was) | 64 | 110.7 s | yes | 2.6 % | +0.63 / 0.78 |
+| 108 | 57 | 110.7 s | yes | 33.7 % | −0.13 / 0.88 |
+| 114 | 54 | 110.6 s | yes | 56.9 % | −0.13 / 0.93 |
+| **120 (is)** | **51** | **109.9 s** | **yes** | **66.0 %** | **+0.27 / 0.98** |
+| 132 | 47 | 111.1 s | yes | 69.8 % | **+1.23 / 1.06 — FAILS** |
+| 144 | 43 | 110.7 s | yes | 80.1 % | **+1.43 / 1.16 — FAILS** |
+
+**Read the last column before the one before it.** Lever 0 is monotone in the clear rate but it is
+*not* monotone in [AC-246](acceptance-criteria.md): past about `interval = 126` the gap starts
+widening again and at 132 it breaks the ceiling, because a long interval makes a car's *later*
+decisions very reliable (`p_later` falls to 0.92 % at 132 and 0.66 % at 144) while its first one is
+still paid for at the cold `BOT_ACQUIRE_TICKS` price and barely improves. The gap is a difference,
+so making everything else easy widens it. Lever 0 therefore has a **ceiling as well as a floor**,
+and a pull that reaches for the top of §7.3's duration window can buy a clear rate and fail the
+guard that §7.4 opens by calling binding. Band 5 sits at 120 partly for this reason.
 
 `interval` must never fall below `2·jitter + 60` ticks, or the minimum flip window drops below
 1.00 s and [`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time) stops
@@ -1363,6 +1567,87 @@ decision's reliability — moved by a factor of 5 to 15 at every band, while tot
 second did not move at all, and the cost landed where the argument said it would, on the cars
 already in flight. A change that improves every number a little is a change to the gauge.
 
+### 7.4.1 Round 6's lever pull, and the thing it proved on the way
+
+Round 6 pulled lever 0 at four of the five bands. The before and after is in §6.1 and the reading
+is in §7.2.4; what belongs here is the order it was pulled in, the two levers that were measured
+and rejected, and the one claim about the game that fell out of it.
+
+**Band 5 first, because it was the band that was pinned.** At `interval = 96` it cleared 2.6 %
+against a 55 % floor. Before reaching for a second lever, the §7.4 order requires lever 0 to be
+exhausted — and it was swept, at 1,000 seeds per stop, in the table above. It reaches 66.0 % at
+`interval = 120` with the duration at 109.9 s and AC-246 at 28 % of its ceiling. Every other band
+followed the same procedure: sweep lever 0 at 1,000 seeds per stop, pick the stop that lands the
+band inside §7.2.2 with the most margin on both sides *and* leaves the adjacent drops inside R2 and
+R3. Band 1 was not pulled, because it misses nothing; §7.4 is a repair order, not a tidying pass.
+
+**Rejected, measured: every structural lever at band 5.** The order below lever 0 says to reduce
+`quota` further, then `pBranch`. Both were priced at band 5's original `interval = 96`, 500 seeds
+each, so that the claim "only lever 0 moves this band" is a measurement rather than an assumption:
+
+| Band-5 variant at `interval = 96` | clear rate | per-car `p` | mean drawn `J` |
+|---|---|---|---|
+| as it was | 2.6 % | 11.0 % | 8.0 |
+| `R` 6 → 5 (band 4's geometry) | 7.8 % | 8.4 % | 7.9 |
+| `pBranch` 0.88 → 0.78, `Ja` 7 → 6 | 3.8 % | 10.8 % | 7.5 |
+| `pBranch` 0.88 → 0.70, `Ja` 7 → 5 | 7.4 % | 9.6 % | 7.0 |
+| `pBranch` 0.88 → 0.60, `Ja` 7 → 4 | 14.6 % | 8.3 % | 6.2 |
+| `K` 5 → 4 | — | — | **generator cannot build it** at `C = 5`, `R = 6` |
+
+Gutting `pBranch` to 0.60 — which costs band 5 a third of its junctions and two of its actionable
+ones, and is far past anything §7.4 would sanction — reaches 14.6 % against a 55 % floor. Dropping
+a row reaches 7.8 %. Removing the fifth colour is not available at all: `C = 5, R = 6, K = 4` fails
+validation on every one of 500 seeds. **`interval` is the only lever that moves band 5**, and that
+is the premise of what follows.
+
+**What that proves: `interval` cannot stay monotone across the ladder.** Two measured facts, and
+the conclusion is arithmetic.
+
+1. Band 5 needs `interval >= 116` to clear 55 %. Measured: `108 → 33.7 %`, `114 → 56.9 %`,
+   `116 → 60.4 %`, and no structural lever closes the gap from below (the table above).
+2. Band 4 needs `interval <= 115` to stay at or under its own 85 % ceiling. Measured:
+   `112 → 80.2 %`, `114 → 83.9 %`, `116 → 86.1 %` — out of band — and R2 additionally requires it
+   to sit at least 4 pp *above* band 5, which pushes it lower still.
+
+So `interval(band 4) < interval(band 5)`, necessarily, and the same argument run one step down
+gives `interval(band 3) < interval(band 4)`: for band 3 to stay above band 4 by R2's 4 pp while
+remaining under its own 92 % ceiling it has to sit at `interval <= 112`, and band 4 is at 110.
+**The escalation ladder's spawn-interval axis inverts after band 3 and no choice of the other
+parameters prevents it.** That is a finding about the game rather than about the tuning: past band
+3, each car is a big enough job that the board cannot also be given more cars.
+[`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order)'s escalation table is
+rewritten accordingly, and §7.2.4 says what carries the ladder instead.
+
+**A second finding, from the same sweeps: `K` is barely a difficulty axis on its own.** At a
+common `interval = 120`, per-car `p` reads `— / 1.25 / 1.53 / 2.29 / 3.80 %` across bands 2–5 — the
+2 → 3 step, whose entire content in §5.1 is the fourth colour, is worth 0.28 pp, against 0.76 pp
+for 3 → 4 (a column and a row) and 1.51 pp for 4 → 5. The reason is mechanical: the bot pays per
+**car held**, not per colour in the world, so a new colour costs attention only through the deeper
+networks and the extra decisions it makes possible. §6.1 already recorded that the `J` axis is
+largely the `K` axis in disguise; this says the `K` axis is largely the **depth** axis in disguise,
+and that the two real axes in this game are *cars per second* and *decisions per car*. A future
+lever pull should reach for those two and treat everything else as their proxy.
+
+**A third finding, which is arithmetic rather than measurement, and is in §7.1.10 because that is
+where the model lives.** `quota` moved as lever 0's passenger, but it is not only a duration term:
+it sets the per-car error budget `2/quota`, and therefore the window of per-car error each band's
+clear-rate target corresponds to. The old `quota` ladder's windows ran *downhill* while an
+escalating ladder's `p` has to run uphill, which left 1.23 pp of total room for the whole
+five-band ladder against the new ladder's 2.78 pp. It was satisfiable — §7.1.10 gives the
+assignment that does it — but only with `p` **flat** across bands 2–5 and 1.02 pp of margin, which
+is inside one standard error of a 1,000-seed reading. **A future lever pull that moves `quota` far
+should re-derive those windows before trusting the clear rates it measures**, because a table that
+has run out of room fails by being unmeasurable rather than by being wrong.
+
+**Priced and declined: buying band 3 into AC-240's assertion range.** [AC-240](acceptance-criteria.md)
+does not assert on a band clearing above 80 %, so at 81.5 % band 3 still reports `n/a`. Targeting it
+at 78 % is reachable — `interval = 105` — but the ladder that follows has band 3 only 2.0 pp above
+its own 76 % floor and the 2→3 drop only 1.4 pp inside R3, against 5.5 pp and 5.0 pp for the table
+that was chosen. A guard that asserts at two bands with +25.0 and +31.7 pp of measured headroom is
+doing its job; a ladder with 1.4 pp of margin is one re-measurement from failing. Margin was
+preferred and this is the record of the trade.
+
+
 ---
 
 ## 8. Harnesses this design assumes exist
@@ -1374,7 +1659,7 @@ already in flight. A change that improves every number a little is a change to t
 | `tools/generator-audit.mjs --actionable --seeds 3000` | Per band: mean and minimum live-junction count under §6.2's lazy-optimal oracle, the share of levels below `Ja`, the mean count of junctions flipped twice or more, and the decorative-junction share of drawn `J` ([AC-243](acceptance-criteria.md)). |
 | `tools/spawn-margin.mjs --seeds 2000` | Per band, both oracle variants, two misroutes injected: the worst `max(nextSpawn)` and the resulting margin against `spawns.length`, which must be ≥ 2 ([AC-139](acceptance-criteria.md)). Re-run after every §7.4 lever move. |
 | `tools/bot.mjs --seeds 1000` | Unconstrained clear rate = 100 %; constrained clear rate within §7.2's table **and** satisfying R2 and R3's shape rules; measured taps/s per band. |
-| `tools/bot.mjs --entry-window` | Per band and per arm of the row-0 bit: the clear rate, **and** the per-car failure rate at each car's first decision against the rate at its other decisions, against [AC-246](acceptance-criteria.md)'s per-band ceiling. The split is reported; the `p` gap is what fails the run. The fault to inject before trusting it is round 3's shipped D3 — a round-robin with no onset capture — which must fail it at every band. |
+| `tools/bot.mjs --entry-window` | Per band and per arm of the row-0 bit: the clear rate, **and** the per-car failure rate at each car's first decision against the rate at its other decisions, against [AC-246](acceptance-criteria.md)'s per-band ceiling. The split is reported; the `p` gap is what fails the run. The fault to inject before trusting it is round 3's shipped sweep — a round-robin with no onset capture — which must fail it at bands **2, 3, 4 and 5**. *It must **pass** at band 1 under the injection, and that is the correct result rather than a hole: band 1 never had the defect at a size its own ceiling could see (`+1.23` pp against 3.13), because `quota = 16` gives it a 12.5 % per-car budget. An injection that failed everywhere would mean the ceiling was not derived from `quota` at all. This row said "at every band" through round 5 and contradicted AC-246's own note; the AC was right and this table was wrong.* |
 | `tools/bot.mjs --attention-report` | Per band, per 1,000 seeds: mean glances/s, mean focus events/s, the split between `BOT_SWITCH_TICKS` and `BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, onset captures/s and captures as a share of glances (§7.1.5 D3), and the count of misroutes caused by a flip the bot made for a car it was holding onto a car it was not (`breaksHeldCar` could not see). These are the numbers that say *why* a band lands where it does, and without them a missed target is unexplainable. |
 | `tools/pacing.mjs` | Completion-time median / p95 / max per band against §7.3. |
 | `tools/replay.mjs --seed N` | A recorded run replays to a deeply equal final state, twice in a row and across machines. |

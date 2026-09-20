@@ -280,9 +280,13 @@ run is allowed injected at the first two opportunities,
 seed 160 consuming 71 of 72 spawns and 30 of 5,000 band-5 seeds finishing with a margin of exactly
 1 — one spawn interval, 1.6 s, from an uncaught throw in the middle of the hardest band. The
 per-band derivation in [`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed)
-restores it to `3 / 2 / 3 / 3 / 3`. This AC is the reason the derivation exists, and
+restored it to `3 / 2 / 3 / 3 / 3`. This AC is the reason the derivation exists, and
 [`generation.md` §7.4](generation.md#74-when-a-target-is-missed) requires it to be re-run after
-every lever move.*
+every lever move. It has been, for round 6's pull: with `SPAWN_SLACK` re-derived to
+`8 / 10 / 10 / 9 / 9` from the new `interval` column, the worst `max(nextSpawn)` over 2,000 seeds
+per band in both variants is `21 / 40 / 48 / 53 / 57` against `SPAWN_COUNT`
+`24 / 43 / 51 / 56 / 60`, leaving a margin of **3 at every band** and a worst margin of 3 over all
+20,000 runs.*
 
 ---
 
@@ -413,6 +417,14 @@ exists to prevent, arriving silently through a band-table edit rather than throu
 **AC-225 · Constrained bot clear rate — band 5**
 **Then** the clear rate is within **55 – 78 %**.
 
+*AC-221 – AC-225's five windows have not moved since they were derived from R1–R4 and they are not
+going to; [`generation.md` §6.1](generation.md#61-the-table)'s `interval` and `quota` columns moved
+instead. Measured after round 6's lever pull, 1,000 seeds per band:
+`99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`, every band in window with at least 4.9 pp of margin to the
+nearer edge; at 2,000 seeds, `100.0 / 91.9 / 81.5 / 73.8 / 64.6 %`. The reading these replace is
+`99.9 / 99.3 / 97.2 / 68.9 / 2.6 %`, which failed AC-222, AC-223, AC-225,
+[AC-237](acceptance-criteria.md) and [AC-238](acceptance-criteria.md).*
+
 **AC-226 · Completion-time band — band 1**
 **Given** `tools/pacing.mjs` over 1,000 successful constrained-bot runs,
 **Then** the median simulated duration is within **42 – 62 s** and p95 ≤ **68 s**.
@@ -475,6 +487,12 @@ of each other is a failure: the ladder is not escalating.*
 **Given** the same five clear rates,
 **Then** no adjacent pair differs by more than **15 percentage points**.
 
+*AC-237 and AC-238 are the pair round 6's lever pull was aimed at, and they are the pair that
+constrains it from both sides at once. Measured after the pull, the four drops are
+`8.4 / 10.0 / 7.4 / 8.1` pp — at least 3.4 pp clear of AC-237's floor and at least 5.0 pp clear of
+AC-238's ceiling — against `0.6 / 2.1 / 28.3 / 66.3` before it, which failed AC-237 at the first
+two pairs and AC-238 at the last two. At 2,000 seeds the drops read `8.0 / 10.4 / 7.8 / 9.2`.*
+
 **AC-239 · The attention report is emitted**
 **Given** `tools/bot.mjs --attention-report --seeds 1000` per band,
 **Then** it reports, per band: glances/s, focus events/s, the split between `BOT_SWITCH_TICKS` and
@@ -491,12 +509,19 @@ every attention constraint removed, every timing constraint kept —
 attention model is what binds the measurement rather than something else wearing its name; a bot
 whose clear rate barely moves when attention is made free is not measuring attention.*
 
-*The rise is asserted at **band 5 only**, and the reason is now a measured one rather than a
-convention. A 20 pp rise needs 20 pp of headroom, so the test is meaningless wherever the
-unmodified bot already clears above 80 % — bands 1–4 report `+0.1 / +0.0 / +0.4 / +4.8 pp` under a
-generator that lifts them to 95–100 %, and those are ceilings, not insensitivity. A band whose
+*The rise is asserted wherever there is room for it to be asserted, and the reason is now a
+measured one rather than a convention. A 20 pp rise needs 20 pp of headroom, so the test is
+meaningless wherever the unmodified bot already clears above 80 %, and such a band is a ceiling,
+not insensitivity. A band whose
 unmodified rate is above 80 % is reported as `n/a (no headroom)` and is not a failure; any band at
-or below 80 % that fails to rise 20 pp **is**. The failure this AC is for looks like slice 1b's:
+or below 80 % that fails to rise 20 pp **is**. Under [`generation.md` §6.1](generation.md#61-the-table)'s
+round-6 parameters the measured rises are `+0.1 / +7.9 / +17.9 / +25.0 / +31.7 pp` against clear
+rates of `99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`, so this AC **asserts at bands 4 and 5 and passes at
+both with more than 5 pp to spare** and reports `n/a` at bands 1–3. Band 3's unasserted `+17.9` is
+reported because it is evidence even where it is not a verdict; targeting band 3 below the 80 %
+line to bring it inside the assertion was priced and declined in
+[`generation.md` §7.4.1](generation.md#741-round-6s-lever-pull-and-the-thing-it-proved-on-the-way),
+because the ladder it produces leaves 1.4 pp of margin against [AC-238](acceptance-criteria.md). The failure this AC is for looks like slice 1b's:
 bands 4 and 5 rising `+2.0` and `+7.4 pp` from 19.7 % and 2.3 %, with plenty of headroom and
 nothing moving — which correctly located a deadline in the **game** that no player model could
 meet ([AC-245](acceptance-criteria.md)), not a fault in the bot.*
@@ -578,13 +603,26 @@ the cheap static check that catches the same defect a generation earlier.*
 **AC-246 · The first decision is as reliable as every other decision**
 **Given** the constrained bot of [`generation.md` §7.1](generation.md#71-the-constrained-solver-bot)
 run over 1,000 seeds per band,
-**When** every junction a car actually crosses is classified as that car's **first** decision (the
-first branch node on its path, where the two branches differ in which depot colours they reach) or
-as a **later** one, and `p_first` and `p_later` are the shares of each class that the car left on a
-branch that cannot reach its colour,
-**Then** `p_first - p_later <= 0.25 * (2 / quota)` at every band — **3.13 / 1.92 / 1.39 / 1.04 /
-0.78** percentage points for bands 1–5 — **and** both figures are reported per band whether or not
+**When** every junction a car actually crosses is classified as a **decision for that car** or not,
+where a junction is a decision for a car if and only if **exactly one of its two outgoing branches
+leads to a depot of that car's own colour** — the test `evaluate` itself applies
+([`generation.md` §7.1.6](generation.md#716-the-helper-functions), `k0 === k1` is NOTHING) — and
+each car's decisions are split into its **first** and its **later** ones, and `p_first` and
+`p_later` are the shares of each class that the car left on a branch that cannot reach its colour,
+**Then** `p_first - p_later <= 0.25 * (2 / quota)` at every band — **3.13 / 1.52 / 1.22 / 1.06 /
+0.98** percentage points for bands 1–5 — **and** both figures are reported per band whether or not
 the check passes.
+
+*The definition above is deliberate and it replaces a parenthesis that had two readings. "The first
+branch node on its path, where the two branches differ in which depot colours they reach" can mean
+**differ for this car's colour** or **differ in their reachable-colour sets**, and only the first
+is a working instrument. Under the set reading a junction counts as a decision for a car it poses
+no question to, so the class is diluted with crossings that cannot be got wrong; measured, the gap
+goes **negative at every band under both sweeps** — `−0.70 / −1.24 / −1.83 / −1.20 / −1.59` pp
+under the correct rule and `−0.49 / −1.34 / −1.26 / −0.75 / −0.47` pp under the round-robin
+injection this AC exists to catch. A check that passes its own fault injection at every band is not
+a check. The per-colour reading reproduces the design's numbers to two decimal places and fails the
+injection at bands 2–5, which is why it is the one written into the **When**.*
 *This is the guard [`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)
 argues for, and the threshold is derived rather than fitted: a level clears on at most `LIVES - 1`
 misroutes in `quota` cars, so `2/quota` is the band's per-car error budget and this allows the one
@@ -592,29 +630,45 @@ decision that every car in the level must make to consume a quarter of it more t
 one. It is stated in `p` and not in a clear rate because `p` is the unamplified quantity — the same
 1 pp drift shows up as anywhere between 0 and 60 points of clear rate depending on where the band
 sits, which is how an 8 pp gap survived two rounds of measurement while looking like a difficulty
-result. Measured under §7.1.5 D3 over 1,000 seeds per band: `-0.39 / -0.20 / +0.04 / +0.00 /
-+0.63` pp, passing everywhere, with band 5 at 81 % of its ceiling and therefore the figure to
-re-read after any lever pull that moves `quota`. The fault to inject is round 3's shipped sweep —
-pure round-robin, no onset capture — which reads `+1.23 / +3.71 / +6.42 / +8.35 / +11.80` pp and
-must fail this at bands **2, 3, 4 and 5**. Band 1 passes under the injection and that is correct,
-not a weakness in the check: band 1 cleared 96.7 % against 99.5 % across the row-0 bit even with
-the defect in force, because at `quota = 16` the per-car budget is 12.5 % and a 1.2 pp gap does not
-reach it. The check fails exactly where the defect was.*
+result. Measured under §7.1.5 D3 and §6.1's round-6 parameters, over 1,000 seeds per band:
+`-0.39 / -0.69 / -0.21 / +0.10 / +0.27` pp, passing everywhere, with band 5 — the tightest — at
+**28 %** of its ceiling, down from 81 % before the lever pull, because raising `interval` and
+cutting `quota` both loosen it. It remains the figure to re-read after any lever pull that moves
+`quota`, in both directions: a pull that raises `quota` tightens the ceiling, and
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed)'s lever-0 table shows the gap
+itself widening again past `interval = 126` at band 5, so this AC bounds lever 0 from above as well
+as below. The fault to inject is round 3's shipped sweep — pure round-robin, no onset capture —
+which reads `+1.23 / +7.55 / +8.18 / +8.34 / +9.02` pp and must fail this at bands **2, 3, 4 and
+5**. Band 1 passes under the injection and that is correct, not a weakness in the check: at
+`quota = 16` the per-car budget is 12.5 % and a 1.2 pp gap does not reach it. The check fails
+exactly where the defect was.*
 
 **AC-247 · Onset capture is an ordering and nothing more**
 **Given** a constrained-bot run at any band,
-**Then** over the whole run the count of glances at a car that had never been glanced at before is
-exactly the number of cars that spawned; the bot's round-robin `cursor` has the same value after a
-capture as before it; a capture sets `busyUntil` to `T + BOT_SCAN_TICKS` exactly as an ordinary
-glance does; and total glances per second differ from a pure round-robin run of the same seeds by
-less than 2 %.
+**Then** over the whole run the count of captures — glances at a car that had never been glanced
+at before — is **exactly equal to the number of distinct cars captured**, and is **less than or
+equal to the number of cars that spawned**, so no car is captured twice and no tick produces more
+than one capture; the bot's round-robin `cursor` has the same value after a capture as before it;
+a capture sets `busyUntil` to `T + BOT_SCAN_TICKS` exactly as an ordinary glance does; and total
+glances per second differ from a pure round-robin run of the same seeds by less than 2 %.
 *Four separate ways for [`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative)
 D3 to decay into the free-attention repair that §7.1.8 rejects twice. The capture must fire once
 per car and not once per tick; it must not clobber the sweep, which is how one of §7.1.8's variants
 starved every older car; it must cost a full glance; and it must come **out of** the attention
-budget rather than adding to it. Measured: captures per second `0.38 / 0.43 / 0.50 / 0.55 / 0.62`
-against spawn rates `0.385 / 0.435 / 0.500 / 0.556 / 0.625`, and glances per second
-`7.19 / 6.39 / 6.00 / 5.41 / 4.90` against a round-robin's `7.19 / 6.47 / 6.08 / 5.47 / 4.93`.*
+budget rather than adding to it.*
+
+*The first clause used to read "exactly the number of cars that spawned", and that is not
+achievable by any correct implementation: a car still in flight when the quota is met or the last
+life is lost is never glanced at, so the ratio of captures to spawns measures `0.993 – 0.997` and
+the AC fails on a bot that is behaving exactly as specified. `captures === distinct cars captured`
+is the identity that is actually true, and it catches the defect the clause was written for —
+a capture firing per tick instead of per car — **strictly harder**, because a per-tick capture
+breaks the identity on the very first car rather than only in aggregate. `captures <= spawned` is
+kept as the one-sided bound that survives the end-of-level truncation. Measured: captures per
+second `0.384 / 0.549 / 0.561 / 0.541 / 0.497` against spawn rates
+`0.385 / 0.556 / 0.566 / 0.545 / 0.500`, the identity holding on every one of 5,000 runs, and
+glances per second `7.20 / 5.97 / 5.74 / 5.45 / 5.53` against a round-robin's
+`7.19 / 6.05 / 5.82 / 5.52 / 5.57` — a drift of `+0.1 / −1.3 / −1.4 / −1.3 / −0.7 %`.*
 
 ---
 
