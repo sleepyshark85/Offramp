@@ -185,6 +185,41 @@ code never reached `main`.
 **Rule:** branch each slice from `main`. If stacking is genuinely necessary, merge in order
 and verify the result is on `main` afterwards.
 
+### 6.6 The verification that used the wrong operator
+
+The orchestrator reported that a naive `floor(50 / (1000/60))` yields 2 rather than 3, as
+evidence that a tick conversion had to be written integer-first. The check had been run, and it
+had printed 2 — in Python, using `//`. Python's float `//` is fmod-based and is **not**
+`floor(a/b)`. In the JavaScript the claim was actually about, `50/(1000/60)` is exactly `3`.
+
+The number was wrong, it went into a verification report, the designer took it in good faith, and
+one step later it was an acceptance criterion — AC-816 — requiring an implementation to produce a
+value no correct implementation can produce.
+
+**Rule:** run the check in the language the claim is about. An operator that is spelled the same
+in two languages is not the same operator, and "I executed it" is only worth something if what
+was executed is the thing being claimed.
+
+**Corollary, and the reason this is worse than §6.1:** a wrong number in a verification report
+does not stay there. Downstream it becomes a specification, and a specification derived from a
+bad measurement produces a check that cannot *pass* — §6.2 in mirror image. Verification output
+is an input to design, so it carries design's burden of proof.
+
+It was caught by the tester's blind pass, which was the one control positioned to catch it. That
+is the argument for the blind pass stated as a measured outcome rather than as a principle.
+
+### 6.7 Editing the spec underneath the pass that was testing it
+
+The designer revised five acceptance criteria while the tester was mid-run verifying the engine
+against them. Nothing was lost — the tester happened to check the amended ACs and confirmed
+them — but its report and the documents disagreed for a window, and reconciling them afterwards
+cost more than sequencing would have.
+
+**Rule:** while a verification pass is running, the artifacts it verifies against are frozen. Run
+the designer and the tester concurrently only when they touch disjoint documents, and when they
+do not, wait. Concurrency that saves ten minutes and costs an hour of reconciliation is not
+concurrency, it is a race.
+
 ---
 
 ## 7. Git workflow
