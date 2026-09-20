@@ -4,7 +4,7 @@
 what the next action is. `docs/development-process.md` says *how* work is done; this says *where
 it is*.
 
-Last updated: developer round 3 committed (`ecabc26`). 102 tests green.
+Last updated: developer round 4 committed (`7b28dd1`). 105 tests green.
 
 ---
 
@@ -28,50 +28,63 @@ Last updated: developer round 3 committed (`ecabc26`). 102 tests green.
 
 ## → The next action
 
-**Designer round 5 is running: the row-0 bimodality.** Everything below it is blocked on that
-answer.
+**Designer round 6: pull the difficulty levers, and fix three AC wording defects.**
 
-Round 3 implemented the entry-geometry translation, V13, per-band `SPAWN_SLACK` and eight new
-ACs. AC-240 now passes at every band with headroom, AC-245 holds, pacing is in band, 102 tests
-green. **It did not fix the thing underneath.** Measured at 400 seeds/band with
-`tools/bot.mjs --entry-window`:
+Round 4 implemented onset capture. **The bimodality is gone** — the row-0 split collapsed from
+0.2/32.7/80.1/95.3/19.8 pp to 0.2/1.0/3.2/30.2/9.2, and AC-246 passes at every band with the
+first decision now as reliable as every other one. 105 tests green, determinism re-verified,
+and §7.2.4 / §7.1.8 / §7.1.10 are now fully re-derivable from this repo.
 
-| Band | cleared when row 0 is a **branch** | cleared when row 0 is a **pass** |
-|---|---|---|
-| 1 | 96.7 % | 99.5 % |
-| 2 | 66.7 % | 100 % |
-| 3 | 17.6 % | 100 % |
-| 4 | **0.3 %** | 96.6 % |
-| 5 | **0 %** | 22.0 % |
+**What is left is the difficulty curve itself.** Clear rates are
+**99.9 / 99.3 / 97.2 / 68.9 / 2.6 %** against targets of ≥95 / 86–97 / 76–92 / 66–85 / 55–78:
 
-Band 4 swings 96 points on one structural coin flip the generator throws at level-creation time.
-A parameter that yields either ~96 % or ~0 % is not a difficulty dial. **The defect is the
-bimodality, not the clear rate** — if fixing it leaves rates below target, that is a lever
-problem for a later round.
+| pair | drop | R2 (≥4 pp) | R3 (≤15 pp) |
+|---|---|---|---|
+| 1→2 | 0.6 pp | **FAIL** | pass |
+| 2→3 | 2.1 pp | **FAIL** | pass |
+| 3→4 | 28.3 pp | pass | **FAIL** |
+| 4→5 | 66.3 pp | pass | **FAIL** |
 
-Mechanism, as far as it has been traced: the cold deadline at band 4 is 18 ticks, a glance costs
-6, and the sweep is round-robin over ascending car id — so the newest car, which has the tightest
-deadline, is visited last. With ~4 cars in flight that is ~24 ticks against an 18-tick deadline.
-Sweep latency scales with cars in flight; the deadline shrinks with speed; they cross between
-bands 3 and 4.
+Bands 1–3 are flat and indistinguishable; bands 4–5 fall off a cliff. This is now a real statement
+about the game, measured on an instrument that has passed its own sensitivity guard — which is
+what the last four rounds bought.
 
-**After the designer answers:** developer round 4 implements it and re-measures the sweep. Then,
-and only then, the difficulty levers — `generation.md` §7.4, starting at Lever 0 (iso-duration:
-raise `interval`, rescale `quota`), never by touching a bot constant.
+Use `generation.md` §7.4's lever order, starting at **Lever 0** (iso-duration: raise `interval`,
+rescale `quota` by `1 + round((quota−1)·interval/interval')`). Constraints that must all still
+hold afterwards: §7.3's duration bands, AC-231's 130 s ceiling, AC-139's spawn margin re-derived
+from the new parameters, AC-233's tap ceiling, AC-234's variety floors, and **AC-246** — band 5
+sits at 81 % of its ceiling, and the ceiling is a function of `quota`, so a lever that cuts
+`quota` loosens it and one that cuts `interval` tightens it. Never touch a bot constant.
 
-**Then slice 1 merges to `main`** and slice 2 begins.
+**Three AC wording defects found by the developer, all confirmed:**
+
+1. **AC-246's parenthesis has two readings, and one is not a working instrument.** Under the
+   reachable-colour-*set* reading the gaps go negative at every band under *both* sweeps, so the
+   check would pass the fault it exists to catch. Tighten it to the per-colour reading.
+2. **AC-247's "exactly the number of cars that spawned" is unachievable** — a car still in flight
+   at level end is never glanced at, so the ratio is 0.998–0.999.
+3. **§8's harness table contradicts AC-246 about band 1**, saying the injection must fail at every
+   band. Band 1 never had the defect and correctly passes.
+
+**After that:** developer round 5 implements and re-measures, then **slice 1 merges to `main`**
+and slice 2 begins.
+
+### Carried into slice 3 — do not lose this one
+
+**AC-517 (a car's arrival is an abrupt onset) is load-bearing for a *measurement*, not just for a
+look.** The visual system originally specified a 140 ms fade-in for arriving cars. A gradual
+luminance ramp is precisely the manipulation that abolishes onset capture — the mechanism the
+whole bot model, and therefore every §7.2 number, now rests on. If the renderer ships a fade-in,
+the drawing falsifies the player model and **nothing in the clear rate would show it.**
 
 ### Still outstanding regardless
 
-- `tools/layout-sweep.mjs` does not exist (`development-process.md` §9, AC-604). It is slice 2,
-  and AC-411's device-matrix clause waits on it.
-- `eas init` has never been run — `app.json` has no `extra.eas.projectId`, so no device build
-  exists and tier 5 has never happened.
-- Two of the design's numbers do not reproduce from this code — band 2's clear rate (77.9 %
-  against a stated 79.3 %) and three distinct-signature counts, one lower each. Both trace to the
-  design's figures coming from patched scratch copies rather than from `src/`. Immaterial to any
-  verdict, but it means **§7.2.4 and §6.2's tables are not re-derivable from the repo**, and a
-  future round should re-state them from a real run.
+- `tools/layout-sweep.mjs` does not exist (`development-process.md` §9, AC-604). Slice 2.
+  AC-411's device-matrix clause waits on it.
+- `eas init` has never been run — no `extra.eas.projectId`, so no device build exists and tier 5
+  has never happened.
+- `docs/design` §6.2's distinct-network counts and drawn-`J` means still differ from this repo in
+  the last digit. Immaterial to every verdict; re-state them from a real run when convenient.
 
 ---
 
