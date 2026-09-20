@@ -192,11 +192,12 @@ edge (narrowest margin is 30 LU).
 3. Road surface — every edge stroked at `ROAD_W` in `--road`
 4. Lane dashes — every edge stroked at 3 LU, dash 20/28, in `--road-dash`
 5. Junction markers, and the lead-highlight arc when armed (§7.3)
-6. **Cars**, ascending by id, each with body, roof glyph and shadow
-7. **Depot-mouth aprons** (§7.6) — one filled path for the opaque cores, then one `saveLayer`
+6. Entry flares (§7.5) — beneath the cars, so a flare never dims the car whose arrival it marks
+7. **Cars**, ascending by id, each with body, roof glyph and shadow
+8. **Depot-mouth aprons** (§7.6) — one filled path for the opaque cores, then one `saveLayer`
    for the fade segments
-8. Depot bodies and depot glyphs
-9. Transient effects sourced from `state.events` (§9)
+9. Depot bodies and depot glyphs
+10. Transient effects sourced from `state.events` (§9)
 
 Cars are painted after junction markers, so **a car is never hidden by a junction marker** — that
 part is unchanged. Cars are painted *before* the depot layer, which is the change slice 1's
@@ -442,11 +443,33 @@ through the top face band. States:
 
 ### 7.5 Car
 
-States: **spawning** (140 ms fade-in over the first 40 LU), **rolling** (steady), **entering the
-mouth** (no change to the car at all — the apron of §7.6 passes over it), **frozen** (level ended
-— 45 % opacity, no motion). There is no *delivered* or *misrouted* car state: by the time either
-resolves the car is beneath the depot layer, and both outcomes are drawn by the depot and the
-mouth (§8.3, §8.4).
+States: **arriving** (see below), **rolling** (steady), **entering the mouth** (no change to the
+car at all — the apron of §7.6 passes over it), **frozen** (level ended — 45 % opacity, no
+motion). There is no *delivered* or *misrouted* car state: by the time either resolves the car is
+beneath the depot layer, and both outcomes are drawn by the depot and the mouth (§8.3, §8.4).
+
+**Arriving — the car appears at full opacity in a single frame.** No fade, no scale-up, no
+ramp of any kind on the car body itself. On the tick a car spawns it is drawn complete: full
+body fill, full glyph, full stroke, at the entry node.
+
+This replaces a 140 ms fade-in over the first 40 LU, and the reason is a rule, not a taste.
+[`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative) D3 says the player
+looks at a newly appeared car **next** rather than last, and that is what makes the first junction
+decision reachable at all
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision),
+§8.10). Attention is captured by an abrupt luminance transient; a gradual onset of the same
+magnitude does not capture it. A fade-in is exactly the manipulation that removes the effect the
+player model now depends on — so the drawing would have been quietly falsifying the design's own
+statement about the player. The fade was also spending 40 of the entry edge's 160 LU — a quarter
+of the only window in the game in which that car's colour can be read — on making the colour hard
+to read.
+
+**Entry flare.** The onset still needs to be *findable* in peripheral vision without the fade, so
+the transient is put somewhere it costs nothing: a ring at the entry node, `--text-mute` at 60 %
+alpha, outer radius 34 LU, 6 LU stroke, scaling 0.6 → 1.4 and fading to zero over 180 ms,
+`ease-out-quad`, drawn **beneath** the car layer (§4.2, step 6). It carries no colour information — the
+car body is the only thing that says which colour arrived — so it never competes with the match
+key and it is unaffected by the colour-blind settings of §6.
 
 ### 7.6 The depot mouth
 
@@ -565,7 +588,7 @@ The shatter originates at the **mouth line** of the terminal edge the car came d
 point at which the car was visible — not at the depot node, so the wrong colour is seen arriving
 at the wrong depot rather than appearing from under it. Six 26 LU fragments in the car's colour
 scatter 60–110 LU, biased upward and outward along the edge tangent, and fade over 320 ms,
-`ease-out-quad`. Fragments are transient effects (draw order step 9) and are therefore drawn
+`ease-out-quad`. Fragments are transient effects (draw order step 10) and are therefore drawn
 **over** the apron and the depot; this is the one thing that is. Depot plays **rejecting**. A
 3 pt `--alert` screen-edge vignette flashes to 30 % and back over 180 ms. One life pip drains
 over 240 ms. Error haptic. **Communicates:** a life is gone and this depot was the wrong one —
@@ -620,7 +643,8 @@ out each beat. No simulation ticks advance during either
 
 | Event | Duration | Easing | What it communicates |
 |---|---|---|---|
-| Car spawn fade-in | 140 ms | `linear` | A new car exists; its colour is now readable |
+| Car arrival | 1 frame | none | A new car exists — an abrupt onset, because §7.5's capture claim depends on it |
+| Entry flare | 180 ms | `ease-out-quad` | Where the new car arrived, findable peripherally, carrying no colour |
 | Junction blade rotate | 120 ms | `ease-out-cubic` | The tap landed |
 | Junction tap ripple | 160 ms | `ease-out-quad` | The tap was received at *this* junction |
 | Junction arm (lead arc) | 180 ms fade in | `ease-out-cubic` | This car is committing to this branch |

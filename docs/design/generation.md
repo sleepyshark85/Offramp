@@ -662,10 +662,11 @@ ask of every constant below is not "is this optimal?" but "is this what a person
 | The network topology, and the set of depot colours reachable from every node | The network is drawn on screen, is static for the whole level, and does not move. A player reads it once during `SPAWN_LEAD` and refers back to a picture that has not changed. Charging for this would measure map-reading, not attention. |
 | The exact position of any car it is currently looking at | Positions are on screen and unambiguous. |
 | Its own tap timing | Motor constraints are modelled explicitly below. |
+| **That a car has just appeared, and where** | An abrupt visual onset is detected pre-attentively and is the classic exogenous capture cue; it does not require a glance, and in this game every onset happens at one fixed location the player already knows. This buys the bot **an ordering of the sweep and nothing else** — it still pays `BOT_SCAN_TICKS` to glance and `BOT_ACQUIRE_TICKS` to read the colour. The sweep has always read `sim.cars` for free to decide where to look next (§7.1.5 D3); this changes *which* free ordering, not whether the ordering is free. [`ui.md` §7.5](ui.md#75-car) is what makes it true of the drawing ([AC-517](acceptance-criteria.md)). |
 
 | **Not** given free | Why |
 |---|---|
-| **Which car to look at next** | A player is not handed a list sorted by urgency. The bot scans (§7.1.5 D). |
+| **Which car to look at next, among the cars already on screen** | A player is not handed a list sorted by urgency. The bot scans them in a fixed spatial round-robin (§7.1.5 D3), which is frequently the wrong order. The one exception is the row above, and it is an exception about an *event*, not about a ranking: an onset says "something appeared there", never "this is the one that needs you most". |
 | **A car's colour** | Binding a colour to a moving object is the expensive operation in this game. It costs focus (§7.1.5 E) and it is forgotten (§7.1.5 A). |
 | **Simultaneous attention to many cars** | Capacity is `BOT_WORKING_SET`. |
 | **Knowing whether a flip hurts a car it has forgotten** | The safe-window check ranges over the working set only (§7.1.6). Capacity limits what the bot can fix *and* what it can avoid breaking. |
@@ -707,8 +708,9 @@ BOT_SCAN_TICKS    = 6    // 100 ms per glance. About ten glances a second — th
 BOT_ACQUIRE_TICKS = 15   // 250 ms to focus a car that is NOT in the working set: find it, read its
                          //   colour, bind the colour to that moving object, recall the depot.
                          //   This is slice 0's BOT_REACTION_TICKS at the same value, reattached to
-                         //   the operation it was always meant to price. A newly spawned car is
-                         //   not a special case — it is simply a car not yet held.
+                         //   the operation it was always meant to price. A newly spawned car pays
+                         //   this in full like any other car not yet held; what a spawn changes is
+                         //   only WHEN it is glanced at (§7.1.5 D3), never what the glance costs.
 
 BOT_SWITCH_TICKS  = 4    // 67 ms to re-focus a car already in the working set: a covert attention
                          //   shift to an already-encoded item. Cheap, but not free — that gap is
@@ -749,7 +751,9 @@ botState = {
   busyUntil:   int,           // ticks strictly before this are consumed by an action in progress
   focus:       carId | null,  // the one car currently focused
   mem:         [ { carId, colour, seenTick } ],   // the working set, oldest first, length <= 3
-  cursor:      carId | null,  // where the scan sweep is
+  cursor:      carId | null,  // where the round-robin sweep is
+  maxSeen:     carId,         // -1 at tick 0. The highest id that has ever been glanced at,
+                              //   which is how an un-glanced onset is identified (§7.1.5 D3).
   lastTapTick: int,           // -BOT_MIN_TAP_GAP at tick 0
 }
 ```
@@ -791,14 +795,22 @@ botTick(sim, bot):
           bot.lastTapTick = T
           return [ { tick: T, junctionId: j } ]
 
-  // ── D. GLANCE. One car per BOT_SCAN_TICKS, in a fixed sweep. This is the only way the bot
-  //       ever learns that a car exists.
+  // ── D. GLANCE. One car per BOT_SCAN_TICKS. This is the only way the bot ever learns a
+  //       car's COLOUR, and the only way it ever binds one to a moving object.
   D1  bot.busyUntil = T + BOT_SCAN_TICKS
   D2  if sim.cars is empty:  return []
-  D3  bot.cursor = nextCarId(sim.cars, bot.cursor)
+  D3  // Onset capture, then the round-robin sweep. See below.
+      g = the smallest id in sim.cars strictly greater than bot.maxSeen, if any
+      if g exists:
+          bot.maxSeen = g
+          glanceAt = g                          // the cursor is NOT moved
+      else:
+          bot.cursor = nextCarId(sim.cars, bot.cursor)
+          glanceAt   = bot.cursor
+          bot.maxSeen = max(bot.maxSeen, glanceAt)
   D4  r = bot.rng.next()                       // exactly one draw per glance; nowhere else
       if r % 100 < BOT_LAPSE_PCT:  return []   // the glance did not land
-  D5  c = the car in sim.cars with id bot.cursor
+  D5  c = the car in sim.cars with id glanceAt
       j = nextJunction(sim, c)                 // §7.1.6
       if j === null:                           // nothing left to decide for this car
           drop the mem entry for c.id if present
@@ -818,12 +830,38 @@ botTick(sim, bot):
       return []
 ```
 
-**The sweep.** `nextCarId(cars, cursor)` is the smallest id in `cars` strictly greater than
-`cursor`; if there is none, or `cursor` is `null`, the smallest id in `cars`. `sim.cars` is
-ascending by id (`gameplay.md` §2.4), so this is a total, deterministic, cyclic sweep and needs
-no sort. Because ids are spawn order and every car moves at the same speed, the sweep runs from
-the car nearest the depots back up to the newest — a fixed spatial sweep, **not** an urgency
-ordering: the first car in the sweep is frequently one with nothing left to decide.
+**The sweep, and the onset that interrupts it.** `nextCarId(cars, cursor)` is the smallest id in
+`cars` strictly greater than `cursor`; if there is none, or `cursor` is `null`, the smallest id in
+`cars`. `sim.cars` is ascending by id (`gameplay.md` §2.4), so this is a total, deterministic,
+cyclic sweep and needs no sort. Because ids are spawn order and every car moves at the same speed,
+the round-robin runs from the car nearest the depots back up to the newest — a fixed spatial sweep,
+**not** an urgency ordering: the car it visits is frequently one with nothing left to decide.
+
+**A car that has never been glanced at goes next, exactly once.** That is D3's `g` branch, and it
+is the only thing in this section that changed in slice 1b round 5. Three properties make it a
+statement about a person rather than a gift to the instrument, and all three are load-bearing:
+
+- **It is an ordering, not an action.** The glance still costs `BOT_SCAN_TICKS`, the focus still
+  costs `BOT_ACQUIRE_TICKS`, and the evaluation still costs its tick. Nothing is free that was
+  not free before: `nextCarId` has always read `sim.cars` without paying, because deciding
+  *where to look* is not the same act as *looking*. §7.1.8 rejects a repair that made the
+  looking free; this does not touch it.
+- **It fires once per car.** `maxSeen` is monotone, so an onset captures attention on its first
+  glance opportunity and never again; afterwards the car is an ordinary member of the
+  round-robin. Measured, captures are exactly one per spawned car — `0.38 / 0.43 / 0.50 / 0.55 /
+  0.62` per second against spawn rates of `0.385 / 0.435 / 0.500 / 0.556 / 0.625` — and 5.3 % to
+  12.6 % of all glances by band.
+- **It is taken out of the same budget.** Total glances per second are unchanged
+  (`7.19 / 6.39 / 6.00 / 5.41 / 4.90` against `7.19 / 6.47 / 6.08 / 5.47 / 4.93`), so the
+  capture is a *reallocation*. It is paid for by the rest of the board: working-set evictions
+  per second rise `0.000 / 0.032 / 0.137 / 0.377 / 0.665` → `0.000 / 0.046 / 0.201 / 0.486 /
+  0.759`, and the per-decision failure rate at junctions **other** than the first rises at bands
+  3–5. Attending to a newborn car costs the cars already in flight, which is the correct shape
+  for a model of divided attention.
+
+**The cursor is not moved by a capture.** Clobbering it was the defect in one of §7.1.8's
+variants: it restarted the round-robin from the newest car every spawn and starved everything
+older. `maxSeen` and `cursor` are independent, and the round-robin resumes exactly where it was.
 
 **The three readings, resolved.** The old text's ambiguity was entirely about what happens when
 the bot looks at a car that needs nothing. Here, that costs a glance plus a focus and the tick
@@ -921,38 +959,93 @@ The last column is the same arithmetic under the 100 LU `ENTRY_LEN`: at band 5 t
 [AC-240](acceptance-criteria.md) caught when it failed at bands 4 and 5 — not an insensitive
 instrument, but a deadline no model of a person could meet, correctly reported.
 
-#### 7.1.8 The repair that was not made to the bot
+**The deadline was only one side of the inequality, and fixing it alone did not close it.** The
+other side is the **latency to the first glance**, and under a pure round-robin that is a function
+of how many cars are in flight, not of the deadline. A new car has the largest id, so the sweep
+reaches it only after every older car; a glance costs 6 ticks and a glance that escalates costs 21
+or 10 more. With `3.3 – 4.1` cars in flight (§6.3) the wait for the newest car's first glance runs
+to 24 ticks of pure scanning and well past 40 when the cycle contains a focus or two. Set the two
+columns side by side:
 
-Slice 1b proposed a second repair alongside the geometry one: because the spawn point is the one
-location on screen a person can watch in advance, let a spawn be **anticipated** — the bot finds a
-car at that known static location without paying `BOT_SCAN_TICKS`, while still paying
-`BOT_ACQUIRE_TICKS` to read its colour. It is a plausible statement about a person and it was
-built and measured over 1,000 seeds per band. **It is rejected, and this section records why so
-that it is not proposed a third time.**
+| Band | cold deadline (ticks) | round-robin scan cycle, `6 × cars in flight` | binds? |
+|---|---|---|---|
+| 1 | 27 | 20 | deadline wins |
+| 2 | 23 | 21 | marginal |
+| 3 | 21 | 23 | latency wins |
+| 4 | 18 | 23 | latency wins |
+| 5 | 16 | 25 | latency wins |
 
-**It breaks the invariant that makes §7.1 a model of attention at all: every act of attention
-consumes time.** A zero-cost glance sets `busyUntil = T`, so a glance that then fails D5's urgency
-gate costs nothing and is retaken on the very next tick — and again, and again, for as long as any
-car sits on the entry edge. In the arm with the longer entry edge the bot spent every one of those
-54 ticks re-glancing at a car it had already decided was not urgent, and did nothing else. Measured
-clear rates went **non-monotonic across the ladder**, which no difficulty model may be: one arm
-read `53.8 / 90.6 / 29.5 / 14.1 / 0.4 %`, with band 1 forty points below band 2. A second variant
-that preserved the sweep cursor instead of clobbering it removed the starvation and kept the
-inversion: `99.2 / 99.9 / 95.4 / 65.2 / 4.4 %`, band 5 barely above the unrepaired bot, because
-attending to every newborn car at the instant it appears is a priority inversion, not a model of
-a person.
+**The deadline shrinks with speed; the latency grows with traffic; they cross between bands 2 and
+3.** `ENTRY_LEN = 160` moved the left column up by 20 ticks and the crossing moved up two bands
+with it — which is why the measured clear rate improved at every band and the *shape* of the
+failure did not change at all. Round 5 measured what that shape cost: see §7.1.10.
 
-**And it is not needed.** With `ENTRY_LEN = 160` and no change to this section at all,
-[AC-240](acceptance-criteria.md) passes at bands 2, 3, 4 and 5 — rises of
-`+20.5 / +59.7 / +61.8 / +47.2 pp` — where before it failed at bands 4 and 5 with `+2.0` and
-`+7.4`. The attention model was never the thing that was broken. It was measuring a game in which
-one decision could not be reached, and saying so.
+#### 7.1.8 Two repairs at the spawn point: one rejected twice, one adopted
 
-The general rule this is an instance of is already written down at the end of §7.4: a constant in
-§7.1 changes only if the *model of a human player* is shown to be wrong. "A person can watch the
-spawn point" is true and is now honoured — by giving the decision at the spawn point enough road to
-happen on, which is a fact about the game, rather than by giving the instrument a free action,
-which is a fact about the gauge.
+Slice 1b proposed letting a spawn be **anticipated**, because the spawn point is the one location
+on screen a person can watch in advance. Round 5 separated that proposal into two claims that had
+been travelling together, measured both, and reached opposite verdicts. The distinction is the
+whole content of this section.
+
+**Rejected, and for the second time: a newborn car is attended to immediately and for free.** Both
+variants built in round 4 found the car at its known static location without paying
+`BOT_SCAN_TICKS`. That breaks the invariant that makes §7.1 a model of attention at all: every act
+of attention consumes time. A zero-cost glance sets `busyUntil = T`, so a glance that then fails
+D5's urgency gate costs nothing and is retaken on the very next tick — and again, for as long as
+any car sits on the entry edge. One arm spent all 54 of those ticks re-glancing at a car it had
+already decided was not urgent and did nothing else; its clear rates went **non-monotonic across
+the ladder** — `53.8 / 90.6 / 29.5 / 14.1 / 0.4 %`, band 1 forty points below band 2 — which no
+difficulty model may be. A second variant that preserved the sweep cursor removed the starvation
+and kept the inversion: `99.2 / 99.9 / 95.4 / 65.2 / 4.4 %`. **This stays rejected.** Attending to
+every newborn car at the instant it appears, for nothing, is a priority inversion and not a model
+of a person.
+
+**Adopted: a car that has never been glanced at is next in the sweep, at full price.** This is a
+different claim and round 4 never tested it. It changes *where attention goes next* and nothing
+else: the glance costs its 6 ticks, the focus costs its 15, the evaluation costs its tick, the
+cursor is untouched, and the capture fires once per car. The case for it is that the round-robin
+was making a specific and wrong claim about people — that a person checks a newly appeared object
+**last**, after every object already on screen. An abrupt visual onset is the canonical exogenous
+capture cue; new objects are prioritised, not deferred. §7.4 says a §7.1 rule changes only when
+the model of a human player is shown to be wrong, and this is that case. The rule is in §7.1.5 D3
+and what it does and does not buy is in §7.1.2's table.
+
+**What it does to the measurement**, 1,000 seeds per band, the only change being D3. Every
+junction a car actually crosses is classified as that car's **first** decision or a **later** one,
+and the figure is the share of each class the car left on a branch that cannot reach its colour —
+[AC-246](acceptance-criteria.md)'s definition, and the only definition of `p` used anywhere in
+these documents:
+
+| Band | `p_first` | `p_later` | gap | before D3: `p_first` / `p_later` / gap |
+|---|---|---|---|---|
+| 1 | **0.38 %** | 0.77 % | **−0.39 pp** | 1.78 % / 0.55 % / +1.23 |
+| 2 | **0.37 %** | 0.57 % | **−0.20 pp** | 4.25 % / 0.54 % / +3.71 |
+| 3 | **0.71 %** | 0.67 % | **+0.04 pp** | 6.85 % / 0.43 % / +6.42 |
+| 4 | **1.54 %** | 1.54 % | **+0.00 pp** | 9.56 % / 1.21 % / +8.35 |
+| 5 | **4.58 %** | 3.94 % | **+0.63 pp** | 14.72 % / 2.91 % / +11.80 |
+
+The first decision was between 5× and 16× less reliable than a later one at bands 2–5, and 3× at
+band 1. It is now indistinguishable from one, and at bands 1 and 2 it is *more* reliable — which is what a captured
+decision should be, and is the check that the rule did something specific rather than something
+general. Band 1 is the control: it never had the defect (`+1.23 pp`, inside its own ceiling) and
+D3 leaves it alone. §7.1.10 says why `p` is the number to read and the clear rate is not, and
+[AC-246](acceptance-criteria.md) is the guard.
+
+**Why the geometry lever was not pulled again instead.** The two act on the same quantity and the
+geometry one is exhausted. Priced over 300 seeds per band with the round-robin sweep left alone,
+growing `ENTRY_LEN` from 160 to 280 LU takes the AC-246 gap to
+`−0.37 / −0.14 / −0.19 / −0.22 / +0.65` pp — it passes, and lands within a tenth of a point of D3
+at band 5 — but §3.2's 60 LU was the entire vertical budget and 120 LU does not exist: the margin
+below the depot row is 10 LU, `rowH` cannot fall below 198, and the rest would have to come out of
+`DESIGN_H`, which rescales every height-bound device in [`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices).
+It would also raise `transitMax`, hence `inFlightMax`, hence `SPAWN_SLACK`, at every band. D3 costs
+the generator, the geometry and the layout **nothing**: no rule, no constant and no node moves.
+
+**And it is not a third bite at forbidding a branch at row 0.** That repair is still rejected on
+the grounds §5.2 gives — it breaks [AC-234](acceptance-criteria.md)'s variety floor at bands 1 and
+3, band 1 falling to thirteen edge topologies — and it is now also rejected on a second measurement:
+it is exactly the row-0-pass arm, which D3 shows clears `99.8 / 100 / 99.6 / 92.8 / 10.9 %`. It
+deletes the decision. D3 makes it reachable.
 
 #### 7.1.9 Why this is expected to bind, arithmetically
 
@@ -975,6 +1068,67 @@ glances, with 4.1 cars competing for 3 working-set slots so that the dearer figu
 The gradient is a property of the model, not of a tuned constant: the same fixed capacity is
 asked to cover more cars, more colours and more decisions per car at every step up the ladder.
 This is what §7.2's required *shape* is read against.
+
+#### 7.1.10 Why the clear rate is the wrong number to reason about, and which number is not
+
+Round 5 was asked to remove a **bimodality**, not to move a clear rate: with `ENTRY_LEN = 160`,
+V13 in force and everything in §7.1 implemented, band 4 cleared **0.4 %** of the levels whose
+row-0 node is a branch and **95.7 %** of the rest, over 1,000 seeds. A parameter that yields
+either ~96 % or ~0 % is not measuring skill. This subsection is the arithmetic that explains both
+why the split was that violent and why it is not a reason to distrust the design's shape.
+
+**A level clears when it collects at most `LIVES - 1 = 2` misroutes across `quota` cars.** So if a
+level asks `N` roughly independent per-car questions and the player answers each wrongly with
+probability `p`, the clear rate is `P(Binomial(N, p) <= 2)` — a **threshold function of `p`**, with
+its knee at `p* = 2/N`:
+
+| Band | `quota` | `p* = 2/quota` | `p` that produces the band's easiest allowed clear rate | …its hardest | width of the window |
+|---|---|---|---|---|---|
+| 1 | 16 | 12.50 % | 0 % | 5.32 % | 5.32 pp |
+| 2 | 26 | 7.69 % | 2.63 % | 5.02 % | 2.40 pp |
+| 3 | 36 | 5.56 % | 2.81 % | 4.71 % | 1.90 pp |
+| 4 | 48 | 4.17 % | 2.79 % | 4.29 % | 1.50 pp |
+| 5 | 64 | 3.12 % | 2.53 % | 3.85 % | 1.33 pp |
+
+**Read the two inner columns as one interval and the consequence is the governing fact of this
+design: every one of bands 2–5 lies inside per-car failure rates of 2.5 % to 5.0 %, and band 1's
+only bound is 5.3 %.** Every difficulty statement this project makes is a claim about **2.5
+percentage points** of per-car reliability, and four of the five bands are stacked inside it.
+Three things follow, and they are not negotiable by tuning:
+
+1. **Any structural bit that moves `p` by more than about a point is a switch, not a dial.** It
+   does not matter what the bit is. The dynamic range of bands 2–5 is **2.5 pp** — 2.53 % at the
+   easiest end of band 5's window to 5.02 % at the hardest end of band 2's. Before round 5 the
+   first decision ran `1.23 / 3.71 / 6.42 / 8.35 / 11.80` pp worse than a later one (§7.1.8),
+   which at bands 2–5 is **1.5 to 4.7 times the width of that whole range**, on the one decision
+   every car in the level has to make. Of course the clear rate went to the rails. The 96-point
+   swing was the amplifier working correctly on an 8-point input.
+2. **No difficulty lever can repair a defect of that size, and measuring it proves it.** Sweeping
+   §7.4's lever 0 across band 5 under the unrepaired bot — `interval` 96 → 156, `quota` 64 → 40, a
+   63 % change with the duration held at 110–113 s — moves the overall clear rate `2.3 → 44.8 %`
+   while the split stays between 22 and 97 pp and gets *worse* in the middle: the pass arm
+   saturates at 100 % long before the branch arm leaves the floor. That is the demonstration that
+   the row-0 split was never a difficulty parameter. Under the repaired D3 the same sweep moves
+   both arms together and the split falls as the band approaches its target — band 5 reads
+   `2.3 / 34.0 / 65.3 / 69.3 / 80.8 / 94.5 %` with splits of `5.6 / 19.2 / 22.4 / 28.8 / 18.7 /
+   3.4` pp.
+3. **The number to state a target against, and to regress against, is `p`, not the clear rate.**
+   `p` is unamplified, it is measurable per decision rather than per level, and a 1 pp change in it
+   is legible where the same change shows up as anything between 0 and 60 points of clear rate
+   depending on where the band happens to sit. [AC-246](acceptance-criteria.md) is written in `p`
+   for exactly this reason, and it is the only guard in the design that can fail *early*.
+
+**What survives after D3, and why it is allowed to.** The row-0 split does not go to zero: at
+1,000 seeds it reads `0.2 / 1.0 / 3.2 / 30.2 / 9.2` pp. The residue at band 4 is not a reliability
+gap — `p_first` and `p_later` are both 1.54 % — it is that a level whose
+row-0 node is a branch **asks every car one more question**, and one more question per car is what
+the difficulty ladder is made of. Conditioned the other way round at band 4 — over buckets of at
+least 20 levels each — the mean junction depth over paths spreads the clear rate by **36.2 pp**
+(88.0 % at depth 3.00 against 51.8 % at 3.25) and drawn `J` spreads it by 12.0 pp (77.1 % at
+`J = 6` against 65.1 % at `J = 7`); the row-0 bit's 30.2 pp now sits *between* them instead of
+dwarfing both at 95.3. It has stopped being a coin flip and become one unit of depth, which is
+what it physically is. A design that wanted it smaller than that would have to stop varying depth,
+and §6.1 is built on varying depth.
 
 ### 7.2 Target 1 — constrained-bot clear rate
 
@@ -1048,31 +1202,48 @@ mind. The bands above are wider and lower because they are now derived from R1�
 interpolated, and because the bot they are read off pays for attention. **No lever has been
 pulled.** §6.1's parameter table is untouched.
 
-#### 7.2.4 The first reading off a gauge that can be trusted, and what it says
+#### 7.2.4 What the instrument reads now, and what is left to do about it
 
-Slice 1b's numbers were read off an instrument measuring the row-0 deadline of §7.1.7 rather than
-attention: at bands 2–5 the clear rate was approximately `P(row 0 is a pass node)`, a topology coin
-flip. With `ENTRY_LEN = 160` and V13 in force, and with **no change to the bot**, the same harness
-over 1,000 seeds per band reads:
+Two readings preceded this one and both were off gauges with a known defect. Slice 1b's numbers
+were taken when the row-0 decision was arithmetically unreachable (§7.1.7). Round 3's were taken
+with `ENTRY_LEN = 160` in code but the round-robin sweep still visiting the newest car last, and
+they were **bimodal**: the clear rate was still approximately a function of the row-0 bit, with
+band 4 at 0.4 % on one arm and 95.7 % on the other (§7.1.10). This is the first reading in which
+the first decision is as reliable as every other decision, which is the condition under which the
+clear rate is a statement about difficulty at all.
 
-| Band | first trustworthy reading | §7.2.2 band | AC-240 rise |
-|---|---|---|---|
-| 1 | **98.0 %** | ≥ 95 % — **in band** | n/a (no headroom) |
-| 2 | 79.3 % | 86–97 % — below | +20.5 pp |
-| 3 | 38.4 % | 76–92 % — below | +59.7 pp |
-| 4 | 19.1 % | 66–85 % — below | +61.8 pp |
-| 5 | 2.0 % | 55–78 % — below | +47.2 pp |
+1,000 seeds per band, `ENTRY_LEN = 160`, V13 in force, §7.1.5 D3 as written:
 
-R2 passes at every pair. R3 fails at all four. **These targets are not being moved to meet this
-reading**, for the reason §7.2 opens with: they are a shape the design requires, derived from
-R1–R4, and a target retuned to whatever the instrument says is not a target. What the reading now
-means is different from what it meant a slice ago, though — the instrument is sensitive at every
-band that has headroom, so the gap between this column and the band column is a statement about
-the **game**, not about the gauge, and it is the first such statement this project has been able
-to make. Closing it is §7.4's lever order, starting at lever 0, and it is a difficulty decision
-taken with the whole sweep in hand rather than a correction to a broken measurement. Completion
-times are unaffected and remain in band at every level: medians `49.4 / 68.3 / 80.2 / 94.3 /
-111.8 s` against §7.3's windows.
+| Band | clear rate | §7.2.2 band | row-0 split in clear rate | `p_first` − `p_later` | AC-246 ceiling | median s |
+|---|---|---|---|---|---|---|
+| 1 | **99.9 %** | ≥ 95 % — **in band** | 0.2 pp | −0.39 pp | 3.13 | 49.3 |
+| 2 | 99.3 % | 86–97 % — **above** | 1.0 pp | −0.20 pp | 1.92 | 67.7 |
+| 3 | 97.2 % | 76–92 % — **above** | 3.2 pp | +0.04 pp | 1.39 | 79.9 |
+| 4 | 68.9 % | 66–85 % — **in band** | 30.2 pp | +0.00 pp | 1.04 | 95.2 |
+| 5 | 2.6 % | 55–78 % — **below** | 9.2 pp | +0.63 pp | 0.78 | 112.1 |
+
+Against the previous reading of `98.3 / 77.9 / 40.1 / 20.3 / 2.0 %`, with splits of
+`3.8 / 32.7 / 80.1 / 95.3 / 19.8` pp and AC-246 gaps of `+1.23 / +3.71 / +6.42 / +8.35 / +11.80`.
+**Band 5's `+0.63` against a ceiling of `0.78` is the thinnest margin in the table and is the one
+number here to watch on the next lever pull**, because lever 0 moves `quota` and the ceiling is a
+function of `quota`: raising `interval` and cutting `quota` *loosens* it, which is the direction
+the band needs anyway, but cutting `interval` anywhere would tighten it. **The targets have not moved and are not going to**, for the
+reason §7.2 opens with. What has changed is that the numbers above are now readable: bands 1 and 4
+are in band, bands 2 and 3 are above it, band 5 is far below it, and each of those is a difficulty
+statement that a §7.4 lever can act on — which §7.1.10 demonstrates by sweeping one.
+
+**R2 and R3 both fail, and differently from before.** R2's ≥ 4 pp gradient fails at 1→2 (0.6 pp)
+and 2→3 (2.1 pp) because bands 1–3 are all pressed against the ceiling; R3's ≤ 15 pp wall rule
+fails at 3→4 (28.3 pp) and 4→5 (66.3 pp). Both are now what they claim to be — statements that the
+*ladder* is mis-spaced — rather than artefacts of a bit the generator flips. **Closing them is
+§7.4's lever order, starting at lever 0, and it is the next round's work and not this one's.** The
+shape of the answer is visible in §7.1.10's lever sweep: band 5's clear rate is a smooth, monotone
+function of `interval` at a fixed duration, which is the property a tunable band has and the
+previous gauge did not.
+
+Completion times are unaffected by D3 and remain in band at every level: medians
+`49.3 / 67.7 / 79.9 / 95.2 / 112.1 s` against §7.3's windows, slowest cleared run anywhere
+113.4 s against the 130 s ceiling.
 
 ### 7.3 Target 2 — completion-time band
 
@@ -1094,7 +1265,16 @@ the two misroutes a winning run may contain. No seed at any band may exceed it
 
 The lever order is normative, so the fix is not reinvented under time pressure.
 
-**Both targets bind at once.** §7.2 and §7.3 are not independent, and slice 1 showed the trap:
+**Three targets bind at once, not two.** [AC-246](acceptance-criteria.md) joined §7.2 and §7.3 in
+round 5: the per-car failure rate at a car's **first** decision may not exceed the rate at its
+other decisions by more than a quarter of the band's per-car life budget, `0.25 × 2/quota` —
+`3.13 / 1.92 / 1.39 / 1.04 / 0.78` pp by band. It binds on every lever pull because every lever
+below moves `quota` and therefore moves the threshold, and because §7.1.10 shows it is the only
+one of the three that is not amplified: a 1 pp drift in it is invisible in the clear rate until it
+is a 40-point cliff. A lever pull that satisfies §7.2 and §7.3 while widening that gap has bought
+a number and sold the game.
+
+**And the other two bind at once.** §7.2 and §7.3 are not independent, and slice 1 showed the trap:
 moving band 5's clear rate from 30 % to a 62 % floor by cutting `quota` alone implied a median
 duration of about 76 s, which breaks §7.3's 98–122 s band — a band that currently passes at every
 seed. **A lever is only pulled if the sweep shows both targets satisfied after the pull.** A
@@ -1172,6 +1352,17 @@ are properties of the instrument, not of the game. Changing one to make a target
 adjusting the gauge to match the reading, and it is forbidden. They change only if the *model of
 a human player* is shown to be wrong, and then every target is re-read, not just the failing one.
 
+§7.1.5's D3 is the worked example of that exception and of its price. The round-robin claimed that
+a person checks a newly appeared object last; that claim is wrong about people, so the rule
+changed — and **every** target was re-read against the new gauge, not only the one that had been
+failing (§7.2.4). Two tests distinguish that from tuning the gauge, and a future proposal should
+be made to answer both. Did the change buy the bot anything it did not already have for free? D3
+reorders a read of `sim.cars` that `nextCarId` was already making for nothing, and adds no action
+and removes no cost. Is the effect specific? The quantity D3 was argued to fix — the first
+decision's reliability — moved by a factor of 5 to 15 at every band, while total glances per
+second did not move at all, and the cost landed where the argument said it would, on the cars
+already in flight. A change that improves every number a little is a change to the gauge.
+
 ---
 
 ## 8. Harnesses this design assumes exist
@@ -1183,7 +1374,8 @@ a human player* is shown to be wrong, and then every target is re-read, not just
 | `tools/generator-audit.mjs --actionable --seeds 3000` | Per band: mean and minimum live-junction count under §6.2's lazy-optimal oracle, the share of levels below `Ja`, the mean count of junctions flipped twice or more, and the decorative-junction share of drawn `J` ([AC-243](acceptance-criteria.md)). |
 | `tools/spawn-margin.mjs --seeds 2000` | Per band, both oracle variants, two misroutes injected: the worst `max(nextSpawn)` and the resulting margin against `spawns.length`, which must be ≥ 2 ([AC-139](acceptance-criteria.md)). Re-run after every §7.4 lever move. |
 | `tools/bot.mjs --seeds 1000` | Unconstrained clear rate = 100 %; constrained clear rate within §7.2's table **and** satisfying R2 and R3's shape rules; measured taps/s per band. |
-| `tools/bot.mjs --attention-report` | Per band, per 1,000 seeds: mean glances/s, mean focus events/s, the split between `BOT_SWITCH_TICKS` and `BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, and the count of misroutes caused by a flip the bot made for a car it was holding onto a car it was not (`breaksHeldCar` could not see). These are the numbers that say *why* a band lands where it does, and without them a missed target is unexplainable. |
+| `tools/bot.mjs --entry-window` | Per band and per arm of the row-0 bit: the clear rate, **and** the per-car failure rate at each car's first decision against the rate at its other decisions, against [AC-246](acceptance-criteria.md)'s per-band ceiling. The split is reported; the `p` gap is what fails the run. The fault to inject before trusting it is round 3's shipped D3 — a round-robin with no onset capture — which must fail it at every band. |
+| `tools/bot.mjs --attention-report` | Per band, per 1,000 seeds: mean glances/s, mean focus events/s, the split between `BOT_SWITCH_TICKS` and `BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, onset captures/s and captures as a share of glances (§7.1.5 D3), and the count of misroutes caused by a flip the bot made for a car it was holding onto a car it was not (`breaksHeldCar` could not see). These are the numbers that say *why* a band lands where it does, and without them a missed target is unexplainable. |
 | `tools/pacing.mjs` | Completion-time median / p95 / max per band against §7.3. |
 | `tools/replay.mjs --seed N` | A recorded run replays to a deeply equal final state, twice in a row and across machines. |
 

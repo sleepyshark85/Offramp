@@ -567,6 +567,55 @@ another car cannot start immediately. At `ENTRY_LEN = 100` the measured values w
 `34 / 32 / 30 / 28 / 27` — band 5 failed this floor by 13 ticks, on a junction every car in the
 level crosses, and the constrained bot emitted zero taps there across 269 levels that had one.*
 
+*This floor is **necessary and not sufficient**, and round 5 had to measure that to find it out. It
+prices the decision from the moment the player starts it and says nothing about how long they take
+to start — a term that grows with traffic while this one shrinks with speed
+([`generation.md` §7.1.7](generation.md#717-the-first-decision-deadline-and-why-the-bot-must-not-be-given-it-for-free)).
+With this AC passing at every band the first decision was still being answered wrongly 20.6 % of the
+time per car at band 4. [AC-246](acceptance-criteria.md) is the sufficient condition and this AC is
+the cheap static check that catches the same defect a generation earlier.*
+
+**AC-246 · The first decision is as reliable as every other decision**
+**Given** the constrained bot of [`generation.md` §7.1](generation.md#71-the-constrained-solver-bot)
+run over 1,000 seeds per band,
+**When** every junction a car actually crosses is classified as that car's **first** decision (the
+first branch node on its path, where the two branches differ in which depot colours they reach) or
+as a **later** one, and `p_first` and `p_later` are the shares of each class that the car left on a
+branch that cannot reach its colour,
+**Then** `p_first - p_later <= 0.25 * (2 / quota)` at every band — **3.13 / 1.92 / 1.39 / 1.04 /
+0.78** percentage points for bands 1–5 — **and** both figures are reported per band whether or not
+the check passes.
+*This is the guard [`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)
+argues for, and the threshold is derived rather than fitted: a level clears on at most `LIVES - 1`
+misroutes in `quota` cars, so `2/quota` is the band's per-car error budget and this allows the one
+decision that every car in the level must make to consume a quarter of it more than an ordinary
+one. It is stated in `p` and not in a clear rate because `p` is the unamplified quantity — the same
+1 pp drift shows up as anywhere between 0 and 60 points of clear rate depending on where the band
+sits, which is how an 8 pp gap survived two rounds of measurement while looking like a difficulty
+result. Measured under §7.1.5 D3 over 1,000 seeds per band: `-0.39 / -0.20 / +0.04 / +0.00 /
++0.63` pp, passing everywhere, with band 5 at 81 % of its ceiling and therefore the figure to
+re-read after any lever pull that moves `quota`. The fault to inject is round 3's shipped sweep —
+pure round-robin, no onset capture — which reads `+1.23 / +3.71 / +6.42 / +8.35 / +11.80` pp and
+must fail this at bands **2, 3, 4 and 5**. Band 1 passes under the injection and that is correct,
+not a weakness in the check: band 1 cleared 96.7 % against 99.5 % across the row-0 bit even with
+the defect in force, because at `quota = 16` the per-car budget is 12.5 % and a 1.2 pp gap does not
+reach it. The check fails exactly where the defect was.*
+
+**AC-247 · Onset capture is an ordering and nothing more**
+**Given** a constrained-bot run at any band,
+**Then** over the whole run the count of glances at a car that had never been glanced at before is
+exactly the number of cars that spawned; the bot's round-robin `cursor` has the same value after a
+capture as before it; a capture sets `busyUntil` to `T + BOT_SCAN_TICKS` exactly as an ordinary
+glance does; and total glances per second differ from a pure round-robin run of the same seeds by
+less than 2 %.
+*Four separate ways for [`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative)
+D3 to decay into the free-attention repair that §7.1.8 rejects twice. The capture must fire once
+per car and not once per tick; it must not clobber the sweep, which is how one of §7.1.8's variants
+starved every older car; it must cost a full glance; and it must come **out of** the attention
+budget rather than adding to it. Measured: captures per second `0.38 / 0.43 / 0.50 / 0.55 / 0.62`
+against spawn rates `0.385 / 0.435 / 0.500 / 0.556 / 0.625`, and glances per second
+`7.19 / 6.39 / 6.00 / 5.41 / 4.90` against a round-robin's `7.19 / 6.47 / 6.08 / 5.47 / 4.93`.*
+
 ---
 
 ## 300 — Input
@@ -777,6 +826,22 @@ the depot body; and the rejecting depot desaturates over the same 350 ms
 **Then** the sampled colour equals the colour of a single fade segment at the same alpha —
 the fades are composited in one `saveLayer` and the cores are one filled path
 ([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
+
+**AC-517 · A car's arrival is an abrupt onset**
+**Given** the frame on which a car spawns and the frames after it,
+**Then** the car body, its glyph and its stroke are drawn at **full** opacity and full scale on the
+first frame the car exists, with no fade, ramp or scale-up applied to the car at any point on the
+entry edge; and the entry flare of [`ui.md` §7.5](ui.md#75-car) is drawn beneath the car layer and
+carries none of the car's colour.
+*The player model this design's targets are read off asserts that a newly appeared car is looked at
+**next** rather than last, and that is the only reason the first junction decision is reachable
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision),
+§8.10, [AC-246](acceptance-criteria.md)). Attention is captured by an abrupt luminance transient and
+a gradual onset of the same magnitude does not capture it, so a fade-in would make the drawing
+falsify the design's own claim about the player — silently, and in the one place it could not be
+detected from a clear rate. The 140 ms fade-in specified through slice 1b was also spending 40 of
+the entry edge's 160 LU making the colour unreadable inside the only window in which that car's
+colour can be read.*
 
 ---
 

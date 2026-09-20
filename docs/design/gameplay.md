@@ -637,6 +637,28 @@ other window. The 60 LU that fixes it is taken from the blank margin under the d
 costs nothing else; the derivation and what it does not cost are in
 [`generation.md` §3.2](generation.md#32-site-coordinates) and §8.9 below.
 
+**The floor is necessary and it is not sufficient, which round 5 had to measure to find out.**
+`firstDecisionTicks >= 40` prices the decision *once the player has started it*. It says nothing
+about how long the player takes to start, and that is the other half of the inequality: the time
+to first notice a car is a function of how many other cars are competing for attention, so it
+**grows with traffic** while the window above **shrinks with speed**
+([`generation.md` §7.1.7](generation.md#717-the-first-decision-deadline-and-why-the-bot-must-not-be-given-it-for-free)).
+With `ENTRY_LEN = 160` the floor passes at every band and each car was still answering its
+**first** junction decision wrongly `1.8 / 4.3 / 6.9 / 9.6 / 14.7 %` of the time, against
+`0.6 / 0.5 / 0.4 / 1.2 / 2.9 %` for its later ones — the same car, the same level, the same
+player model, three to sixteen times less reliable at the one decision every car has to make. What closed it was not more road. It was the observation that a car
+arriving is an **abrupt onset**, that a person looks at a new thing next rather than last, and
+that the player model had been asserting the opposite. The rule is
+[`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative) D3 and the design
+consequence is §8.10 below.
+
+**This is therefore a claim the drawing has to keep.** If a car's arrival is not an abrupt
+luminance transient on screen, the onset does not capture attention, and the first decision goes
+back to being found by search. [`ui.md` §7.5](ui.md#75-car) is where that is specified and
+[AC-517](acceptance-criteria.md) is where it is checked. A 140 ms fade-in — which is what §7.5
+specified before round 5 — is precisely the manipulation that removes capture, and it was also
+spending a quarter of the entry edge making the colour unreadable.
+
 ### 4.7 Every level is solvable, provably
 
 The generator guarantees every depot is reachable from the entry and every junction has both
@@ -890,8 +912,10 @@ of dividing attention, which is the only thing this game is about.
 
 [`generation.md` §7.1](generation.md#71-the-constrained-solver-bot) now specifies a bounded
 working set of three cars, a cost in ticks to focus a car, a higher cost to focus one it has
-forgotten, a memory that expires after two seconds, and a fixed sweep that must *find* the next
-car rather than being handed a sorted list. The line it draws is deliberate: **the static picture
+forgotten, a memory that expires after two seconds, and a sweep that must *find* the next car
+rather than being handed a sorted list — with one exception added in round 5, that a car which has
+just appeared is looked at next rather than last (§8.10). The exception is about an **event**, not
+a ranking, and it changes the order of the sweep without changing the price of anything in it. The line it draws is deliberate: **the static picture
 is free, the moving objects are not.** A player reads the network once and refers back to a
 drawing that has not changed; what costs them is keeping four coloured cars bound to four
 positions while the board keeps producing more.
@@ -945,5 +969,53 @@ over-corrects: with it in force the constrained bot clears `100 / 100 / 99.9 / 9
 row-0 decision removes so much load that attention stops binding until band 5. The window needed to
 be made fair, not removed.
 
-**Rejected: change the bot instead.** See
-[`generation.md` §7.1.8](generation.md#718-the-repair-that-was-not-made-to-the-bot).
+**Rejected: give the bot a free look at the spawn point.** See
+[`generation.md` §7.1.8](generation.md#718-two-repairs-at-the-spawn-point-one-rejected-twice-one-adopted).
+That rejection stands. §8.10 is the part of the same proposal that did not deserve it.
+
+### 8.10 A new car is looked at next, and the entry shows no preview — **decided**
+
+`ENTRY_LEN = 160` fixed the arithmetic of §4.6b and did not fix the game. Round 5 measured what
+was left: each car was answering its **first** junction decision wrongly
+`1.8 / 4.3 / 6.9 / 9.6 / 14.7 %` of the time against `0.6 / 0.5 / 0.4 / 1.2 / 2.9 %` for its later
+ones, and because a level clears only on at most two misroutes in `quota` cars, a per-car gap of
+that size becomes a **pass/fail switch** at the level — band 4 cleared 0.4 % of the levels that
+branch at row 0 and 95.7 % of the rest. [`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)
+gives the arithmetic of that amplification and shows that no difficulty lever can reach it.
+
+**Taken: a car that has never been looked at is looked at next.** The player model's sweep visited
+the newest car **last**, and that is a wrong claim about people: an abrupt onset is the standard
+exogenous capture cue, and in this game every onset happens at one fixed location the player
+already knows. The rule costs the full glance and the full colour read; it only reorders. It takes
+the first decision's failure rate to `0.4 / 0.4 / 0.7 / 1.5 / 4.6 %` — level with, and at two
+bands better than, a later decision — and it costs the rest of the board, which is the right place
+for it to cost something.
+
+**Rejected: show the next car's colour at the entry.** A preview queue is the genre's usual answer
+and it is the one change here that would have altered what the player is allowed to know. Three
+reasons, in order of weight.
+
+1. **It changes the subject of the game.** Offramp's pressure is dividing attention between cars
+   already in flight (§1). A preview creates one screen element that is *always* worth watching and
+   makes the optimal line "watch the queue, pre-set the entry junction" — attention concentrated on
+   a HUD rather than divided across the board. [`generation.md` §7.1.3](generation.md#713-constants)
+   already draws this line explicitly, in `BOT_URGENCY_TICKS`' rationale: the player must not be
+   able to pre-solve the board at leisure.
+2. **It does not fix the mechanism.** A preview lengthens the first-decision window from the entry
+   transit (43–54 ticks) to the spawn separation (60–132 ticks). It does nothing about the
+   *latency to first attention*, which is the term that scales with traffic
+   ([`generation.md` §7.1.7](generation.md#717-the-first-decision-deadline-and-why-the-bot-must-not-be-given-it-for-free))
+   — the preview slot is one more thing to find in the sweep. The crossing point would move up a
+   band or two and then recur, and the next round would be having this conversation about band 5.
+   The priced proxy is in §7.1.8: `ENTRY_LEN = 280` buys a window of the size a preview buys and
+   leaves a 19.3 pp split at band 4.
+3. **There is nowhere to put it.** §8.9 established that the vertical budget is spent: 10 LU below
+   the depot row, `rowH` at its floor at band 5. A preview strip would come out of the board, and
+   [`ui.md` §1](ui.md#1-identity)'s premise is that the road network *is* the screen.
+
+**What the rejection commits the drawing to instead.** If the first decision is reachable because
+a car's arrival captures attention, then a car's arrival has to be an abrupt luminance transient —
+a gradual ramp is the manipulation that removes capture. [`ui.md` §7.5](ui.md#75-car)'s 140 ms
+fade-in is replaced by an abrupt appearance with a separate entry flare, and
+[AC-517](acceptance-criteria.md) checks it. That is the whole cost of this decision on the render
+side, and it was also returning a quarter of the entry edge to being legible.
