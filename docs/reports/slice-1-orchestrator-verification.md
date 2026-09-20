@@ -82,3 +82,39 @@ right resolution; the ACs still need reconciling so the next reader does not hit
 - `TRANSITION_STATS` / `GEN_STATS` module-level instrumentation — they never affect a result and
   they let AC-118 and AC-203 be observed rather than argued. Accepted for now; revisit if they
   ever leak into a code path that matters.
+
+---
+
+## Correction — the AC-805 finding above is half wrong, and the wrong half propagated
+
+Written after the tester's blind pass caught it. The claim in "Two spec defects confirmed
+independently" that *"a naive `floor(50 / (1000/60))` yields 2, not 3"* is **false**.
+
+In Node 24, `50 / (1000/60)` is exactly `3` — bit pattern `0x4008000000000000`, no rounding
+error at all — so `Math.floor` of it is `3`. The integer-first form gives `3` too. **The two
+forms agree at 50 ms.**
+
+**How the error was made.** The check was run in Python as `50 // (1000/60)`, which returned
+`2.0`. Python's float `//` is not `floor(a/b)`: it is computed from `fmod` and can differ in the
+last place. `math.floor(50/(1000/60))` in the same Python returns `3`, agreeing with Node. The
+verification used an operator that does not correspond to the JavaScript being reasoned about,
+which is the §6.1 failure shape exactly — a premise that looked executed but was not executed
+*on the thing it was a premise about*.
+
+**What survives.** AC-805's original "0.33 ms remainder" is still wrong: 50 ms is exactly 3 ticks
+at 60 Hz, so the remainder is 0 ms. The integer-first form is still the right thing to ship, for
+the ordinary reason that it cannot drift, not because 50 ms distinguishes it.
+
+**What the correct falsifying case is.** The two forms first disagree at **250 ms**: divide-first
+gives 14, integer-first gives 15. And because `MAX_CATCHUP_TICKS = 8` clamps at 133.34 ms, that
+disagreement sits *outside* the uncapped range — for integer-millisecond deltas the two forms are
+indistinguishable everywhere the clamp has not already taken over.
+
+**The consequence, which is the part that matters.** The designer took the wrong number from this
+report in good faith and wrote **AC-816**, which requires injecting the divide-first form and
+observing `n === 2`. That AC cannot pass at 50 ms against any correct implementation. A bad number
+in a verification report became an unsatisfiable acceptance criterion one step downstream — the
+mirror image of incident §6.2, a check that cannot *pass* rather than one that cannot fail.
+
+Carried back to the designer: fix AC-805's parenthetical, and either repoint AC-816 at 250 ms or
+delete it and state plainly that the two forms are indistinguishable inside the uncapped range.
