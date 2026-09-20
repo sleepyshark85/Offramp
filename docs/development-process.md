@@ -223,6 +223,34 @@ the designer and the tester concurrently only when they touch disjoint documents
 do not, wait. Concurrency that saves ten minutes and costs an hour of reconciliation is not
 concurrency, it is a race.
 
+### 6.8 The difficulty lever that made a safety check vacuous
+
+A tuning pull — raising `interval` and rescaling `quota` — moved band 5's minimum car
+separation to 319.2 LU against a longest edge of 293. Two cars can share an edge only if the
+edge is longer than the separation they hold, so AC-124's assertion became **arithmetically
+unreachable at that band**: it could no longer observe the thing it asserts about.
+
+Nothing in the rules changed. No code was edited. A number in a difficulty table moved, and a
+safety check three files away stopped being able to fail.
+
+It was caught by the `assert(observations > 0)` guard that §6.2 put on every sweep — the test
+failed with *"band 5 never put two cars on one edge, so the assertion below never ran"*. The
+right fix was not to loosen it but to assert the **stronger** statement at that band: the count
+is exactly zero, with the arithmetic recorded, so a single sighting fails.
+
+**Rule:** a check's reachability is a function of the parameters, not only of the code. When a
+tuning value moves, the checks that depend on it have to be re-examined for whether they can
+still fail — and the only thing that makes that automatic is asserting that the sweep observed
+something.
+
+The same pull also exposed a check that had never asserted anything: AC-202 required a level's
+parameters to match the design's band table, and the test compared the generated level against
+the code's own constant, which it satisfies by construction. Every band-table edit had passed it
+silently.
+
+**Corollary:** a test that reads its expectation from the same source as the code under test is
+not a test. The design document is the expectation; transcribe it.
+
 ---
 
 ## 7. Git workflow
