@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Offramp",
+    "slug": "offramp",
+    "version": "1.0.0",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "bundleIdentifier": "com.sleepyshark.offramp",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "com.sleepyshark.offramp"
+    },
+    "owner": "sleepyshark.85",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#10151C",
+    "plugins": [
+      "expo-audio"
+    ]
+  }
+}
