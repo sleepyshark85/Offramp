@@ -123,7 +123,11 @@ This single property delivers four things at once:
   ([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
 - Two cars arrive at the same junction only if they took the same path to it, so the minimum
   flip window at any junction equals the minimum spawn gap — 1.00 s at the hardest band
-  ([`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time)).
+  ([`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time)). That is a
+  guarantee about **two cars at one junction**, and it is not the game's tightest window: the time
+  from **one car appearing** to its first decision is a different quantity, bounded by `ENTRY_LEN`
+  rather than by the spawn gap
+  ([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision)).
 - The drawing reads as a river delta: roads only ever divide, never converge. On a 6.1" screen
   that is dramatically easier to follow than a lattice of merges.
 
@@ -158,17 +162,17 @@ Band 3, `C = 4`, `K = 4`, `R = 4`, entry at column 1, `J = 5`, depth 2–3. Gene
 ```
               col 0      col 1      col 2      col 3
                             ┃
-   entry  y=  60            ┃              (entry edge, 100 LU, straight)
+   entry  y=  60            ┃              (entry edge, 160 LU, straight)
                             ┃
-   row 0  y= 160          ╭─◆─╮                          ◆ = junction (branch node)
+   row 0  y= 220          ╭─◆─╮                          ◆ = junction (branch node)
                           │   ╰──╮                       · = pass node (not drawn)
-   row 1  y= 460       ╭──◆──╮   ◆──╮                    ╱╲ = cubic edges
+   row 1  y= 520       ╭──◆──╮   ◆──╮                    ╱╲ = cubic edges
                        │     │   │  ╰──╮
-   row 2  y= 760       ·     ·   ·     ·                 (a pass row: four roads run straight)
+   row 2  y= 820       ·     ·   ·     ·                 (a pass row: four roads run straight)
                        │     │   │     │
-   row 3  y=1060       ·   ╭─◆─╮ ◆─╮   ·
+   row 3  y=1120       ·   ╭─◆─╮ ◆─╮   ·
                        │   │   ╰─│─╯   │                 (two branches, both rejoining at depots)
-   depot  y=1360     ┌───┐┌───┐┌───┐┌───┐
+   depot  y=1420     ┌───┐┌───┐┌───┐┌───┐
                      │ A ││ B ││ C ││ D │
                      └───┘└───┘└───┘└───┘
                      Ember  Sky  Rose  Teal
@@ -200,15 +204,34 @@ would not reproduce on CI.
 ```
 LANE_SPAN = 780            // total horizontal span of the outermost columns
 ENTRY_Y   = 60
-ROW0_Y    = 160
-DEPOT_Y   = 1360
-ENTRY_LEN = ROW0_Y - ENTRY_Y = 100 LU
+ROW0_Y    = 220
+DEPOT_Y   = 1420
+ENTRY_LEN = ROW0_Y - ENTRY_Y = 160 LU
 
 colW  = min(300, LANE_SPAN / (C - 1))
 rowH  = (DEPOT_Y - ROW0_Y) / R = 1200 / R
 x(c)  = 500 - colW*(C-1)/2 + c*colW
 y(r)  = ROW0_Y + r*rowH
 ```
+
+**`ROW0_Y` and `DEPOT_Y` both moved down 60 LU in slice 1b, and the route height did not move.**
+`ENTRY_LEN` was 100 LU through slices 0 and 1, which put the first junction 450 ms after the spawn
+point at band 5 — a decision no player can prepare, on a node every car crosses
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision),
+[AC-245](acceptance-criteria.md)). The 60 LU is taken from the blank margin below the depot row,
+which was 70 LU and is now 10: `DEPOT_Y + DEPOT_H = 1420 + 170 = 1590` against `DESIGN_H = 1600`,
+and the 1.04 receiving scale of [`ui.md` §7.4](ui.md#74-depot) reaches 1593.4. Because
+`DEPOT_Y - ROW0_Y` is still 1200, **`rowH`, `colW`, `diagLen`, the junction pitch, `mouthLu` and
+every tap-target and device-fit number in [`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices)
+and [`ui.md` §4.4](ui.md#44-tap-target-arithmetic) are unchanged**, and so is every generated
+topology: the same 2,500 seeds produce byte-identical network signatures before and after. Only the
+`y` of every node and the length of one edge per level differ.
+
+That 60 LU is also the whole budget. Buying more by shrinking the route height is blocked by
+[`ui.md` §7.6](ui.md#76-the-depot-mouth)'s `mouthLu <= rowH - JUNCTION_MARK_R - 12`: band 5 sits at
+`200 - 58 = 142` against `mouthLu = 140`, so its `rowH` cannot go below 198 and `1200 / 6 = 200` is
+the last legal value. Anything further would have to move `DESIGN_H`, which rescales every
+height-bound device.
 
 All of these are exact integers for every `(C, R)` the bands use:
 
@@ -220,10 +243,10 @@ All of these are exact integers for every `(C, R)` the bands use:
 
 | `R` | `rowH` | row y positions (row 0 … depot row) |
 |---|---|---|
-| 3 | 400 | 160, 560, 960, 1360 |
-| 4 | 300 | 160, 460, 760, 1060, 1360 |
-| 5 | 240 | 160, 400, 640, 880, 1120, 1360 |
-| 6 | 200 | 160, 360, 560, 760, 960, 1160, 1360 |
+| 3 | 400 | 220, 620, 1020, 1420 |
+| 4 | 300 | 220, 520, 820, 1120, 1420 |
+| 5 | 240 | 220, 460, 700, 940, 1180, 1420 |
+| 6 | 200 | 220, 420, 620, 820, 1020, 1220, 1420 |
 
 The minimum distance between two lattice sites is `min(colW, rowH)`, which is **195 LU** at its
 worst (band 4 and 5). That is the number the 44 pt tap-target arithmetic in
@@ -231,7 +254,7 @@ worst (band 4 and 5). That is the number the 44 pt tap-target arithmetic in
 
 ### 3.3 Edge lengths
 
-`straight` edges have length `rowH`. `entry` edges have length `ENTRY_LEN = 100`. Diagonal edges
+`straight` edges have length `rowH`. `entry` edges have length `ENTRY_LEN = 160`. Diagonal edges
 (`diagL`, `diagR` — mirror images, identical length) have the arc length of the cubic in §2.3.
 
 **Reference derivation** (offline, for deriving and for verifying the table — not run at level
@@ -450,6 +473,28 @@ than feeding a mutated level through `validate()`'s ordered cascade
 rule. Both are guaranteed by V2 (§2.4), and a rule that cannot fail is not a rule
 (`development-process.md:168`).
 
+**And neither is "no branch at row 0" — measured, and rejected.** Slice 1b's first-decision problem
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision))
+has an obvious topological repair: forbid the row-0 node from being a branch, so the first junction
+sits `ENTRY_LEN + rowH` below the spawn point rather than `ENTRY_LEN`. It was prototyped as a
+*construction* constraint rather than a rejection rule — `buildRow` is offered pass options only at
+`r = 0` — which is the right shape, and it costs the generator nothing in attempts (median
+`1 / 3 / 2 / 3 / 3` against the shipped `5 / 3 / 2 / 3 / 3`, max 33, zero exhaustions over 3,000
+seeds per band; as a rejection rule instead it would reach `MAX_ATTEMPTS` on 2 seeds per 1,000 at
+band 5 and blow [AC-203](acceptance-criteria.md)'s ceiling). V13 survives it: `Ja` still sits at its
+floor in 100 % of levels at bands 1, 2, 4 and 5.
+
+It fails on variety and on over-correction. Distinct **edge topologies** over 3,000 seeds per band
+fall `38 / 1033 / 652 / 1882 / 962` → `13 / 556 / 248 / 1542 / 829`, which breaks
+[AC-234](acceptance-criteria.md) at band 1 and band 3 — and band 1, four levels long, would be
+drawing from thirteen shapes. Drawn `J` also collapses toward the bottom of every band's range
+(band 5 goes from `7:3 % 8:97 %` to `7:14 % 8:86 %`, band 4 from `5:5 6:25 7:70` to
+`5:15 6:51 7:34`) while `Ja` barely moves, which is §6.1's point about the `J` axis restated from
+the other side. And the constrained bot clears `100 / 100 / 99.9 / 96.9 / 25.0 %` with it in force,
+failing [AC-240](acceptance-criteria.md) at bands 1–4 for want of headroom: removing the row-0
+decision removes so much load that attention stops binding until band 5. The window had to be made
+fair, not deleted, and §3.2's 60 LU does that without touching a single topology.
+
 **Integer geometry is a construction guard, not a validity rule.** §3.2 derives `colW` and `rowH`
 by division, and nothing in the search makes the result integral — the integrality of every shipped
 band is a property of the five rows in §6.1, so the first band-table edit that picks a non-divisor
@@ -468,7 +513,7 @@ the actionable-junction floor above and nothing else.
 | Band | Levels | `C` | `K` | `R` | `pBranch` | `J` | `Ja` | `D` | `rowH` | `colW` | `diagLen` | Speed MLU/tick | LU/s | Interval | Jitter | Quota | `SPAWN_SLACK` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 1–4 | 3 | 3 | 3 | 0.85 | 3 | 3 | 2 | 400 | 300 | 521 | 3000 | 180 | 156 | ±12 | 16 | 8 |
-| 2 | 5–9 | 4 | 3 | 4 | 0.70 | 3–5 | 3 | 2–3 | 300 | 260 | 415 | 3200 | 192 | 138 | ±12 | 26 | 8 |
+| 2 | 5–9 | 4 | 3 | 4 | 0.70 | 3–5 | 3 | 2–3 | 300 | 260 | 415 | 3200 | 192 | 138 | ±12 | 26 | 9 |
 | 3 | 10–15 | 4 | 4 | 4 | 0.80 | 4–6 | 4 | 2–3 | 300 | 260 | 415 | 3400 | 204 | 120 | ±18 | 36 | 9 |
 | 4 | 16–22 | 5 | 4 | 5 | 0.80 | 5–7 | 5 | 2–4 | 240 | 195 | 323 | 3600 | 216 | 108 | ±18 | 48 | 9 |
 | 5 | 23+ | 5 | 5 | 6 | 0.88 | 7–8 | 7 | 2–4 | 200 | 195 | 293 | 3800 | 228 | 96 | ±18 | 64 | 10 |
@@ -852,7 +897,64 @@ will be misrouted by a flip made for a car it is holding, and it will never see 
 is the failure mode the game is made of, and it is the reason this bot can measure something the
 old one could not.
 
-#### 7.1.7 Why this is expected to bind, arithmetically
+#### 7.1.7 The first-decision deadline, and why the bot must not be given it for free
+
+A glance costs `BOT_SCAN_TICKS = 6`; escalating to a car the bot is not holding costs
+`BOT_ACQUIRE_TICKS = 15` on top, so the earliest a tap can be emitted is 21 ticks after the glance
+lands, and `BOT_LOCKOUT_TICKS = 6` of runway must still remain. So for a car whose first junction is
+`firstDecisionTicks` away at spawn
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision)),
+a glance must **land** by car age `firstDecisionTicks - 27` when the car is cold, or
+`firstDecisionTicks - 16` when it is already held (`BOT_SWITCH_TICKS` in place of the acquire):
+
+| Band | `firstDecisionTicks` when row 0 is a branch | cold deadline (car age) | as real time | was, at `ENTRY_LEN = 100` |
+|---|---|---|---|---|
+| 1 | 54 | 27 | 450 ms | 7 |
+| 2 | 50 | 23 | 383 ms | 5 |
+| 3 | 48 | 21 | 350 ms | 3 |
+| 4 | 45 | 18 | 300 ms | 2 |
+| 5 | 43 | **16** | **267 ms** | **0** |
+
+The last column is the same arithmetic under the 100 LU `ENTRY_LEN`: at band 5 the deadline was
+**zero ticks** — the glance had to land on the tick the car spawned — and the bot duly emitted
+**zero** taps at the row-0 junction across 269 levels that had one. That is what
+[AC-240](acceptance-criteria.md) caught when it failed at bands 4 and 5 — not an insensitive
+instrument, but a deadline no model of a person could meet, correctly reported.
+
+#### 7.1.8 The repair that was not made to the bot
+
+Slice 1b proposed a second repair alongside the geometry one: because the spawn point is the one
+location on screen a person can watch in advance, let a spawn be **anticipated** — the bot finds a
+car at that known static location without paying `BOT_SCAN_TICKS`, while still paying
+`BOT_ACQUIRE_TICKS` to read its colour. It is a plausible statement about a person and it was
+built and measured over 1,000 seeds per band. **It is rejected, and this section records why so
+that it is not proposed a third time.**
+
+**It breaks the invariant that makes §7.1 a model of attention at all: every act of attention
+consumes time.** A zero-cost glance sets `busyUntil = T`, so a glance that then fails D5's urgency
+gate costs nothing and is retaken on the very next tick — and again, and again, for as long as any
+car sits on the entry edge. In the arm with the longer entry edge the bot spent every one of those
+54 ticks re-glancing at a car it had already decided was not urgent, and did nothing else. Measured
+clear rates went **non-monotonic across the ladder**, which no difficulty model may be: one arm
+read `53.8 / 90.6 / 29.5 / 14.1 / 0.4 %`, with band 1 forty points below band 2. A second variant
+that preserved the sweep cursor instead of clobbering it removed the starvation and kept the
+inversion: `99.2 / 99.9 / 95.4 / 65.2 / 4.4 %`, band 5 barely above the unrepaired bot, because
+attending to every newborn car at the instant it appears is a priority inversion, not a model of
+a person.
+
+**And it is not needed.** With `ENTRY_LEN = 160` and no change to this section at all,
+[AC-240](acceptance-criteria.md) passes at bands 2, 3, 4 and 5 — rises of
+`+20.5 / +59.7 / +61.8 / +47.2 pp` — where before it failed at bands 4 and 5 with `+2.0` and
+`+7.4`. The attention model was never the thing that was broken. It was measuring a game in which
+one decision could not be reached, and saying so.
+
+The general rule this is an instance of is already written down at the end of §7.4: a constant in
+§7.1 changes only if the *model of a human player* is shown to be wrong. "A person can watch the
+spawn point" is true and is now honoured — by giving the decision at the spawn point enough road to
+happen on, which is a fact about the game, rather than by giving the instrument a free action,
+which is a fact about the gauge.
+
+#### 7.1.9 Why this is expected to bind, arithmetically
 
 Attention supply is 60 ticks per second. Demand is one focus per junction decision per car:
 
@@ -946,6 +1048,32 @@ mind. The bands above are wider and lower because they are now derived from R1�
 interpolated, and because the bot they are read off pays for attention. **No lever has been
 pulled.** §6.1's parameter table is untouched.
 
+#### 7.2.4 The first reading off a gauge that can be trusted, and what it says
+
+Slice 1b's numbers were read off an instrument measuring the row-0 deadline of §7.1.7 rather than
+attention: at bands 2–5 the clear rate was approximately `P(row 0 is a pass node)`, a topology coin
+flip. With `ENTRY_LEN = 160` and V13 in force, and with **no change to the bot**, the same harness
+over 1,000 seeds per band reads:
+
+| Band | first trustworthy reading | §7.2.2 band | AC-240 rise |
+|---|---|---|---|
+| 1 | **98.0 %** | ≥ 95 % — **in band** | n/a (no headroom) |
+| 2 | 79.3 % | 86–97 % — below | +20.5 pp |
+| 3 | 38.4 % | 76–92 % — below | +59.7 pp |
+| 4 | 19.1 % | 66–85 % — below | +61.8 pp |
+| 5 | 2.0 % | 55–78 % — below | +47.2 pp |
+
+R2 passes at every pair. R3 fails at all four. **These targets are not being moved to meet this
+reading**, for the reason §7.2 opens with: they are a shape the design requires, derived from
+R1–R4, and a target retuned to whatever the instrument says is not a target. What the reading now
+means is different from what it meant a slice ago, though — the instrument is sensitive at every
+band that has headroom, so the gap between this column and the band column is a statement about
+the **game**, not about the gauge, and it is the first such statement this project has been able
+to make. Closing it is §7.4's lever order, starting at lever 0, and it is a difficulty decision
+taken with the whole sweep in hand rather than a correction to a broken measurement. Completion
+times are unaffected and remain in band at every level: medians `49.4 / 68.3 / 80.2 / 94.3 /
+111.8 s` against §7.3's windows.
+
 ### 7.3 Target 2 — completion-time band
 
 Measured over successful constrained-bot runs, in seconds of simulated time (`ticks / 60`).
@@ -1010,6 +1138,14 @@ transit of 6.5 s:
 1.00 s and [`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time) stops
 being true. There is no upper bound on `interval` other than §7.3.
 
+**And the second floor, which is the one that was missed.** `speedMluPerTick` is not a lever (see
+below), but if it ever becomes one, or if `ENTRY_LEN` is ever shortened to reclaim vertical space,
+`ceil(ENTRY_LEN * MLU / speedMluPerTick)` must stay at or above 40 ticks
+([AC-245](acceptance-criteria.md),
+[`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision)).
+`interval` does not appear in it: that is precisely why §4.6's argument, which is about `interval`,
+could be correct and still leave this window at 450 ms.
+
 **If lever 0 is exhausted** — that is, the clear rate is still out of band at the edge of what
 §7.3 allows:
 
@@ -1042,7 +1178,7 @@ a human player* is shown to be wrong, and then every target is re-read, not just
 
 | Tool | What it must assert |
 |---|---|
-| `tools/generator-audit.mjs --seeds 5000` | V1–V13 hold for every band × seed; zero `GEN_EXHAUSTED`; report attempt-count percentiles, per-rule rejection counts (§5.2) and distinct-network counts per band. |
+| `tools/generator-audit.mjs --seeds 5000` | V1–V13 hold for every band × seed; zero `GEN_EXHAUSTED`; report attempt-count percentiles, per-rule rejection counts (§5.2) and distinct-network counts per band. Also, per band, the **minimum `firstDecisionTicks`** over every path of every level against [AC-245](acceptance-criteria.md)'s floor of 40 — it is the cheapest possible check and the quantity it guards went unmeasured through two slices. |
 | `tools/generator-audit.mjs --rule-injection` | For each of V1–V11 and V13, a fixture that violates that rule, with the rule's check invoked **directly** rather than through `validate()`'s cascade, confirmed to reject it ([AC-244](acceptance-criteria.md)). Eight of the twelve are unreachable through `generate()` (§5.2) and this is the only place their checks are ever executed against a violation. |
 | `tools/generator-audit.mjs --actionable --seeds 3000` | Per band: mean and minimum live-junction count under §6.2's lazy-optimal oracle, the share of levels below `Ja`, the mean count of junctions flipped twice or more, and the decorative-junction share of drawn `J` ([AC-243](acceptance-criteria.md)). |
 | `tools/spawn-margin.mjs --seeds 2000` | Per band, both oracle variants, two misroutes injected: the worst `max(nextSpawn)` and the resulting margin against `spawns.length`, which must be ≥ 2 ([AC-139](acceptance-criteria.md)). Re-run after every §7.4 lever move. |

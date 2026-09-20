@@ -134,6 +134,27 @@ indicator. On a 21:9 Android with 245 pt of slack that is 135 pt above and 110 p
 The binding device is the **iPhone SE 1st generation at 320 × 568**. Everything in §4 is sized so
 that device passes.
 
+**Re-checked after slice 1b's `ENTRY_LEN` change, and nothing in this table moves.** `ROW0_Y` and
+`DEPOT_Y` each went down 60 LU while the route height stayed at 1200
+([`generation.md` §3.2](generation.md#32-site-coordinates)), so `DESIGN_W`, `DESIGN_H`, `colW`,
+`rowH` and therefore `scale`, `slackY`, the junction target and the car body are all the numbers
+already printed above. What changed is where the content sits **inside** the design rectangle: it
+now spans `y = 60 … 1590` instead of `60 … 1530`, so the clearance below the depot body falls from
+70 LU to 10.
+
+| Device | `scale` | depot bottom, LU | clearance to `DESIGN_H`, pt | plus slack below + gutter | total below the depot |
+|---|---|---|---|---|---|
+| iPhone SE (1st) | 0.3025 | 1590 | 3.0 | 0.0 + 8 | **11.0 pt** |
+| iPhone 15/16 | 0.3930 | 1590 | 3.9 | 29.7 + 8 | 41.6 pt |
+| Tall Android 21:9 | 0.4120 | 1590 | 4.1 | 110.3 + 8 | 122.4 pt |
+
+The binding case is again the SE 1st generation, at 11.0 pt of clear space between the depot body
+and the bottom of the screen — it has no home indicator and a zero bottom inset, which is why it
+is the one device where the design rectangle is height-bound with no slack at all. The depot's
+1.04 **receiving** scale (§7.4) reaches `y = 1593.4`, still inside the rectangle. A future change
+that pushes `DEPOT_Y + DEPOT_H` past 1600 is a layout change, not a geometry tweak, and belongs
+back in this table. ([AC-411](acceptance-criteria.md))
+
 ---
 
 ## 4. The play surface

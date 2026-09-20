@@ -24,7 +24,9 @@ won; lose all three lives and it is lost.
 
 The pressure is **divided attention**. Several cars are in flight at once, each needing up to
 four junction states to be correct by the time it arrives. Nothing in the game rewards reacting
-faster than about 400 ms (§4.6 proves the floor), and nothing punishes planning ahead.
+faster than about 670 ms — §4.6 proves the floor between two cars at one junction, §4.6b proves
+the tighter one between a car appearing and its first decision — and nothing punishes planning
+ahead.
 
 ---
 
@@ -205,7 +207,7 @@ Notes the implementation must honour:
   block or overtake — so the order is not observable in the result, but it is fixed anyway so
   that any future interaction cannot introduce an ordering bug silently.
 - **The `while` loop is provably single-pass.** The shortest edge in the game is the entry edge
-  at `ENTRY_LEN = 100` LU = 100,000 MLU; the fastest speed is 3,800 MLU/tick. A car can
+  at `ENTRY_LEN = 160` LU = 160,000 MLU; the fastest speed is 3,800 MLU/tick. A car can
   therefore never cross two edges in one tick. The loop is written anyway because the invariant
   "no car is past the end of its edge without having transitioned" must hold structurally, not
   by arithmetic luck. The test suite asserts the loop body executes at most once
@@ -315,16 +317,16 @@ SPAWN_SLACK(band) = (LIVES - 1)        // the misroutes a winning run is allowed
 
 | Band | `transitMax` | `interval` | `inFlightMax` | observed max in flight | `SPAWN_SLACK` | `SPAWN_COUNT` |
 |---|---|---|---|---|---|---|
-| 1 | 555 | 156 | 5 | 4 | **8** | 24 |
-| 2 | 550 | 138 | 5 | 5 | **8** | 34 |
-| 3 | 518 | 120 | 6 | 5 | **9** | 45 |
-| 4 | 477 | 108 | 6 | 5 | **9** | 57 |
-| 5 | 489 | 96 | 7 | 6 | **10** | 74 |
+| 1 | 575 | 156 | 5 | 4 | **8** | 24 |
+| 2 | 569 | 138 | 6 | 5 | **9** | 35 |
+| 3 | 536 | 120 | 6 | 5 | **9** | 45 |
+| 4 | 494 | 108 | 6 | 5 | **9** | 57 |
+| 5 | 505 | 96 | 7 | 6 | **10** | 74 |
 
-Bands 1 and 2 are unchanged at 8; bands 3–5 gain one or two cars. Measured with an oracle router
+Band 1 is unchanged at 8; bands 2–5 gain one or two cars. Measured with an oracle router
 over 2,000 seeds per band in both its shortest-path and longest-path variant, with the two allowed
 misroutes injected, the worst `nextSpawn` reached is `21 / 32 / 42 / 54 / 71`, which under the
-derived counts leaves a margin of **3 / 2 / 3 / 3 / 3** spawns
+derived counts leaves a margin of **3 / 3 / 3 / 3 / 3** spawns
 ([AC-139](acceptance-criteria.md)). The engine asserts `nextSpawn` never reaches `SPAWN_COUNT`
 ([AC-123](acceptance-criteria.md)).
 
@@ -333,6 +335,13 @@ The derivation matters more than the numbers it currently produces. Every diffic
 `quota` does not, but cutting `interval` raises `inFlightMax`, and a slower speed or a deeper band
 raises `transitMax`. With the slack written as a literal, a lever pull walks through the margin
 silently; written as a derivation, it recomputes.
+
+**It has now recomputed once, for a change that is not a lever.** `ENTRY_LEN` moved 100 → 160 LU
+for §4.6b, which is a term in `transitMax` — measured, `transitMax` rises 555/550/518/477/489 →
+575/569/536/494/505, and band 2's `inFlightMax` crosses an integer boundary at 569/138 = 4.12, so
+band 2's slack is 9 rather than 8. Nothing else in the table moves, and the observed maximum in
+flight is unchanged at `4 / 5 / 5 / 5 / 6` over 1,000 seeds per band. This is exactly the silent
+walk the derivation exists to catch, arriving through a *geometry* edit rather than a lever.
 
 **Spawn ticks.**
 
@@ -565,22 +574,76 @@ measured. ([AC-513](acceptance-criteria.md))
 
 ### 4.6 Why a junction is always flippable in time
 
+**The heading is the claim, and — as in §4.5 — the claim is narrower than it reads.** What follows
+is about the gap between **two cars** at one junction. It says nothing about the gap between a car
+**appearing** and its first decision, and §4.6b is the case it does not cover.
+
 Two cars arrive at the same junction only if they took the same path to it, so their arrival
 separation equals their spawn separation. The minimum across all bands is band 5's
 `96 - 36 = 60` ticks = **1.00 s**. Band 1 is 2.20 s.
 
 One second is comfortably above the sum of a human's visual reaction (~250 ms) and tap (~100 ms).
-No band asks the player to beat a 400 ms window at a single junction. The difficulty is the
-*aggregate* load across several junctions, which is what the constrained bot measures
+**No band asks the player to re-flip one junction between two cars inside 400 ms.** The difficulty
+is the *aggregate* load across several junctions, which is what the constrained bot measures
 ([`generation.md` §7](generation.md#7-the-two-measurable-targets)).
+
+### 4.6b The other window: from a car appearing to its first decision
+
+**This section exists because slice 1b found §4.6 doing what §4.5 had already been caught doing —
+proving the right thing about the wrong quantity.** §4.6's window is a *separation* between two
+cars. There is a second window, it is not the same number, and it is the tightest in the game.
+
+A car's colour cannot be known before it spawns. Nothing about its first junction can be prepared:
+the player can watch the spawn point, but there is nothing to read there until the car is on it. So
+for the first branch node on a car's path, the whole decision — notice, read the colour, recall
+that colour's depot, decide, tap, and have the tap land before the car is on the junction — has to
+fit inside the time the car takes to travel from the entry node to that branch node.
+
+```
+L1                 = arc length in LU from the entry node to the first branch node on the path
+firstDecisionTicks = ceil( L1 * MLU / speedMluPerTick )
+```
+
+`rows[0]` always holds exactly one node ([`generation.md` §2.2](generation.md#22-nodes)), so every
+car crosses it, and no car past row 0 can have row 0 as its next junction. When row 0 is a branch —
+41 / 68 / 76 / 80 / 89 % of generated levels by band, measured over 3,000 seeds each — `L1` is
+exactly `ENTRY_LEN`, and that is the worst case the design has to hold.
+
+**The floor.** The cost of the decision itself is priced by the player model in
+[`generation.md` §7.1.3](generation.md#713-constants), which is the same model the targets are read
+off: `BOT_ACQUIRE_TICKS` 15 to read a colour and bind it, one tick to act, and `BOT_LOCKOUT_TICKS`
+6 of runway so the tap is not frame-perfect — **22 ticks, 367 ms, and that assumes the player is
+free at the moment the car spawns.** They usually are not: a player mid-acquire on another car
+cannot start for up to another 15 ticks, which is `22 + 15 = 37`. Rounded up to a round number,
+with the last three ticks as the only margin the rule carries:
+
+> **The first-decision floor.** `firstDecisionTicks >= 40` (667 ms) at every band, for every path,
+> in every generated level. ([AC-245](acceptance-criteria.md))
+
+**What it was, and what it is.** `ENTRY_LEN` was 100 LU through slices 0 and 1:
+
+| Band | speed | `ENTRY_LEN = 100` (was) | `ENTRY_LEN = 160` (is) | floor |
+|---|---|---|---|---|
+| 1 | 3000 | 34 ticks — 567 ms | **54 ticks — 900 ms** | 40 |
+| 2 | 3200 | 32 — 533 ms | **50 — 833 ms** | 40 |
+| 3 | 3400 | 30 — 500 ms | **48 — 800 ms** | 40 |
+| 4 | 3600 | 28 — 467 ms | **45 — 750 ms** | 40 |
+| 5 | 3800 | 27 — **450 ms** | **43 — 717 ms** | 40 |
+
+At 450 ms the old value left about 80 ms over the 367 ms cost — less than a third of one glance —
+at the one junction in the game whose decision cannot be prepared in advance, on a node every car
+in the level crosses. §4.6's literal claim survived it (450 > 400), because §4.6 was measuring the
+other window. The 60 LU that fixes it is taken from the blank margin under the depot row, so it
+costs nothing else; the derivation and what it does not cost are in
+[`generation.md` §3.2](generation.md#32-site-coordinates) and §8.9 below.
 
 ### 4.7 Every level is solvable, provably
 
 The generator guarantees every depot is reachable from the entry and every junction has both
 branches leading to at least one depot
 ([`generation.md` §4](generation.md#5-validity-rules-what-rejects-a-candidate)). Combined with
-§4.6, an unconstrained solver — one allowed to tap any junctions on any tick — clears **100 % of
-generated levels at every band with zero misroutes**. That is a required, measurable acceptance
+§4.6 and §4.6b, an unconstrained solver — one allowed to tap any junctions on any tick — clears
+**100 % of generated levels at every band with zero misroutes**. That is a required, measurable acceptance
 criterion, not an aspiration ([AC-220](acceptance-criteria.md)).
 
 Being clearable by an omniscient bot proves nothing about playability. That is what the
@@ -607,22 +670,26 @@ Three reasons:
    configuration, and a level's opening state can be reasoned about without running the seed.
 
 **The window this creates.** The first car enters at `SPAWN_LEAD = 90` ticks and crosses the
-`ENTRY_LEN = 100` LU entry edge before it reaches the row-0 node, which is the first junction it
+`ENTRY_LEN = 160` LU entry edge before it reaches the row-0 node, which is the first junction it
 can meet:
 
 | Band | entry-edge transit | first decision at | wall time |
 |---|---|---|---|
-| 1 | 34 ticks | tick 124 | 2.07 s |
-| 2 | 32 | 122 | 2.03 s |
-| 3 | 30 | 120 | 2.00 s |
-| 4 | 28 | 118 | 1.97 s |
-| 5 | 27 | 117 | **1.95 s** |
+| 1 | 54 ticks | tick 144 | 2.40 s |
+| 2 | 50 | 140 | 2.33 s |
+| 3 | 48 | 138 | 2.30 s |
+| 4 | 45 | 135 | 2.25 s |
+| 5 | 43 | 133 | **2.22 s** |
 
-So the player has at least **1.95 s** from the first tick to read the board and set the first
-junction if the default is wrong for the first car — comfortably above the ~350 ms of reaction plus
-tap that §4.6 budgets, and the *only* moment in a level where the board is empty while a decision
-is pending. If a future change raises speed or lowers `SPAWN_LEAD` far enough to push this below
-1.0 s, the opening stops being free and this section is what has to be re-argued.
+So the player has at least **2.22 s** from the first tick to read the board and set the first
+junction if the default is wrong for the first car, and it is the *only* moment in a level where
+the board is empty while a decision is pending. If a future change raises speed or lowers
+`SPAWN_LEAD` far enough to push this below 1.0 s, the opening stops being free and this section is
+what has to be re-argued.
+
+This paragraph is about the **first** car only, which is why it was never the guard that mattered:
+`SPAWN_LEAD` buys the opening car 1.5 s that no later car gets. Every car after it has only the
+entry-edge transit, and that is §4.6b.
 
 ---
 
@@ -684,14 +751,18 @@ the streak resets and the player's own state of mind changes. That is enough.
 
 | Band | Nominal duration (zero misroutes) | With two misroutes | Design band |
 |---|---|---|---|
-| 1 | 49.1 s | 54.3 s | 42–62 s |
-| 2 | 67.0 s | 71.6 s | 58–78 s |
-| 3 | 79.0 s | 83.0 s | 70–92 s |
-| 4 | 92.9 s | 96.5 s | 84–106 s |
-| 5 | 108.8 s | 112.0 s | 98–122 s |
+| 1 | 49.4 s | 54.6 s | 42–62 s |
+| 2 | 67.3 s | 71.9 s | 58–78 s |
+| 3 | 79.3 s | 83.3 s | 70–92 s |
+| 4 | 93.2 s | 96.8 s | 84–106 s |
+| 5 | 109.1 s | 112.3 s | 98–122 s |
 
 Nominal duration is `SPAWN_LEAD/60 + (quota - 1) * INTERVAL/60 + transit`, with transit measured
-for a typical two-diagonal path.
+for a typical two-diagonal path. Every figure is **0.26–0.33 s longer** than slice 1's, which is
+the 60 LU `ENTRY_LEN` gained in §4.6b divided by the band's speed. It is the whole cost of that
+change to this table: no design band moves, no median leaves
+[`generation.md` §7.3](generation.md#73-target-2--completion-time-band)'s window, and the 130 s
+absolute ceiling is untouched at 21 s of headroom.
 
 **The band and its justification.** The brief's target is "about two minutes". Two minutes is the
 *ceiling*, not the mean, and treating it as the mean would be wrong: a first level that takes two
@@ -839,3 +910,40 @@ space), to add a spacing rule on terminal edges (a rule that would reject valid 
 render artifact), or to draw it correctly. The third is the only one that costs the game nothing,
 so §4.5's heading now says what its argument proves, §4.5b states the exception with its measured
 numbers, and [`ui.md` §7.6](ui.md#76-the-depot-mouth) covers it.
+
+### 8.9 `ENTRY_LEN` is 160 LU, and neither of the cheaper repairs was taken — **decided**
+Slice 1b found the first-decision window (§4.6b) at 450 ms at band 5 and located it through
+[AC-240](acceptance-criteria.md), which failed at bands 4 and 5 exactly as it was written to. Three
+repairs were on the table and all three were measured.
+
+**Taken: move the lattice down 60 LU.** `ENTRY_Y` stays at 60, `ROW0_Y` goes 160 → 220 and
+`DEPOT_Y` 1360 → 1420, so `ENTRY_LEN` goes 100 → 160 while the route height stays 1200
+([`generation.md` §3.2](generation.md#32-site-coordinates)). The 60 LU comes from the blank margin
+below the depot row, not from the network, so `rowH`, `colW`, `diagLen`, junction separation,
+`mouthLu`, the tap-target arithmetic and [`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices)'s
+device fit are all *bit-identical*, and so is every generated topology — verified over 2,500 levels,
+identical network signatures with and without the change. It costs 0.26–0.33 s of level duration
+(§5.3), one spawn of slack at band 2 (§2.7), and 60 LU of empty space nobody was using.
+
+**Rejected: shrink `rowH` to buy more.** Taking the extra length out of the route height instead is
+blocked by the depot mouth. [`ui.md` §7.6](ui.md#76-the-depot-mouth) requires
+`mouthLu <= rowH - JUNCTION_MARK_R - 12`, and band 5 already sits at `200 - 58 = 142` against
+`mouthLu = 140`, whose own floor of 131 LU is set by where two converging terminal centrelines are
+a car's width apart. Band 5's `rowH` therefore cannot go below 198, and `1200 / 6 = 200` is the
+last legal value. 60 LU is the entire budget available without changing `DESIGN_H`, which would
+rescale every height-bound device.
+
+**Rejected: forbid a branch at row 0.** A new validity rule — the row-0 node must be a pass — is
+geometrically free and moves the first decision to row 1, which is 79 ticks at band 5 rather than
+43. It was built (constructively, so the generator does not pay for it in rejections) and measured
+over 3,000 seeds per band, and it fails on two counts. It halves the network space:
+distinct **edge topologies** fall `38 / 1033 / 652 / 1882 / 962` → `13 / 556 / 248 / 1542 / 829`,
+which breaks [AC-234](acceptance-criteria.md) at band 1 (13 against a floor of 30) and at band 3
+(248 against 500) — band 1 is four levels long and would draw from thirteen shapes. And it
+over-corrects: with it in force the constrained bot clears `100 / 100 / 99.9 / 96.9 / 25.0 %` and
+[AC-240](acceptance-criteria.md) fails at bands 1–4 for lack of headroom, because removing the
+row-0 decision removes so much load that attention stops binding until band 5. The window needed to
+be made fair, not removed.
+
+**Rejected: change the bot instead.** See
+[`generation.md` §7.1.8](generation.md#718-the-repair-that-was-not-made-to-the-bot).

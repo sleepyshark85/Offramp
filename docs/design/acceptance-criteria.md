@@ -98,7 +98,7 @@ the state returned by the previous tick; and the returned `events` contain exact
 so the car has always moved once by the time `step()` returns. Slice 1's wording asked for a value
 that exists only between two statements inside `step()`, and the developer correctly implemented
 the observable behaviour and flagged the AC instead of matching it. `speedMluPerTick` is the right
-value because the entry edge is `ENTRY_LEN = 100,000` MLU, far longer than one tick of travel at
+value because the entry edge is `ENTRY_LEN = 160,000` MLU, far longer than one tick of travel at
 any band, so the spawning car cannot transition on its spawn tick.*
 
 **AC-113 · The spawn schedule is a pure function of the seed**
@@ -491,6 +491,16 @@ every attention constraint removed, every timing constraint kept —
 attention model is what binds the measurement rather than something else wearing its name; a bot
 whose clear rate barely moves when attention is made free is not measuring attention.*
 
+*The rise is asserted at **band 5 only**, and the reason is now a measured one rather than a
+convention. A 20 pp rise needs 20 pp of headroom, so the test is meaningless wherever the
+unmodified bot already clears above 80 % — bands 1–4 report `+0.1 / +0.0 / +0.4 / +4.8 pp` under a
+generator that lifts them to 95–100 %, and those are ceilings, not insensitivity. A band whose
+unmodified rate is above 80 % is reported as `n/a (no headroom)` and is not a failure; any band at
+or below 80 % that fails to rise 20 pp **is**. The failure this AC is for looks like slice 1b's:
+bands 4 and 5 rising `+2.0` and `+7.4 pp` from 19.7 % and 2.3 %, with plenty of headroom and
+nothing moving — which correctly located a deadline in the **game** that no player model could
+meet ([AC-245](acceptance-criteria.md)), not a fault in the bot.*
+
 **AC-241 · A lever pull satisfies both targets or is not a lever pull**
 **Given** any proposed change to a band's `quota`, `interval`, `pBranch` or `K` under
 [`generation.md` §7.4](generation.md#74-when-a-target-is-missed),
@@ -537,6 +547,25 @@ structural tripwires, not filters ([`generation.md` §5](generation.md#5-validit
 and running them through the cascade means an earlier rule catches the fixture first — which is
 why slice 1's blind pass could not make `V5` or `V9` fire from any single-edge mutation of 200
 band-3 levels. A tripwire whose check has never been executed against a violation is not a check.*
+
+**AC-245 · The first-decision window clears its floor**
+**Given** any generated level at any band,
+**When**, for every entry-to-depot path, `L1` is taken as the arc length in LU from the entry node
+to the **first branch node** on that path, and
+`firstDecisionTicks = ceil(L1 * MLU / speedMluPerTick)`,
+**Then** `firstDecisionTicks >= 40` (667 ms) for every path in every level; **and** the minimum
+over 1,000 levels per band is exactly the entry-edge transit `54 / 50 / 48 / 45 / 43`, because
+`rows[0]` holds one node and 41–89 % of levels branch there.
+*This is the window §4.6 never computed. §4.6's 1.00 s is the separation between **two cars** at
+one junction; this is the time from **one car appearing** to its first decision, and a car's colour
+cannot be known before it spawns, so nothing about it can be prepared
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision)).
+The floor of 40 ticks is the player model of
+[`generation.md` §7.1.3](generation.md#713-constants) priced twice: 22 ticks to read a colour, act
+and leave the lockout runway, plus one more acquire of slack because a player who is mid-acquire on
+another car cannot start immediately. At `ENTRY_LEN = 100` the measured values were
+`34 / 32 / 30 / 28 / 27` — band 5 failed this floor by 13 ticks, on a junction every car in the
+level crosses, and the constrained bot emitted zero taps there across 269 levels that had one.*
 
 ---
 
@@ -643,6 +672,19 @@ declared support envelope rather than as a pass.
 **AC-410 · Depots stay inside the design rect**
 **Given** any band,
 **Then** every depot's `x ± DEPOT_W/2` lies within `[0, 1000]`, with a margin of at least 30 LU.
+
+**AC-411 · The depot row stays inside the design rect vertically**
+**Given** any band,
+**Then** `DEPOT_Y + DEPOT_H <= DESIGN_H`, and the depot body at its 1.04 **receiving** scale (§7.4)
+also lies within `[0, DESIGN_H]`; **and given** the arithmetic sweep of
+[AC-401](acceptance-criteria.md)'s device matrix, **then** the clear space between the depot body
+and the bottom of the screen is at least **8 pt** on every supported configuration.
+*Slice 1b spent this margin deliberately: `DEPOT_Y` moved 1360 → 1420 to buy the 60 LU that
+[AC-245](acceptance-criteria.md) needs, taking the clearance below the depot from 70 LU to 10
+(`1420 + 170 = 1590` against `DESIGN_H = 1600`, receiving scale reaching 1593.4). It was free
+because nothing was drawn there; it is not free twice, and this AC is what makes the next attempt
+to spend it fail loudly. The binding device is the iPhone SE 1st generation at 11.0 pt
+([`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices)).*
 
 ---
 
