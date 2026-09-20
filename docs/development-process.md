@@ -32,6 +32,9 @@ see §5.
 
 ## 2. The slice pipeline
 
+**Where the work actually is: [`slices.md`](slices.md).** The table below is the plan; that
+file is the state, and it is the one that goes stale if it is not updated at the end of a slice.
+
 ```
   design ─→ build ─→ test ─→ fix ─→ re-test ─→ commit
                        ↑                 │
