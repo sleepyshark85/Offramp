@@ -24,7 +24,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test 'test/*.test.js'",
-    "sync-wasm": "node -e \"require('fs').copyFileSync(require.resolve('canvaskit-wasm/bin/full/canvaskit.wasm'),'public/canvaskit.wasm')\"",
+    "sync-wasm": "node tools/sync-wasm.mjs",
     "postinstall": "npm run sync-wasm"
   },
   "allowScripts": {
