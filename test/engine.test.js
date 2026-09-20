@@ -336,13 +336,16 @@ test('AC-120/AC-121 · score non-decreasing, lives non-increasing and floored', 
 });
 
 test('AC-123 · the spawn array carries quota + the DERIVED slack, and is never exhausted', () => {
-  // gameplay.md §2.7's table: slack 8 / 9 / 9 / 9 / 10 and counts 24 / 35 / 45 / 57 / 74.
-  // Band 2 is 9 rather than 8 because ENTRY_LEN 100 -> 160 pushed transitMax/interval across
-  // an integer boundary — the silent walk the derivation exists to catch.
+  // gameplay.md §2.7's table: slack 8 / 10 / 10 / 9 / 9 and counts 24 / 43 / 51 / 56 / 60.
+  // transitMax is untouched by round 6 — it has no `interval` term — so the slack moved purely
+  // through inFlightMax = floor(transitMax / interval) + 2. `interval` fell at bands 2 and 3, so
+  // a seventh car is in flight there and the slack rises 9 -> 10; it rose at band 5, so a car
+  // comes off and the slack falls 10 -> 9. Both directions are the point: a literal would have
+  // kept band 5's tenth car and missed bands 2 and 3's seventh.
   const wantTransit = [null, 575, 569, 536, 494, 505];
-  const wantInFlight = [null, 5, 6, 6, 6, 7];
-  const wantSlack = [null, 8, 9, 9, 9, 10];
-  const wantCount = [null, 24, 35, 45, 57, 74];
+  const wantInFlight = [null, 5, 7, 7, 6, 6];
+  const wantSlack = [null, 8, 10, 10, 9, 9];
+  const wantCount = [null, 24, 43, 51, 56, 60];
   for (let band = 1; band <= 5; band += 1) {
     // Every term of the derivation, not only its result — a lever move in §7.4 changes one of
     // these and the slack must follow it.

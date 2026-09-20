@@ -96,17 +96,40 @@ test('AC-124 · cars sharing an edge are never closer than the spawn gap allows'
   // asserted nothing at all and reported green — development-process.md §6.2 exactly. Every
   // band now sweeps ten seeds in both a no-tap and a tapped pass, and the observation count is
   // itself asserted, so a band that stops exercising the rule fails instead of passing.
+  //
+  // Round 6's lever pull made band 5 a THIRD case, and the `observations > 0` guard is what
+  // found it rather than letting it pass green. Two cars can only share an edge if the edge is
+  // longer than the separation they hold, and band 5's `interval` 96 -> 120 took the floor to
+  // (120 - 36) * 3800 / 1000 = 319.2 LU against a longest edge of 293 LU (`diagLen`). At band 5
+  // the case is now ARITHMETICALLY UNREACHABLE, so requiring an observation there would be
+  // requiring a violation. The band is therefore asserted the other way — zero observations,
+  // which is the stronger statement — and one sighting would fail this test, correctly.
   for (let band = 1; band <= 5; band += 1) {
-    const floorLu = ((BANDS[band].interval - 2 * BANDS[band].jitter) * BANDS[band].speedMluPerTick) / MLU;
+    const P = BANDS[band];
+    const floorLu = ((P.interval - 2 * P.jitter) * P.speedMluPerTick) / MLU;
     assert.ok(floorLu >= 228, 'band ' + band + ' separation floor ' + floorLu);
     let observedMinMlu = Infinity;
     let observations = 0;
+    let longestEdgeLu = 0;
     for (let seed = 0; seed < 10; seed += 1) {
+      const level = generate(seed, band);
+      for (const e of level.edges) {
+        if (e.lengthMlu / MLU > longestEdgeLu) longestEdgeLu = e.lengthMlu / MLU;
+      }
       for (const tapEvery of [0, 13]) {
-        const r = sharedEdgeSweep(generate(seed, band), tapEvery, null);
+        const r = sharedEdgeSweep(level, tapEvery, null);
         observations += r.observations;
         if (r.observedMinMlu < observedMinMlu) observedMinMlu = r.observedMinMlu;
       }
+    }
+    if (floorLu > longestEdgeLu) {
+      // Unreachable by arithmetic: no edge is long enough to hold two cars at the floor.
+      assert.equal(
+        observations, 0,
+        'band ' + band + ' shared an edge although the floor (' + floorLu + ' LU) exceeds its'
+          + ' longest edge (' + longestEdgeLu + ' LU) — that is a separation violation',
+      );
+      continue;
     }
     assert.ok(
       observations > 0,

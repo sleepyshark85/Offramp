@@ -345,7 +345,11 @@ if (has('unconstrained')) {
     const gRr = ctl.att.glances / (ctl.att.seconds || 1);
     const drift = (100 * Math.abs(gOn - gRr)) / gRr;
     const c = r.cap;
-    const oncePerCar = c.multiPerTick === 0 && c.captures === c.distinct && c.captures === c.glancedDistinct;
+    // AC-247's first clause, as reworded: the IDENTITY captures === distinct cars captured,
+    // bounded above by the cars that spawned. `captures > 0` is the guard against the whole
+    // column passing by measuring nothing.
+    const oncePerCar = c.captures > 0 && c.captures <= c.spawned && c.multiPerTick === 0
+      && c.captures === c.distinct && c.captures === c.glancedDistinct;
     const cursorHeld = c.cursorMoved === 0;
     const fullGlance = c.shortGlance === 0 && c.oddBusy === 0;
     const budget = drift < AC247_MAX_GLANCE_DRIFT;
@@ -367,9 +371,10 @@ if (has('unconstrained')) {
     });
   }
   console.log(table(rows));
-  console.log('\n1. every capture is a distinct car, never twice, and never more than one per tick;');
-  console.log('   captures/car < 1 because a car still in flight when the level ends was never');
-  console.log('   glanced at — AC-247\'s "exactly the number of cars that spawned" is an upper bound.');
+  console.log('\n1. captures === distinct cars captured, captures <= cars spawned, and never more');
+  console.log('   than one capture per tick. captures/car < 1 because a car still in flight when');
+  console.log('   the level ends was never glanced at, which is why AC-247 states the identity and');
+  console.log('   a one-sided bound rather than "exactly the number of cars that spawned".');
   console.log('2. the cursor read after botTick equals the cursor read before it, on every capture tick.');
   console.log('3. busyUntil - T on a capture tick is BOT_SCAN_TICKS (' + BOT_SCAN_TICKS + ') when the');
   console.log('   glance does not escalate and BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS ('

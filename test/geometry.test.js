@@ -88,15 +88,34 @@ test('§3.2 · colW, rowH and the coordinate tables are exact integers', () => {
   assert.equal(DEPOT_Y - ROW0_Y, 1200, 'the route height did not move');
 });
 
-test('AC-202 · band parameters reach the level object unchanged', () => {
+// generation.md §6.1, transcribed. AC-202 says the level's parameters must match ROW b OF THE
+// DESIGN TABLE, and the loop below only ever compared the level against BANDS — so a band-table
+// edit satisfied it by construction and the AC asserted nothing about the design. `interval` and
+// `quota` are the two columns round 6 moved and they are the two a future lever pull will move
+// again; this is what makes that edit a deliberate act rather than a silent one.
+const DESIGN_6_1 = {
+  1: { C: 3, K: 3, R: 3, pBranchPct: 85, Jmin: 3, Jmax: 3, Ja: 3, Dmin: 2, Dmax: 2, rowH: 400, colW: 300, diagLen: 521, speedMluPerTick: 3000, interval: 156, jitter: 12, quota: 16 },
+  2: { C: 4, K: 3, R: 4, pBranchPct: 70, Jmin: 3, Jmax: 5, Ja: 3, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3200, interval: 108, jitter: 12, quota: 33 },
+  3: { C: 4, K: 4, R: 4, pBranchPct: 80, Jmin: 4, Jmax: 6, Ja: 4, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3400, interval: 106, jitter: 18, quota: 41 },
+  4: { C: 5, K: 4, R: 5, pBranchPct: 80, Jmin: 5, Jmax: 7, Ja: 5, Dmin: 2, Dmax: 4, rowH: 240, colW: 195, diagLen: 323, speedMluPerTick: 3600, interval: 110, jitter: 18, quota: 47 },
+  5: { C: 5, K: 5, R: 6, pBranchPct: 88, Jmin: 7, Jmax: 8, Ja: 7, Dmin: 2, Dmax: 4, rowH: 200, colW: 195, diagLen: 293, speedMluPerTick: 3800, interval: 120, jitter: 18, quota: 51 },
+};
+
+test('AC-202 · the band table IS generation.md §6.1, and reaches the level unchanged', () => {
+  let checked = 0;
   for (let band = 1; band <= 5; band += 1) {
     const P = BANDS[band];
+    for (const [k, v] of Object.entries(DESIGN_6_1[band])) {
+      assert.equal(P[k], v, 'BANDS[' + band + '].' + k + ' is not generation.md §6.1\'s value');
+      checked += 1;
+    }
     const level = generate(1234 + band, band);
     for (const k of ['C', 'K', 'R', 'colW', 'rowH', 'diagLen', 'speedMluPerTick', 'interval', 'jitter', 'quota']) {
       assert.equal(level[k], P[k], 'band ' + band + ' ' + k);
     }
     assert.equal(level.band, band);
   }
+  assert.equal(checked, 80, 'a column was dropped from the §6.1 transcription');
 });
 
 test('AC-218 · every coordinate and length is an integer', () => {

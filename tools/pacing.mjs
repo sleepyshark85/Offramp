@@ -12,12 +12,16 @@ import { playLevel } from './lib/solver.mjs';
 import { arg, summary, table } from './lib/report.mjs';
 
 // generation.md §7.3
+// The median BANDS are the design's and have not moved since they were derived. The `nominal`
+// column is SPAWN_LEAD/60 + (quota - 1) * interval/60 + transit, so round 6's lever-0 pull
+// moved it by at most 1.0 s at any band — which is what "iso-duration" means and what makes
+// the pull legal under §7.4.
 const TARGET = {
-  1: { nominal: 49.1, lo: 42, hi: 62, p95: 68 },
-  2: { nominal: 67.0, lo: 58, hi: 78, p95: 86 },
-  3: { nominal: 79.0, lo: 70, hi: 92, p95: 100 },
+  1: { nominal: 49.4, lo: 42, hi: 62, p95: 68 },
+  2: { nominal: 67.4, lo: 58, hi: 78, p95: 86 },
+  3: { nominal: 80.0, lo: 70, hi: 92, p95: 100 },
   4: { nominal: 92.9, lo: 84, hi: 106, p95: 114 },
-  5: { nominal: 108.8, lo: 98, hi: 122, p95: 126 },
+  5: { nominal: 108.3, lo: 98, hi: 122, p95: 126 },
 };
 const CEILING = 130;
 

@@ -65,10 +65,10 @@ export const PALETTE = ['#FF852A', '#89D9FF', '#FF5386', '#22C6AF', '#A879FF'];
 export const BANDS = [
   null, // bands are 1-indexed
   { band: 1, levels: [1, 4],   C: 3, K: 3, R: 3, pBranchPct: 85, Jmin: 3, Jmax: 3, Ja: 3, Dmin: 2, Dmax: 2, rowH: 400, colW: 300, diagLen: 521, speedMluPerTick: 3000, interval: 156, jitter: 12, quota: 16 },
-  { band: 2, levels: [5, 9],   C: 4, K: 3, R: 4, pBranchPct: 70, Jmin: 3, Jmax: 5, Ja: 3, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3200, interval: 138, jitter: 12, quota: 26 },
-  { band: 3, levels: [10, 15], C: 4, K: 4, R: 4, pBranchPct: 80, Jmin: 4, Jmax: 6, Ja: 4, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3400, interval: 120, jitter: 18, quota: 36 },
-  { band: 4, levels: [16, 22], C: 5, K: 4, R: 5, pBranchPct: 80, Jmin: 5, Jmax: 7, Ja: 5, Dmin: 2, Dmax: 4, rowH: 240, colW: 195, diagLen: 323, speedMluPerTick: 3600, interval: 108, jitter: 18, quota: 48 },
-  { band: 5, levels: [23, Infinity], C: 5, K: 5, R: 6, pBranchPct: 88, Jmin: 7, Jmax: 8, Ja: 7, Dmin: 2, Dmax: 4, rowH: 200, colW: 195, diagLen: 293, speedMluPerTick: 3800, interval: 96, jitter: 18, quota: 64 },
+  { band: 2, levels: [5, 9],   C: 4, K: 3, R: 4, pBranchPct: 70, Jmin: 3, Jmax: 5, Ja: 3, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3200, interval: 108, jitter: 12, quota: 33 },
+  { band: 3, levels: [10, 15], C: 4, K: 4, R: 4, pBranchPct: 80, Jmin: 4, Jmax: 6, Ja: 4, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3400, interval: 106, jitter: 18, quota: 41 },
+  { band: 4, levels: [16, 22], C: 5, K: 4, R: 5, pBranchPct: 80, Jmin: 5, Jmax: 7, Ja: 5, Dmin: 2, Dmax: 4, rowH: 240, colW: 195, diagLen: 323, speedMluPerTick: 3600, interval: 110, jitter: 18, quota: 47 },
+  { band: 5, levels: [23, Infinity], C: 5, K: 5, R: 6, pBranchPct: 88, Jmin: 7, Jmax: 8, Ja: 7, Dmin: 2, Dmax: 4, rowH: 200, colW: 195, diagLen: 293, speedMluPerTick: 3800, interval: 120, jitter: 18, quota: 51 },
 ];
 
 /** Level number -> band index (gameplay.md §5, AC-701). */
@@ -92,7 +92,11 @@ export function bandParams(band) {
 // flat 8 and it had eroded to a margin of one car at band 5 without anything failing; every
 // difficulty lever in generation.md §7.4 moves a term below, and so does a geometry change —
 // ENTRY_LEN 100 -> 160 is exactly the silent walk this derivation exists to catch, and it is
-// what takes band 2 from 8 to 9. Written as a derivation, a lever pull recomputes it.
+// what took band 2 from 8 to 9. Written as a derivation, a lever pull recomputes it — and
+// round 6's lever-0 pull is the first one that did: `interval` moved DOWN at bands 2 and 3 and
+// UP at bands 4 and 5, and the slack followed it both ways, 8/9/9/9/10 -> 8/10/10/9/9. Bands 2
+// and 3 needed a car more and got it without anyone noticing it was owed; band 5 needed one
+// fewer and gave it back, which a hand-written constant never does.
 
 /** The longest root-to-depot journey in the band, in ticks. */
 export function transitMaxTicks(P) {
