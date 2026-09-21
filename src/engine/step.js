@@ -86,8 +86,17 @@ export function apply(state, action) {
  * resolveArrival — the single place scoring happens (gameplay.md §2.6).
  * The caller removes the car from the list; this function never mutates the list it is being
  * iterated over (docs/reports/slice-0-orchestrator-verification.md, finding 2).
+ *
+ * `edgeId` is the TERMINAL EDGE the car was on when it reached the depot (gameplay.md §2.6,
+ * AC-140). It exists because a depot has an in-degree of up to 3 (§4.5b), so `depotId` does
+ * not identify the road the car came down, and ui.md §8.3 / §8.4 anchor the delivery glow and
+ * the misroute shatter to that road's mouth line. It is RENDER-ONLY, like the rest of the
+ * event (§2.9): nothing in the engine reads it back, and no counter, score, phase or
+ * invariant depends on it. §2.5's transition loop already holds the edge in a local variable
+ * at the moment it calls this, so passing it through removes the renderer's second derivation
+ * rather than adding a first (docs/development-process.md:173).
  */
-function resolveArrival(state, car, depotNode) {
+function resolveArrival(state, car, depotNode, edgeId) {
   if (depotNode.depotColour === car.colour) {
     state.delivered += 1;
     state.streak += 1;
@@ -98,6 +107,7 @@ function resolveArrival(state, car, depotNode) {
       tick: state.tick,
       carId: car.id,
       depotId: depotNode.id,
+      edgeId,
       colour: car.colour,
     });
   } else {
@@ -111,6 +121,7 @@ function resolveArrival(state, car, depotNode) {
       tick: state.tick,
       carId: car.id,
       depotId: depotNode.id,
+      edgeId,
       carColour: car.colour,
       depotColour: depotNode.depotColour,
     });
@@ -152,7 +163,7 @@ export function step(state, inputs) {
       car.progress -= edge.lengthMlu;
       const node = nodes[edge.to];
       if (node.kind === 'depot') {
-        resolveArrival(next, car, node);
+        resolveArrival(next, car, node, edge.id);
         arrived = true;
         break;
       }

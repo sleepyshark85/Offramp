@@ -23,13 +23,16 @@ export const C = {
   textMute: '#6B7688',
   alert: '#FF2D55',
   ok: '#E8ECF2',
-  // DEVIATION, reported rather than resolved silently: ui.md §4.3 draws the windscreen in
-  // `--car-glass` at 22 % opacity, but §5.3's token table does not define `--car-glass`.
-  // `--ink` is used here — a dark panel on a bright body reads as glass seen from above at
-  // night, where a light one would read as a highlight — and the gap is in the slice-2
-  // report for the designer to close.
-  carGlass: '#0B0E13',
 };
+
+// There is deliberately no `--car-glass` token (ui.md §4.3, round 7). The windscreen is
+// `--text` at 22 %, and a token whose value would duplicate an existing one, for one use, is
+// a second place the same hex has to stay right. Slice 2 drew the pane in `--ink` on the
+// argument that dark glass reads as glass from above; it put Rose at 2.79 : 1 and Iris at
+// 2.81 : 1 against the road over a fifth of the body, below even AC-606's 3.0 floor. `--text`
+// at 22 % measures 6.13 / 8.74 / 4.99 / 6.71 / 5.24 : 1 — see the AC-606 composite check in
+// test/render-geometry.test.js, which is run on the composited patch and not on the palette
+// entry.
 
 export const OPACITY = {
   roadDash: 0.4, // ui.md §4.2 step 4
@@ -39,8 +42,8 @@ export const OPACITY = {
   blade: 0.92, // ui.md §7.3
   armedArc: 0.6, // ui.md §7.3
   flare: 0.6, // ui.md §7.5
-  depotHatch: 0.18, // ui.md §7.4
-  glass: 0.22, // ui.md §4.3
+  depotHatch: 0.18, // ui.md §7.4 — the sill bars (AC-518)
+  glass: 0.22, // ui.md §4.3 — the windscreen, `--text` at 22 %
   mouthGlow: 0.55, // ui.md §8.3
   frozenCar: 0.45, // ui.md §7.5
   dim: 0.4, // ui.md §8.6 — play surface dims to 40 %

@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { MAX_CATCHUP_TICKS, MAX_POINTERS, TICK_HZ, createState, resetClock } from '../src/engine/index.js';
+import { MAX_CATCHUP_TICKS, TICK_HZ, createState, resetClock } from '../src/engine/index.js';
 import { generate } from '../src/engine/generate.js';
 import { EVENT_WINDOW_TICKS, advanceFrame, collectEvents, enqueueTap } from '../src/ui/loop.js';
 
@@ -95,24 +95,47 @@ test('AC-305 · a tap is stamped to the next tick to be simulated and consumed b
   assert.ok(level.junctions.length > 0);
 });
 
-test('AC-306 · two taps in one frame are stamped to the same tick and resolve by junction id', () => {
+test('AC-306 · two taps in one frame are two inputs on one tick, ordered by junction id', () => {
+  // Round 7 rewrote AC-306 from "two simultaneous pointers" to a property of the input QUEUE,
+  // because Offramp is a one-pointer game (ui.md §10.3) and two taps landing between the same
+  // pair of step() calls is reachable with one finger: the window is 16.7 ms at 60 fps,
+  // 33 ms at 30, and longer under a catch-up frame.
   const { state } = fresh(3);
   const warm = run(state, 30, 1000 / 60);
+  // Submitted in DESCENDING order, so an implementation that honoured arrival order would
+  // produce [2, 1] and fail.
   let q = enqueueTap([], warm.state, 2);
   q = enqueueTap(q, warm.state, 1);
-  assert.equal(q.length, 2);
-  assert.equal(q[0].tick, q[1].tick);
+  assert.equal(q.length, 2, 'neither tap was coalesced or dropped');
+  assert.equal(q[0].tick, q[1].tick, 'both stamped to the same tick');
+  const before = [warm.state.open[1], warm.state.open[2]];
   const r = advanceFrame(warm.state, 0, 1000 / 60, q, []);
   const flips = r.state.events.filter((e) => e.type === 'flip').map((e) => e.junctionId);
   assert.deepEqual(flips, [1, 2], 'ascending by junction id, not by arrival order');
+  assert.equal(r.state.open[1], before[0] ^ 1, 'junction 1 actually flipped');
+  assert.equal(r.state.open[2], before[1] ^ 1, 'junction 2 actually flipped');
+  assert.equal(r.pending.length, 0, 'both were consumed by that one step()');
 });
 
-test('ui.md §10.3 · at most MAX_POINTERS inputs are accepted for one tick', () => {
+test('AC-306 · nothing caps how many inputs may share a tick — MAX_POINTERS is deleted', () => {
+  // The deleted cap silently discarded the third and later input stamped to one tick. Under a
+  // MAX_CATCHUP_TICKS catch-up frame a player can legitimately queue more than two, and
+  // gameplay.md §3.5 says there is no debounce and no coalescing.
   const { state } = fresh(4);
+  const warm = run(state, 30, 1000 / 60);
+  const ids = [3, 0, 2, 1, 0];
   let q = [];
-  for (let i = 0; i < 5; i += 1) q = enqueueTap(q, state, i % 3);
-  assert.equal(q.length, MAX_POINTERS);
-  assert.equal(MAX_POINTERS, 2);
+  for (const id of ids) q = enqueueTap(q, warm.state, id);
+  assert.equal(q.length, ids.length, 'an input was dropped: ' + JSON.stringify(q));
+  assert.ok(q.every((p) => p.tick === warm.state.tick));
+  const r = advanceFrame(warm.state, 0, 1000 / 60, q, []);
+  const flips = r.state.events.filter((e) => e.type === 'flip').map((e) => e.junctionId);
+  assert.deepEqual(flips, [0, 0, 1, 2, 3], 'every input reached step(), in junction order');
+  // Junction 0 was tapped twice on one tick: two toggles net to no change (AC-111).
+  assert.equal(r.state.open[0], warm.state.open[0]);
+  // And the engine module no longer exports the constant at all.
+  const engine = readFileSync(new URL('../src/engine/constants.js', import.meta.url), 'utf8');
+  assert.ok(!engine.includes('MAX_POINTERS'), 'MAX_POINTERS is still in the engine constants');
 });
 
 test('AC-309 · no debounce: two taps 20 ms apart land on consecutive ticks and net to zero', () => {
@@ -237,10 +260,24 @@ test('AC-312 · tap is the only gesture the play screen registers', () => {
   const src = readFileSync(new URL('../src/ui/PlayScreen.js', import.meta.url), 'utf8');
   const gestures = [...src.matchAll(/Gesture\.(\w+)\(/g)].map((m) => m[1]);
   assert.deepEqual(gestures, ['Tap'], 'gestures registered: ' + JSON.stringify(gestures));
-  for (const banned of ['Pan', 'LongPress', 'Fling', 'Pinch', 'Rotation', 'numberOfTaps']) {
+  for (const banned of ['Pan', 'LongPress', 'Fling', 'Pinch', 'Rotation', 'Manual', 'numberOfTaps']) {
     assert.ok(!src.includes(banned), 'PlayScreen mentions ' + banned);
   }
   // ui.md §10.3's two configured limits, transcribed.
   assert.ok(/maxDuration\(TAP_MAX_DURATION_MS\)/.test(src) && src.includes('TAP_MAX_DURATION_MS = 400'));
   assert.ok(/maxDistance\(TAP_MAX_DISTANCE_PT\)/.test(src) && src.includes('TAP_MAX_DISTANCE_PT = 16'));
+});
+
+test('AC-313 · the hit-tested point is captured at begin, not read off the end event', () => {
+  // The behavioural check is tier 3 (e2e/play.e2e.mjs), where two real touch points are
+  // dispatched at two junctions. This is the source-level half: RNGH's default is the
+  // centroid, so the defect is the ABSENCE of a capture rather than the presence of anything,
+  // and a grep is the only tier-1 instrument that can see an absence.
+  const src = readFileSync(new URL('../src/ui/PlayScreen.js', import.meta.url), 'utf8');
+  assert.ok(/\.onBegin\(/.test(src), 'nothing captures the gesture-begin point');
+  const onEnd = src.slice(src.indexOf('.onEnd('), src.indexOf('.onEnd(') + 300);
+  assert.ok(!/onTap\(e\.x/.test(onEnd), 'onEnd still hit-tests the event point, which is the centroid');
+  assert.ok(/onTap\(first\.x, first\.y\)/.test(onEnd), 'onEnd does not hit-test the captured first point');
+  // AC-312 is unchanged by this: the capture is on the one Tap gesture, not a second handler.
+  assert.equal([...src.matchAll(/Gesture\.(\w+)\(/g)].length, 1);
 });

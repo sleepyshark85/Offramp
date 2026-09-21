@@ -6,7 +6,7 @@
 //
 // Nothing here is scheduled, and nothing here is called from inside a setState updater.
 
-import { MAX_POINTERS, advanceClock, step } from '../engine/index.js';
+import { advanceClock, step } from '../engine/index.js';
 
 /**
  * How far back the renderer can still be showing an event. The longest play-surface
@@ -21,28 +21,15 @@ import { MAX_POINTERS, advanceClock, step } from '../engine/index.js';
  */
 export const EVENT_WINDOW_TICKS = 24;
 
-/**
- * AC-515 requires the misroute shatter to originate at the mouth line of THE TERMINAL EDGE
- * THE CAR CAME DOWN, and `delivered` / `misrouted` carry `carId` and `depotId` but not the
- * edge. A depot has in-degree up to 3 (gameplay.md §4.5b), so the depot does not determine
- * the edge and the renderer cannot satisfy AC-515 from the event alone.
- *
- * The edge is recovered here rather than by changing the engine: the car's edge at the START
- * of the tick it arrives on IS the terminal edge, because one tick moves a car at most
- * 3.8 LU and the shortest terminal edge is 200 LU. This is a render hint derived from engine
- * state, not a second source of truth — and it is reported to the designer as an event-payload
- * gap, because recovering it outside the engine is a workaround, not a fix.
- */
-function withEdge(events, edgeOf) {
-  let touched = false;
-  const out = events.map((e) => {
-    if (e.type !== 'delivered' && e.type !== 'misrouted') return e;
-    if (!edgeOf.has(e.carId)) return e;
-    touched = true;
-    return { ...e, edgeId: edgeOf.get(e.carId) };
-  });
-  return touched ? out : events;
-}
+// AC-140 closed the event-payload gap this file used to work around. Through slice 2 a
+// `withEdge()` helper re-attached the arriving edge to every `delivered` / `misrouted` event
+// by snapshotting each car's `edgeId` at the START of the tick — sound, because one tick
+// moves a car at most 3.8 LU against a terminal edge of at least 200 LU, but a second
+// derivation of a fact the engine held in a local variable (docs/development-process.md:173).
+// `resolveArrival` now puts `edgeId` on both events (gameplay.md §2.6), the cross-check in
+// test/render-geometry.test.js and tools/render-audit.mjs shows the two agreed on every
+// arrival over 1,000 levels a band, and the workaround is deleted rather than kept as a
+// fallback.
 
 /** Pure. Appends this step's events and drops anything older than the window. */
 export function collectEvents(recent, state) {
@@ -58,16 +45,16 @@ export function collectEvents(recent, state) {
  * the tick about to be simulated (gameplay.md §2.4), so no arithmetic is needed and there is
  * no off-by-one to get wrong.
  *
- * AC-306 / ui.md §10.3: at most MAX_POINTERS inputs are accepted for any one tick. Two taps
- * on the same junction in the same tick are both kept — two toggles is two toggles
- * (gameplay.md §3.5) — so this never dedupes.
+ * AC-306 / gameplay.md §3.5: every tap is enqueued. Nothing is coalesced, deduped, debounced
+ * or dropped, and there is no cap on how many inputs may share a tick — two taps on the same
+ * junction in the same tick are two toggles, and two taps on different junctions resolve by
+ * ascending junction id inside `step()` (AC-110). The `MAX_POINTERS = 2` cap this function
+ * used to apply was deleted in round 7 with the two-pointer input model it belonged to
+ * (ui.md §10.3): Offramp is a one-pointer game, so a cap on simultaneous pointers was
+ * protecting a queue property it could not express, and the queue property is the guarantee.
  */
 export function enqueueTap(pending, state, junctionId) {
-  const tick = state.tick;
-  let sameTick = 0;
-  for (const p of pending) if (p.tick === tick) sameTick += 1;
-  if (sameTick >= MAX_POINTERS) return pending;
-  return pending.concat([{ tick, junctionId }]);
+  return pending.concat([{ tick: state.tick, junctionId }]);
 }
 
 /**
@@ -100,10 +87,8 @@ export function advanceFrame(state, accTicks, deltaMs, pending, recent) {
       }
       queue = rest;
     }
-    const edgeOf = new Map();
-    for (const c of s.cars) edgeOf.set(c.id, c.edgeId);
     s = step(s, forTick);
-    events = collectEvents(events, { tick: s.tick, events: withEdge(s.events, edgeOf) });
+    events = collectEvents(events, s);
     ticksRun += 1;
   }
 

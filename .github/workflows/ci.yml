@@ -53,6 +53,21 @@ jobs:
       - name: Completion-time bands (AC-226 to AC-231)
         run: node tools/pacing.mjs --seeds 300
 
+      # Two render claims that need a sweep to settle: AC-504's >= 30 deg of blade separation
+      # at every junction, and AC-140's cross-check of the engine's arrival edgeId against the
+      # previous-tick inference the renderer used through slice 2.
+      - name: Render audit (AC-140, AC-504)
+        run: node tools/render-audit.mjs --seeds 1000
+
+      # Both audits exist because a defect shipped that every check at the time was blind to,
+      # so both are run against that defect before their green is trusted (§6.2).
+      - name: Every render check proven able to fire
+        run: |
+          set -e
+          for i in tangent tangent0 depot-first; do
+            node tools/render-audit.mjs --seeds 200 --inject "$i"
+          done
+
       - name: AC cross-references
         run: node docs/design/check-ac-refs.mjs
 

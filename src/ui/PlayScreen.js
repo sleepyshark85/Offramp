@@ -44,14 +44,50 @@ export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onN
   // ui.md §10.1 — the gesture handler's view starts at `playTop`, so the touch y has to be
   // put back into screen space before it is mapped into design space.
   const onTap = useCallback((x, y) => tap(x, y + layout.playTop), [tap, layout.playTop]);
+
+  /**
+   * AC-313. The point that gets hit-tested is the gesture's FIRST pointer, captured at
+   * begin — NOT the point `onEnd` reports.
+   *
+   * RNGH tracks the CENTROID of every live pointer. `TapGestureHandler` does not override
+   * `transformNativeEvent`, so the `x`/`y` on its events are
+   * `tracker.getRelativeCoordsAverage()`, and `onPointerAdd` folds the jump the centroid
+   * takes into `offsetX`/`offsetY` so that `maxDistance` never rejects it. The result is that
+   * a second finger anywhere on the canvas drags the reported point toward it, and two
+   * fingers on two junctions report ONE tap at the midpoint — which usually hits neither
+   * junction and occasionally hits a third.
+   *
+   * `onBegin` fires exactly once per gesture, on the transition out of UNDETERMINED, which
+   * happens on the first pointer's DOWN and only then. At that instant the tracker holds one
+   * pointer, so the "average" IS that pointer. Every later pointer is therefore ignored by
+   * construction rather than by a count we would have to keep. AC-312 still holds: the
+   * capture hangs off the one tap gesture that is already registered, not off a second
+   * handler.
+   *
+   * ON WEB ONLY, the extra pointer does not just fail to move the tap — it cancels it, and
+   * that is upstream rather than here.
+   * `node_modules/react-native-gesture-handler/src/web/handlers/TapGestureHandler.ts:162`
+   * reads `this.offsetY += this.lastY = this.startY;` — an assignment where every sibling
+   * line subtracts — so lifting a secondary pointer adds an absolute screen coordinate to
+   * `offsetY` and `shouldFail()` sees hundreds of points against a `maxDistance` of 16.
+   * Repairing that one character in node_modules and rebuilding makes AC-313's full clause
+   * pass against this code unchanged (verified, then reverted — a vendored patch is not
+   * something this project ships). The native recognisers are different code and are not
+   * affected; the clause is a tier-5 obligation there. See e2e/play.e2e.mjs.
+   */
+  const firstPointRef = useRef(null);
   const gesture = useMemo(
     () =>
       Gesture.Tap()
         .maxDuration(TAP_MAX_DURATION_MS)
         .maxDistance(TAP_MAX_DISTANCE_PT)
         .runOnJS(true)
-        .onEnd((e, success) => {
-          if (success) onTap(e.x, e.y);
+        .onBegin((e) => {
+          firstPointRef.current = { x: e.x, y: e.y };
+        })
+        .onEnd((_event, success) => {
+          const first = firstPointRef.current;
+          if (success && first) onTap(first.x, first.y);
         }),
     [onTap],
   );

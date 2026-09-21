@@ -32,11 +32,13 @@ import { glyphPath } from './glyphs.js';
 import {
   ARMED_ARC_W,
   BLADE_LEN,
+  BLADE_W,
   CAR_L,
   CAR_RADIUS,
   CAR_SHADOW_DY,
   CAR_W,
   COMMIT_PREVIEW,
+  DEPOT_DISC_RATIO,
   DEPOT_FACE_BAND,
   DEPOT_HATCH_W,
   DEPOT_RADIUS,
@@ -67,9 +69,6 @@ import {
 } from './geometry.js';
 import { easeOutCubic, easeOutQuad, jitter01, lerp, phase } from './motion.js';
 
-// ui.md §7.3. The blade's length is specified (40 LU); its thickness is not, so it is stated
-// here rather than buried in a draw call. Reported to the designer as an ui.md §7.3 gap.
-const BLADE_W = 12;
 // ui.md §8.4. The fragment size and scatter range are specified; the count is six.
 const SHATTER_COUNT = 6;
 const SHATTER_FRAG = 26;
@@ -118,7 +117,10 @@ function Roads({ road }) {
 
 // --- 5 · junction markers, open branch and the armed arc ---------------------------------
 
+const OPEN_BRANCH_COLOUR = lighten(C.road, 0.16);
+
 function Junction({ j, open, armOpacity, flipTick, tick, paths }) {
+  const fade = paths.fadeEnds[open];
   const openAngle = j.branches[open].angle;
   const shutAngle = j.branches[1 - open].angle;
   // ui.md §8.2 — the blade rotates to the new branch over 120 ms, ease-out-cubic.
@@ -128,9 +130,25 @@ function Junction({ j, open, armOpacity, flipTick, tick, paths }) {
   const rip = phase(tick, flipTick, MS.ripple);
   return (
     <Group>
-      {/* Butt caps, not round: a round cap on a 104 LU stroke puts a 52 LU lobe ABOVE the
-          junction node, so the "open" brightening spilled backwards up the incoming road. */}
-      <Path path={paths.open[open]} style="stroke" strokeWidth={ROAD_W} strokeCap="butt" color={lighten(C.road, 0.16)} />
+      {/* ui.md §7.3 — the open branch, --road lightened 16 % for 150 LU. Butt caps, not
+          round: a round cap on a 104 LU stroke puts a 52 LU lobe ABOVE the junction node, so
+          the brightening spilled backwards up the incoming road. The near butt end is hidden
+          under the marker disc, which is painted after it; the far end is hidden by nothing,
+          so its alpha ramps linearly to zero over OPEN_BRANCH_FADE rather than stopping in a
+          hard line that would read as a road marking this game does not have. */}
+      <Path path={paths.open[open]} style="stroke" strokeWidth={ROAD_W} strokeCap="butt" color={OPEN_BRANCH_COLOUR} />
+      <Path
+        path={paths.openFade[open]}
+        style="stroke"
+        strokeWidth={ROAD_W}
+        strokeCap="butt"
+      >
+        <LinearGradient
+          start={vec(fade.from[0], fade.from[1])}
+          end={vec(fade.to[0], fade.to[1])}
+          colors={[OPEN_BRANCH_COLOUR, withAlpha(OPEN_BRANCH_COLOUR, 0)]}
+        />
+      </Path>
       {armOpacity > 0 ? (
         <Path
           path={paths.armed[open]}
@@ -192,7 +210,7 @@ function Flares({ entry, spawns, tick }) {
   );
 }
 
-// --- 7 · cars ----------------------------------------------------------------------------
+// --- 7, 8 · car shadows, then car bodies -------------------------------------------------
 
 function CarBody({ pose, colour, glyphSize, glyphOpacity }) {
   return (
@@ -211,7 +229,7 @@ function CarBody({ pose, colour, glyphSize, glyphOpacity }) {
         width={GLASS_W}
         height={GLASS_L}
         r={8}
-        color={withAlpha(C.carGlass, OPACITY.glass)}
+        color={withAlpha(C.text, OPACITY.glass)}
       />
       {/* ui.md §6.2 — counter-rotated so the glyph is always upright relative to the screen. */}
       <Group transform={[{ rotate: -pose.angle }]}>
@@ -225,9 +243,17 @@ function Cars({ curves, cars, glyphSize, glyphOpacity, frozen }) {
   const poses = cars.map((car) => ({ car, pose: carPose(curves, car) }));
   return (
     <Group opacity={frozen ? OPACITY.frozenCar : 1}>
-      {/* Shadows first, then bodies: AC-501 forbids a car being occluded by another car's
-          shadow, which per-car ordering inside the layer would produce. */}
+      {/* ui.md §4.2 steps 7 and 8 — TWO passes over the car list, not one. Every shadow is
+          painted before every body, because AC-501 forbids a car being occluded by another
+          car's shadow and per-car ordering produces exactly that. It is reachable: §4.5's
+          no-overlap guarantee stops at a depot mouth fed by two or three edges
+          (gameplay.md §4.5b), which every level at every band has, and a 6 LU sliver of
+          #000000 at 32 % across another car's colour patch sits in the one region of the
+          board where two colours are being told apart under time pressure. */}
       {poses.map(({ car, pose }) => (
+        // ui.md §4.3 — the offset is (0, +6) LU in SCREEN space, applied before the
+        // rotation, because the light is above the screen and a shadow does not rotate with
+        // the thing casting it.
         <Group
           key={'sh' + car.id}
           transform={[{ translateX: pose.x }, { translateY: pose.y + CAR_SHADOW_DY }, { rotate: pose.angle }]}
@@ -249,7 +275,7 @@ function Cars({ curves, cars, glyphSize, glyphOpacity, frozen }) {
   );
 }
 
-// --- 8 · depot-mouth aprons --------------------------------------------------------------
+// --- 9 · depot-mouth aprons --------------------------------------------------------------
 
 function Mouths({ geom, corePath, glows, tick }) {
   return (
@@ -281,9 +307,11 @@ function Mouths({ geom, corePath, glows, tick }) {
           );
         })}
       </Group>
-      {/* ui.md §8.3 — the mouth glow: the apron core redrawn in the car's colour at 55 %,
-          90 ms in, 130 ms out. The car is already beneath the apron, so this is what says
-          "banked, and in which colour". */}
+      {/* ui.md §8.3 / AC-519 — the mouth glow: the core of ONE mouth, the apron segment of
+          `level.edges[event.edgeId]`, redrawn in the car's colour at 55 %, 90 ms in, 130 ms
+          out. The car is already beneath the apron, so this is what says "banked, and in
+          which colour" — and it has to say it about one road, because a depot is fed by up
+          to three and only one of them delivered this car. */}
       {glows.map((g) => (
         <Path
           key={'glow' + g.key}
@@ -299,7 +327,7 @@ function Mouths({ geom, corePath, glows, tick }) {
   );
 }
 
-// --- 9 · depot bodies --------------------------------------------------------------------
+// --- 10 · depot bodies --------------------------------------------------------------------
 
 function Depot({ d, glyphSize, receiving, rejecting }) {
   // ui.md §7.4 — receiving: face band +18 % brightness, body 1.00 -> 1.04 -> 1.00 over 220 ms.
@@ -313,7 +341,8 @@ function Depot({ d, glyphSize, receiving, rejecting }) {
     rejecting === null ? 0 : flashing ? 1 : 1 - easeOutCubic((rejecting - flashFrac) / (1 - flashFrac));
   const colour = CAR_COLOURS[d.colour];
   // "the whole depot desaturates to --text-mute and returns over 260 ms" (ui.md §7.4) — the
-  // face band is part of the whole depot, so it desaturates with the glyph disc and the hatch.
+  // face band is part of the whole depot, so it desaturates with the glyph disc and the sill
+  // bars (AC-518).
   const accent = desat > 0 ? C.textMute : colour;
   const face = flashing ? C.alert : desat > 0 ? C.textMute : lighten(colour, faceLift);
   const body = desat > 0 ? lighten(C.depot, 0.1 * desat) : C.depot;
@@ -321,17 +350,25 @@ function Depot({ d, glyphSize, receiving, rejecting }) {
     <Group transform={[{ translateX: d.cx }, { translateY: d.cy }, { scale: s }, { translateX: -d.cx }, { translateY: -d.cy }]}>
       <RoundedRect x={d.x} y={d.y} width={d.w} height={d.h} r={DEPOT_RADIUS} color={body} />
       <RoundedRect x={d.x} y={d.y} width={d.w} height={DEPOT_FACE_BAND} r={DEPOT_RADIUS / 3} color={face} />
-      <Circle cx={d.cx} cy={d.cy} r={glyphSize * 0.75} color={accent} />
+      {/* ui.md §7.4 / AC-518 — the glyph disc is 0.75 x the glyph size: the widest glyph is
+          a filled square whose corners sit at 0.707 s, so anything below 0.72 clips it, and
+          0.75 leaves visible margin while the 132 LU disc at Large still clears DEPOT_W by
+          14 LU a side. */}
+      <Circle cx={d.cx} cy={d.cy} r={glyphSize * DEPOT_DISC_RATIO} color={accent} />
       <Group transform={[{ translateX: d.cx }, { translateY: d.cy }]}>
         <Path path={glyphPath(d.colour, glyphSize)} color={C.ink} />
       </Group>
-      {[0, 1, 2].map((i) => (
+      {/* ui.md §7.4 / AC-518 — the SILL: three 6 LU bars on a 10 LU pitch, inset 16 LU a
+          side, the lowest bar's bottom edge 8 LU above the body's. They occupy the bottom
+          26 LU, which is 15 % of DEPOT_H and not a third: the 18 LU face band is the primary
+          colour carrier and the sill must not compete with it. */}
+      {d.sill.map((bar, i) => (
         <RoundedRect
           key={i}
-          x={d.x + 16}
-          y={d.y + d.h - 34 + i * 10}
-          width={d.w - 32}
-          height={DEPOT_HATCH_W}
+          x={bar.x}
+          y={bar.y}
+          width={bar.w}
+          height={bar.h}
           r={DEPOT_HATCH_W / 2}
           color={withAlpha(accent, OPACITY.depotHatch)}
         />
@@ -340,7 +377,7 @@ function Depot({ d, glyphSize, receiving, rejecting }) {
   );
 }
 
-// --- 10 · transient effects --------------------------------------------------------------
+// --- 11 · transient effects --------------------------------------------------------------
 
 function Shatter({ frags }) {
   return (
@@ -387,27 +424,28 @@ export default function PlaySurface({ geom, state, events, layout, symbolLarge, 
     () =>
       geom.junctions.map((j) => ({
         open: j.branches.map((b) => polyPath(b.open)),
+        openFade: j.branches.map((b) => polyPath(b.openFade)),
+        // The gradient's two endpoints, in LU, taken from the same polyline the stroke
+        // follows — so the ramp reaches zero exactly where the overdraw ends.
+        fadeEnds: j.branches.map((b) => ({ from: b.openFade[0], to: b.openFade[b.openFade.length - 1] })),
         armed: j.branches.map((b) => polyPath(b.armed)),
       })),
     [geom],
   );
-  const mouthByDepot = useMemo(() => {
+  // AC-519 / AC-515: keyed by EDGE, never by depot. Every level at every band has a depot
+  // fed by two or three terminal edges (gameplay.md §4.5b), and slice 2 keyed both the
+  // delivery glow and the misroute shatter by depot — so one arriving car lit two or three
+  // roads. One arrival is one mouth.
+  const mouthByEdge = useMemo(() => {
     const m = new Map();
-    for (const mo of geom.mouths) {
-      if (!m.has(mo.depotNodeId)) m.set(mo.depotNodeId, []);
-      m.get(mo.depotNodeId).push(mo);
-    }
+    for (const mo of geom.mouths) m.set(mo.edgeId, mo);
     return m;
   }, [geom]);
-  const corePathByDepot = useMemo(() => {
+  const corePathByEdge = useMemo(() => {
     const m = new Map();
-    for (const [depotNodeId, list] of mouthByDepot) {
-      const p = Skia.Path.Make();
-      for (const mo of list) p.addPath(polyPath(mo.core));
-      m.set(depotNodeId, p);
-    }
+    for (const mo of geom.mouths) m.set(mo.edgeId, polyPath(mo.core));
     return m;
-  }, [mouthByDepot]);
+  }, [geom]);
 
   const { level, curves } = geom;
   const tick = state.tick;
@@ -439,7 +477,9 @@ export default function PlaySurface({ geom, state, events, layout, symbolLarge, 
     if (t === null) continue;
     const ms = t * total;
     const alpha = ms < inMs ? easeOutCubic(ms / inMs) : 1 - easeOutCubic((ms - inMs) / MS.mouthGlowOut);
-    const p = corePathByDepot.get(e.depotId);
+    // ui.md §8.3 / AC-519 — the core of the edge NAMED ON THE EVENT (AC-140). The other
+    // mouths of the same depot are untouched for the whole 220 ms.
+    const p = corePathByEdge.get(e.edgeId);
     if (p) glows.push({ key: e.carId, path: p, colour: e.colour, alpha });
   }
 
@@ -451,10 +491,13 @@ export default function PlaySurface({ geom, state, events, layout, symbolLarge, 
     if (v !== null) vignette = Math.max(vignette, VIGNETTE_PEAK * Math.sin(Math.PI * v));
     const t = phase(tick, e.tick, MS.shatter);
     if (t === null) continue;
-    // AC-515: the fragments come from the MOUTH LINE of the terminal edge the car came down
-    // — the last point at which the car was visible — not from the depot node.
-    const list = mouthByDepot.get(e.depotId) || [];
-    const m = list.find((x) => x.edgeId === e.edgeId) || list[0];
+    // AC-515: the fragments come from the MOUTH LINE of `level.edges[event.edgeId]` — the
+    // last point at which the car was visible — not from the depot node and not from an edge
+    // inferred from state the renderer kept from an earlier tick. There is deliberately no
+    // fallback to "some mouth of this depot": that would be the AC-519 defect wearing a
+    // different hat, and an event without an edge is a bug in the engine, not a paint to
+    // approximate.
+    const m = mouthByEdge.get(e.edgeId);
     if (!m) continue;
     const k = easeOutQuad(t);
     for (let i = 0; i < SHATTER_COUNT; i += 1) {

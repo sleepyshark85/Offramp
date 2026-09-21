@@ -24,9 +24,6 @@ export const SPAWN_LEAD = 90; // ticks of grace before the first car enters
 export const GEN_SALT = 0x9e3779b1;
 export const SPAWN_SALT = 0x85ebca6b;
 
-// --- Input model (gameplay.md §3.5) -----------------------------------------------------
-export const MAX_POINTERS = 2;
-
 // --- Design space (generation.md §3.1, §3.2) --------------------------------------------
 export const DESIGN_W = 1000;
 export const DESIGN_H = 1600;
