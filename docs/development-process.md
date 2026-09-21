@@ -251,6 +251,30 @@ silently.
 **Corollary:** a test that reads its expectation from the same source as the code under test is
 not a test. The design document is the expectation; transcribe it.
 
+### 6.9 The instrument certified a window the player rejected
+
+The constrained bot was built, argued over and rebuilt across four rounds until it passed its own
+sensitivity guard, and it certified a first-decision window of 717 ms at the hardest band as
+playable. The owner played the game once and said the junction nearest the entrance is impossible
+to react to under traffic.
+
+Both are true. The bot's window was derived from the bot's own constants — reaction, scan,
+acquire, lockout — so `AC-245`'s floor was measuring the model against itself. An instrument
+calibrated from a model of a player cannot falsify that model.
+
+This is not an argument against the instrument. It found four real defects that no human pass
+would have found, and it is why the difficulty curve is monotone at all. It is an argument about
+what it can *certify*: it can tell you a level is winnable by the player it models, and it cannot
+tell you the model is right.
+
+**Rule:** a threshold derived from the instrument's own constants is not evidence about a human.
+Mark every such AC as needing tier 5, and do not treat a tier-1 pass on one as settled.
+
+**Corollary, and the expensive half:** the cost of finding this out was two full design rounds
+that moved a geometry constant and then measured the bot agreeing with itself. Get the cheap
+human signal early — one person playing for ten minutes, once the thing runs at all, would have
+redirected both rounds before they happened.
+
 ---
 
 ## 7. Git workflow
