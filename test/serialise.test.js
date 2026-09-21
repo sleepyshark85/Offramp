@@ -55,7 +55,11 @@ test('a rehydrated state steps identically to the one it was written from', () =
     b = step(b, inputs.map((x) => ({ ...x })));
   }
   assert.deepEqual({ ...b, level: null }, { ...a, level: null });
-  assert.equal(b.score, a.score);
+  // `delivered` IS the score (gameplay.md §4.3, AC-117). This used to compare `b.score` with
+  // `a.score`, and after round 8 deleted the field that was `undefined === undefined` — a
+  // green assertion with no subject, which is what the deletion turned it into.
+  assert.equal(b.delivered, a.delivered);
+  assert.ok(!('score' in b) && !('score' in a), 'a `score` field came back through serialise');
   assert.equal(b.tick, a.tick);
 });
 

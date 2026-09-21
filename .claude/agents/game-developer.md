@@ -49,7 +49,8 @@ only a harness can settle, so you build them alongside the engine:
 
 - `tools/replay.mjs` — run a seed headless, print the run as ASCII, prove it replays.
 - `tools/bot.mjs` — solver bots, both unconstrained and human-constrained.
-- `tools/pacing.mjs` — completion-time distribution per difficulty band.
+- `tools/spawn-schedule.mjs` — the schedule reaches the two-minute bell.
+- `tools/converge.mjs` — how often two cars converge at a shared depot mouth.
 - `tools/generator-audit.mjs` — structural validity over thousands of seeds.
 - `tools/layout-sweep.mjs` — viewport arithmetic across device sizes.
 

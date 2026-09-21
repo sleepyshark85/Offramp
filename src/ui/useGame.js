@@ -17,9 +17,10 @@
 // get wrong: unmount runs every cleanup, and mount builds a fresh state at tick 0.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { createState, resetClock } from '../engine/index.js';
+import { MODE, backgroundAction } from './appState.js';
 import { buildLevelGeometry } from '../render/geometry.js';
 import { junctionSites, hitTest } from './hitTest.js';
 import { advanceFrame, enqueueTap } from './loop.js';
@@ -34,8 +35,6 @@ import { MS } from './theme.js';
  * suite asserts this is exactly 1 and that the tick rate matches a StrictMode-off run.
  */
 const LIVE_LOOPS = { count: 0 };
-
-export const MODE = { RUNNING: 'running', PAUSED: 'paused', COUNTDOWN: 'countdown' };
 
 export function useGame({ runSeed, levelNumber, layout, settings, screen }) {
   const level = useMemo(() => buildLevel(runSeed, levelNumber), [runSeed, levelNumber]);
@@ -137,16 +136,13 @@ export function useGame({ runSeed, levelNumber, layout, settings, screen }) {
   // --- backgrounding (AC-803) ------------------------------------------------------------
   useEffect(() => {
     const onChange = (next) => {
-      if (next !== 'active') {
-        simRef.current.acc = resetClock();
-        backgroundedRef.current = true;
-        setMode(MODE.PAUSED);
-      } else if (backgroundedRef.current) {
-        backgroundedRef.current = false;
-        simRef.current.acc = resetClock();
-        setCountdown(3);
-        setMode(MODE.COUNTDOWN);
-      }
+      const act = backgroundAction(Platform.OS, next, backgroundedRef.current);
+      // Zeroing the accumulator is UNCONDITIONAL and is the half that protects the
+      // simulation. Everything else is the platform-dependent half.
+      if (act.resetClock) simRef.current.acc = resetClock();
+      if (act.markBackgrounded !== undefined) backgroundedRef.current = act.markBackgrounded;
+      if (act.mode === MODE.COUNTDOWN) setCountdown(3);
+      if (act.mode) setMode(act.mode);
     };
     const sub = AppState.addEventListener('change', onChange);
     return () => sub.remove();

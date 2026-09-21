@@ -38,7 +38,6 @@ export function levelSnapshot(geom, levelNumber) {
     number: levelNumber,
     seed: level.seed,
     band: level.band,
-    quota: level.quota,
     C: level.C,
     K: level.K,
     R: level.R,
@@ -48,6 +47,7 @@ export function levelSnapshot(geom, levelNumber) {
     depots: geom.depots.map((d) => ({ nodeId: d.nodeId, colour: d.colour, x: d.cx, y: d.y })),
     entry: { x: geom.entry.x, y: geom.entry.y },
     mouths: geom.mouths.map((m) => ({ edgeId: m.edgeId, depotNodeId: m.depotNodeId, mouthLu: m.mouthLu })),
+    terrace: { x: geom.terrace.x, y: geom.terrace.y, w: geom.terrace.w, h: geom.terrace.h },
   };
 }
 

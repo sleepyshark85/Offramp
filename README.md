@@ -48,7 +48,7 @@ which also explains the rebuild boundary that costs a day when you don't know it
 | `src/engine/` | Pure simulation and the track generator. Runs in bare Node, no renderer. |
 | `src/render/` | Skia drawing. Reads state, paints, owns no logic. |
 | `src/ui/` | React state layer, screens, theme |
-| `tools/` | Headless harnesses — replay, solver bots, pacing, generator audit, layout sweep |
+| `tools/` | Headless harnesses — replay, solver bots, generator audit, spawn schedule, converging cars, layout sweep |
 | `test/` | `node --test` suites |
 
 ## Running the checks
@@ -57,11 +57,18 @@ which also explains the rebuild boundary that costs a day when you don't know it
 npm test                                    # engine unit + invariant tests
 node tools/replay.mjs --seed 42             # seeded run as ASCII; must be identical every time
 node tools/bot.mjs --seeds 1000             # constrained solver over the generator
-node tools/pacing.mjs                       # completion-time band per difficulty
 node tools/generator-audit.mjs --seeds 5000 # structural validity of generated networks
+node tools/generator-audit.mjs --geometry   # AC-206/AC-207: orthogonal roads are never one road
+node tools/spawn-schedule.mjs --seeds 2000  # the schedule is exactly the cars that fit in 2:00
+node tools/converge.mjs --seeds 1000        # AC-513: two cars on a shared depot approach
 node docs/design/check-ac-refs.mjs          # dangling / duplicate AC references
 node tools/layout-sweep.mjs                 # viewport sweep; must be 0 overflowing
 ```
+
+`tools/pacing.mjs` is **deleted**. It measured completion time, and under a fixed two-minute
+clock every level is exactly 7,200 ticks, so there is nothing left to measure.
+`tools/spawn-margin.mjs` is replaced by `tools/spawn-schedule.mjs`: the margin it measured does
+not exist any more, because the schedule is computed exactly rather than guessed.
 
 ## The three decisions worth knowing
 

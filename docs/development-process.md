@@ -307,7 +307,8 @@ redirected both rounds before they happened.
 npm test                                   # engine unit + invariant tests
 node tools/replay.mjs --seed 42            # seeded run, ASCII, must be identical every time
 node tools/bot.mjs --seeds 1000            # constrained solver over the generator
-node tools/pacing.mjs                      # completion-time band per difficulty
+node tools/spawn-schedule.mjs              # the spawn schedule reaches the two-minute bell
+node tools/converge.mjs                    # how often two cars converge at a shared depot mouth
 node tools/generator-audit.mjs --seeds 5000 # structural validity of generated networks
 node docs/design/check-ac-refs.mjs         # dangling / duplicate AC references
 node tools/layout-sweep.mjs                # viewport sweep, must be 0 overflowing

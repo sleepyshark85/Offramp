@@ -1,42 +1,46 @@
 // Offramp — track generator (generation.md §4, §5).
 //
 // A pure function of (seed, band). Integers only: no float reaches a level object, and the
-// only division performed is exact (asserted by test/geometry.test.js).
+// generator uses no floating point AT ALL — round 8's orthogonal roads removed the one place
+// that needed it (generation.md §3.3). An edge's length is `|Δx| + |Δy|`, two subtractions and
+// an addition, bit-identical on every JavaScript engine.
 
 import {
   BUILD_BUDGET,
-  COL_W_CAP,
   DEPOT_Y,
   ENTRY_LEN,
   ENTRY_Y,
   GEN_SALT,
-  LANE_SPAN,
+  LEVEL_TICKS,
   MAX_ATTEMPTS,
   MIN_JUNCTION_SEP_LU,
   MLU,
   PALETTE,
+  ROUTE_H,
   ROW0_Y,
   SPAWN_LEAD,
   SPAWN_SALT,
   V12_MAX_REDERIVE,
   V12_SALT,
   bandParams,
-  spawnSlack,
 } from './constants.js';
 import { choose, makeStream, mix32, shuffle } from './rng.js';
 
 // --- §3.2 site coordinates ---------------------------------------------------------------
 
-export function colWFor(C) {
-  return Math.min(COL_W_CAP, LANE_SPAN / (C - 1));
-}
-
+/**
+ * `rowH = ROUTE_H / R` is THE ONLY DIVISION LEFT IN §3.2, and it is why AC-218's construction
+ * guard still exists. `colW` used to be the other one — slices 0–1 derived it as
+ * `min(300, LANE_SPAN / (C - 1))`, which made integrality an accident of which `C` a band
+ * happened to use. Round 8 made it a band-table value, so integrality is now a property of the
+ * table, and `colWFor()` went with it.
+ */
 export function rowHFor(R) {
-  return (DEPOT_Y - ROW0_Y) / R;
+  return ROUTE_H / R;
 }
 
 export function xOf(c, C, colW) {
-  return 500 - (colW * (C - 1)) / 2 + c * colW;
+  return 500 + (2 * c - (C - 1)) * colW / 2;
 }
 
 export function yOf(r, rowH) {
@@ -74,13 +78,27 @@ function pairs(arr) {
 
 /**
  * Depth-first with backtracking over one row band. Sources are processed left to right and a
- * running minTarget enforces the ordering rule that makes the row merge-free (V2) and planar
- * (V3) at once.
+ * running minTarget enforces the ordering rule that makes the row merge-free (V2) and
+ * non-coincident (§2.5) at once.
+ *
+ * TWO CONSTRUCTION CONSTRAINTS LIVE HERE, and they are the whole of what round 8 cost the
+ * generator:
+ *
+ *   RULE (P) / V15 — `passOptions` is `[[a]]` or nothing. A pass node's single outgoing edge
+ *   goes straight down; only a branch may change column. Slices 0–1 offered a pass node every
+ *   candidate column (`[[a-1], [a], [a+1]]`), so a road could drift sideways without
+ *   branching. It cannot any more (generation.md §2.5, gameplay.md §8.9).
+ *
+ *   V14 — `forcePass` at row 0. The row-0 node is always a pass, so no car's first junction is
+ *   one row below the entry. It is a CONSTRUCTION constraint rather than a rejection rule and
+ *   that distinction is what makes it affordable: round 4 measured the rejection form reaching
+ *   MAX_ATTEMPTS on 2 seeds per 1,000 at band 5; the construction form costs a median of 0
+ *   extra attempts (generation.md §5.2, AC-248).
  *
  * Returns an array parallel to `srcs`, each entry the ascending target column list for that
  * source, or null if the row cannot be built (or the step budget is exhausted).
  */
-export function buildRow(rng, srcs, allowed, terminal, pBranchPct) {
+export function buildRow(rng, srcs, allowed, terminal, pBranchPct, forcePass = false) {
   const allowedSet = new Set(allowed);
   const picks = new Array(srcs.length).fill(null);
   let budget = BUILD_BUDGET;
@@ -103,10 +121,12 @@ export function buildRow(rng, srcs, allowed, terminal, pBranchPct) {
 
     const a = srcs[i];
     const cand = [a - 1, a, a + 1].filter((c) => allowedSet.has(c) && c >= minTarget);
+    // RULE (P): a pass goes straight down, so the only pass option is `a` itself.
+    const passOptions = cand.includes(a) ? [[a]] : [];
     const branchOptions = shuffle(rng, pairs(cand));
-    const passOptions = shuffle(rng, cand.map((c) => [c]));
-    const options =
-      rng.nextInt(100) < pBranchPct
+    const options = forcePass
+      ? passOptions
+      : rng.nextInt(100) < pBranchPct
         ? branchOptions.concat(passOptions)
         : passOptions.concat(branchOptions);
 
@@ -141,7 +161,8 @@ export function tryBuild(rng, P) {
   for (let r = 0; r < R; r += 1) {
     const terminal = r === R - 1;
     const allowed = terminal ? depotCols : all;
-    const picks = buildRow(rng, rows[r], allowed, terminal, pBranchPct);
+    // V14 — the row-0 node is a pass, enforced in construction (generation.md §4.1).
+    const picks = buildRow(rng, rows[r], allowed, terminal, pBranchPct, r === 0);
     if (picks === null) return null;
     const targets = [...new Set(picks.flat())].sort((a, b) => a - b);
     if (!terminal && targets.length > C) return null;
@@ -153,40 +174,75 @@ export function tryBuild(rng, P) {
 
 // --- §4.3 finalise -----------------------------------------------------------------------
 
-function spawnSchedule(seed, P) {
+/**
+ * gameplay.md §2.7. The whole schedule is materialised at level construction and is bounded by
+ * the clock: every car that can enter inside two minutes is in the array, and no car that
+ * cannot is. There is no slack, no `inFlightMax`, no reserve entry and no `SPAWN_EXHAUSTED`.
+ */
+export function spawnSchedule(seed, P) {
   const rng = makeStream(mix32(seed, SPAWN_SALT));
-  const count = P.quota + spawnSlack(P.band);
   const spawns = [];
   let bag = [];
-  for (let i = 0; i < count; i += 1) {
-    const tick = SPAWN_LEAD + i * P.interval + rng.nextInt(2 * P.jitter + 1) - P.jitter;
+  for (let i = 0; ; i += 1) {
+    const nominal = SPAWN_LEAD + i * P.interval;
+    if (nominal - P.jitter >= LEVEL_TICKS) break;
+    const tick = nominal + rng.nextInt(2 * P.jitter + 1) - P.jitter;
     if (bag.length === 0) {
       bag = [];
       for (let k = 0; k < P.K; k += 1) bag.push(k);
       shuffle(rng, bag);
     }
-    spawns.push({ index: i, tick, colour: bag.pop() });
+    const colour = bag.pop();
+    if (tick < LEVEL_TICKS) spawns.push({ index: spawns.length, tick, colour });
   }
   return spawns;
 }
 
 /**
+ * AC-808. A schedule that stops short of the clock is a BUILD ERROR, not a level.
+ *
+ * This is the failure that replaced `SPAWN_EXHAUSTED`. Under a quota the danger was a schedule
+ * too short for an unknown number of cars, and the guard fired when a further spawn was needed
+ * and unavailable. Under a clock the schedule is exactly as long as the clock, so running out
+ * is impossible and STOPPING EARLY is the harder fault: the level still plays, still ends on
+ * the bell, and simply has fewer cars in it than the difficulty model says — which moves `N`,
+ * and with it every window in generation.md §7.1.10, with nothing visibly wrong.
+ */
+export function assertScheduleReachesClock(level) {
+  const sp = level.spawns;
+  const reach = level.interval + level.jitter;
+  if (sp.length === 0 || LEVEL_TICKS - sp[sp.length - 1].tick > reach) {
+    throw new Error(
+      'SHORT_SCHEDULE: band=' + level.band + ' seed=' + level.seed +
+        ' last=' + (sp.length ? sp[sp.length - 1].tick : 'none') +
+        ' of ' + LEVEL_TICKS + ' (interval+jitter=' + reach + ')',
+    );
+  }
+  return level;
+}
+
+/**
  * generation.md §3.2 states that colW and rowH are exact integers for every (C, R) the band
  * table uses, and AC-218 requires every node x/y and every edge lengthMlu to be integral.
- * Neither is enforced by the construction: §3.2 divides. A band-table edit that made R a
- * divisor of neither 1200 nor LANE_SPAN would produce a level generate() happily accepts,
- * with float node positions and float `progress` accumulating inside the simulation — the
- * exact thing docs/development-process.md and the fixed-point rule exist to prevent.
+ * Neither is enforced by the construction: §3.2 divides `ROUTE_H` by `R` and halves
+ * `colW * (C - 1)`. A band-table edit picking an `R` that does not divide 1080, or a `colW`
+ * with `colW * (C - 1)` odd, would produce a level generate() happily accepts, with float node
+ * positions and float `progress` accumulating inside the simulation — the exact thing the
+ * fixed-point rule of gameplay.md §2.2 exists to prevent. Slice 1 injected `R = 7` and got a
+ * level back, with a car holding `progress = 1371.4285714285797` by tick 683.
  *
  * This is a guard at level construction, not a validity rule: it rejects an impossible band
- * table rather than an unlucky candidate network, so it throws rather than returning a
- * rule id for validate() to retry on.
+ * table rather than an unlucky candidate network, so it throws rather than returning a rule id
+ * for validate() to retry on.
  */
 export function assertIntegerGeometry(level) {
   const bad = [];
+  if (ROUTE_H % level.R !== 0) bad.push('ROUTE_H ' + ROUTE_H + ' is not divisible by R=' + level.R);
+  if ((level.colW * (level.C - 1)) % 2 !== 0) {
+    bad.push('colW*(C-1) is odd: ' + level.colW + '*' + (level.C - 1));
+  }
   if (!Number.isInteger(level.colW)) bad.push('colW=' + level.colW);
   if (!Number.isInteger(level.rowH)) bad.push('rowH=' + level.rowH);
-  if (!Number.isInteger(level.diagLen)) bad.push('diagLen=' + level.diagLen);
   for (const n of level.nodes) {
     if (!Number.isInteger(n.x)) bad.push('node ' + n.id + ' x=' + n.x);
     if (!Number.isInteger(n.y)) bad.push('node ' + n.id + ' y=' + n.y);
@@ -205,7 +261,7 @@ export function assertIntegerGeometry(level) {
 
 export function finalise(net, P, seed) {
   const { C, K, R } = P;
-  const colW = colWFor(C);
+  const colW = P.colW;
   const rowH = rowHFor(R);
 
   // Nodes in (row, col) order. The entry sits one notional row above row 0.
@@ -235,15 +291,22 @@ export function finalise(net, P, seed) {
 
   // Edges, emitted in node-id order with each node's targets ascending, so that out[0] is
   // always the smaller column (gameplay.md §2.3).
+  //
+  // generation.md §3.3 — the length is Manhattan and exact: |Δx| + |Δy|, computed from the
+  // endpoints rather than read from a per-band table. `diagLen`, its offline 128-step chord
+  // derivation and the unit test that guarded it against drift are all deleted (AC-207).
   const edges = [];
-  const addEdge = (fromId, toId, shape, lengthLu) => {
+  const addEdge = (fromId, toId, shape) => {
+    const a = nodes[fromId];
+    const b = nodes[toId];
+    const lengthLu = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
     const id = edges.length;
     edges.push({ id, from: fromId, to: toId, lengthMlu: lengthLu * MLU, shape });
     nodes[fromId].out.push(id);
     return id;
   };
 
-  const entryEdgeId = addEdge(entryId, idAt.get('0,' + net.entryCol), 'entry', ENTRY_LEN);
+  const entryEdgeId = addEdge(entryId, idAt.get('0,' + net.entryCol), 'entry');
 
   for (let r = 0; r < R; r += 1) {
     const srcs = net.rows[r];
@@ -251,9 +314,8 @@ export function finalise(net, P, seed) {
       const fromId = idAt.get(r + ',' + srcs[i]);
       for (const t of net.rowEdges[r][i]) {
         const d = t - srcs[i];
-        const shape = d === 0 ? 'straight' : d < 0 ? 'diagL' : 'diagR';
-        const lengthLu = d === 0 ? rowH : P.diagLen;
-        addEdge(fromId, idAt.get(r + 1 + ',' + t), shape, lengthLu);
+        const shape = d === 0 ? 'straight' : d < 0 ? 'jogL' : 'jogR';
+        addEdge(fromId, idAt.get(r + 1 + ',' + t), shape);
       }
     }
   }
@@ -285,7 +347,7 @@ export function finalise(net, P, seed) {
     }
   }
 
-  return assertIntegerGeometry({
+  return assertScheduleReachesClock(assertIntegerGeometry({
     seed,
     band: P.band,
     C,
@@ -293,7 +355,6 @@ export function finalise(net, P, seed) {
     R,
     colW,
     rowH,
-    diagLen: P.diagLen,
     nodes,
     edges,
     junctions,
@@ -301,9 +362,8 @@ export function finalise(net, P, seed) {
     speedMluPerTick: P.speedMluPerTick,
     interval: P.interval,
     jitter: P.jitter,
-    quota: P.quota,
     spawns: spawnSchedule(seed, P),
-  });
+  }));
 }
 
 // --- §5 validity rules --------------------------------------------------------------------
@@ -372,10 +432,14 @@ export function actionableJunctions(level) {
 }
 
 /**
- * gameplay.md §4.6b / AC-245. For every entry-to-depot path, the arc length from the entry
- * node to the FIRST branch node on that path, converted to ticks. Returns the minimum
- * over all paths — the window the player has to make a decision that cannot be prepared.
- * Paths with no branch at all are not decisions and do not contribute.
+ * gameplay.md §4.6b / AC-245. For every entry-to-depot path, the path length from the entry
+ * node to the FIRST branch node on that path, converted to ticks. Returns the minimum over all
+ * paths — the window the player has to make a decision that cannot be prepared. Paths with no
+ * branch at all are not decisions and do not contribute.
+ *
+ * With V14 in force the minimum is `ENTRY_LEN + rowH` in ticks at every band —
+ * 159 / 151 / 132 / 125 / 120 — because rows[0] holds one pass node and V15 makes its edge
+ * vertical, so rows[1] holds one node too.
  */
 export function firstDecisionTicks(level) {
   // Accumulated in MLU and divided exactly once, so no partial length is ever held as a
@@ -398,12 +462,12 @@ export function firstDecisionTicks(level) {
 /**
  * The validity rules of generation.md §5, each as its own predicate over a finalised level.
  *
- * They are separate functions rather than branches of one cascade because eight of the twelve
- * never reject anything `tryBuild` produces (§5.2) — they are structural tripwires, and the
- * only way their checks are ever executed against a violation is to invoke them DIRECTLY on a
- * fixture built to break them. Run through validate()'s ordered cascade an earlier rule always
- * catches the fixture first, which is how slice 1's blind pass left V5 and V9 never once
- * executed against a violation (AC-244).
+ * They are separate functions rather than branches of one cascade because eleven of the
+ * fourteen never reject anything `tryBuild` produces (§5.2) — they are structural tripwires,
+ * and the only way their checks are ever executed against a violation is to invoke them
+ * DIRECTLY on a fixture built to break them. Run through validate()'s ordered cascade an
+ * earlier rule always catches the fixture first, which is how slice 1's blind pass left V5 and
+ * V9 never once executed against a violation (AC-244).
  *
  * Each returns true when the rule is VIOLATED.
  */
@@ -553,10 +617,40 @@ export const RULES = {
   V13(level, P) {
     return actionableJunctions(level).length < P.Ja;
   },
+
+  /**
+   * V14 — the row-0 node is a PASS (gameplay.md §4.6b, AC-248). `buildRow`'s `forcePass`
+   * argument makes this true by construction, so this predicate never rejects a candidate the
+   * shipped generator produces. It is numbered because it is one of the two rules a future
+   * generator change is most likely to break without noticing, and its failure — an unfair
+   * first decision — does not show up in a clear rate.
+   */
+  V14(level) {
+    const row0 = level.nodes.filter((n) => n.row === 0);
+    if (row0.length !== 1) return true;
+    return row0[0].kind !== 'pass';
+  },
+
+  /**
+   * V15 — a road changes column only at a junction (generation.md §2.5 rule (P), AC-249).
+   * Every `pass` and `entry` node has exactly one outgoing edge and that edge has Δcol = 0.
+   * This is the single rule §2.5's entire non-coincidence proof rests on: it is what makes
+   * "every corner in the network is a junction corner" a theorem rather than a hope.
+   */
+  V15(level) {
+    for (const n of level.nodes) {
+      if (n.kind !== 'pass' && n.kind !== 'entry') continue;
+      if (n.out.length !== 1) return true;
+      if (level.nodes[level.edges[n.out[0]].to].col !== n.col) return true;
+    }
+    return false;
+  },
 };
 
 /** The order generation.md §5 checks the rules in; the id is what an audit failure reports. */
-export const RULE_ORDER = ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11', 'V13'];
+export const RULE_ORDER = [
+  'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11', 'V13', 'V14', 'V15',
+];
 
 function inDegrees(level) {
   const inDeg = new Array(level.nodes.length).fill(0);

@@ -3,19 +3,32 @@
 // Every SCREAMING_SNAKE literal named in docs/design/gameplay.md and docs/design/generation.md
 // lives here and nowhere else (gameplay.md:11). No module defines a second copy.
 
-// --- Tick rate (gameplay.md §2.1) -------------------------------------------------------
+// --- Tick rate and the level clock (gameplay.md §2.1) -----------------------------------
 export const TICK_HZ = 60;
 export const MAX_CATCHUP_TICKS = 8;
+export const LEVEL_SECONDS = 120;
+/**
+ * A level is exactly two minutes of ticks, compared against `state.tick` and never against a
+ * wall clock (gameplay.md §2.1, AC-141). Step 5 of the tick tests `tick + 1 >= LEVEL_TICKS`
+ * and step 6 increments, so the last tick simulated is 7,199 and a run contains exactly 7,200.
+ */
+export const LEVEL_TICKS = TICK_HZ * LEVEL_SECONDS; // 7200
 
 // --- Fixed point (gameplay.md §2.2) -----------------------------------------------------
 export const MLU = 1000; // milli-layout-units per LU
 
-// --- Lives and scoring (gameplay.md §4.1, §4.3) -----------------------------------------
+// --- Lives (gameplay.md §4.1) -----------------------------------------------------------
 export const LIVES = 3;
-export const SCORE_DELIVERY = 100;
-export const SCORE_STREAK_STEP = 10;
-export const STREAK_CAP = 9;
-export const SCORE_LIFE_BONUS = 50;
+// There is no points system. `delivered` IS the score (gameplay.md §4.3, AC-117): the four
+// slice-0 scoring constants — the per-delivery value, the streak step, the streak cap and the
+// per-life bonus — are deleted, and so is the `score` field on the state. Under a quota
+// `delivered` ran to a known target and could not be a score; under a clock it is throughput
+// over a fixed window, which is the interesting number, and a points total laid on top of it
+// would be a second quantity that has to agree with the first.
+//
+// AC-117 is checked by grepping src/ for those four names, so they are deliberately not
+// written here: a comment naming them would make the check fail, which is the correct
+// behaviour for a check whose subject is a deletion.
 
 // --- Spawn schedule (gameplay.md §2.7) --------------------------------------------------
 export const SPAWN_LEAD = 90; // ticks of grace before the first car enters
@@ -25,24 +38,20 @@ export const GEN_SALT = 0x9e3779b1;
 export const SPAWN_SALT = 0x85ebca6b;
 
 // --- Design space (generation.md §3.1, §3.2) --------------------------------------------
+//
+// DESIGN_H moved 1600 -> 1500 in round 8. LU is a ratio unit, so only the ASPECT matters:
+// the binding device is the iPhone SE 1st generation, whose play area is 320 x 484 pt — an
+// aspect of 0.661 against the old rectangle's 0.625, so the old rectangle was height-bound
+// there and wasted 17.5 pt of width. At 1000 x 1500 the SE fits both ways at 0.3200 rather
+// than 0.3025 (ui.md §3.2).
 export const DESIGN_W = 1000;
-export const DESIGN_H = 1600;
-export const LANE_SPAN = 780;
-export const ENTRY_Y = 60;
-// ROW0_Y and DEPOT_Y both moved down 60 LU in slice 1b and the route height did not move:
-// DEPOT_Y - ROW0_Y is still 1200, so rowH, colW, diagLen, the junction pitch and every tap
-// target are untouched and so is every generated topology. Only `y` translates, and the entry
-// edge grows from 100 to 160 LU so that the first decision clears AC-245's 40-tick floor.
-export const ROW0_Y = 220;
-export const DEPOT_Y = 1420;
-export const ENTRY_LEN = ROW0_Y - ENTRY_Y; // 160 LU
-export const COL_W_CAP = 300;
-
-// Bezier control-point fraction (generation.md §2.3). Held as an exact rational so that the
-// offline arc-length derivation in test/ and the renderer agree on one value, and so that no
-// float literal is needed to state it.
-export const K_CTRL_NUM = 45;
-export const K_CTRL_DEN = 100;
+export const DESIGN_H = 1500;
+export const ENTRY_Y = 50;
+export const ENTRY_LEN = 220;
+export const ROW0_Y = ENTRY_Y + ENTRY_LEN; // 270
+export const ROUTE_H = 1080; // DEPOT_Y - ROW0_Y, the same at every band
+export const DEPOT_Y = ROW0_Y + ROUTE_H; // 1350
+// 50 + 220 + 1080 + DEPOT_H(128) + 22 margin = 1500 exactly (generation.md §3.2, AC-411).
 
 // --- Generator search (generation.md §4, §4.2) ------------------------------------------
 export const MAX_ATTEMPTS = 256;
@@ -59,13 +68,19 @@ export const PALETTE = ['#FF852A', '#89D9FF', '#FF5386', '#22C6AF', '#A879FF'];
 // --- Band table (generation.md §6.1) ----------------------------------------------------
 // pBranchPct is generation.md's pBranch expressed as an exact integer percentage, so the
 // branch-bias draw is `nextInt(100) < pBranchPct` and the generator holds no float at all.
+//
+// `quota`, `SPAWN_SLACK` and `diagLen` are GONE. A level ends on the clock, the spawn schedule
+// is the exact list of cars that fit in two minutes, and an edge's length is computed from its
+// endpoints (generation.md §3.3). `colW` is now a table value rather than
+// `min(300, LANE_SPAN / (C - 1))`, which makes integrality a property of the table rather than
+// an accident of which C a band happens to use (generation.md §3.2).
 export const BANDS = [
   null, // bands are 1-indexed
-  { band: 1, levels: [1, 4],   C: 3, K: 3, R: 3, pBranchPct: 85, Jmin: 3, Jmax: 3, Ja: 3, Dmin: 2, Dmax: 2, rowH: 400, colW: 300, diagLen: 521, speedMluPerTick: 3000, interval: 156, jitter: 12, quota: 16 },
-  { band: 2, levels: [5, 9],   C: 4, K: 3, R: 4, pBranchPct: 70, Jmin: 3, Jmax: 5, Ja: 3, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3200, interval: 108, jitter: 12, quota: 33 },
-  { band: 3, levels: [10, 15], C: 4, K: 4, R: 4, pBranchPct: 80, Jmin: 4, Jmax: 6, Ja: 4, Dmin: 2, Dmax: 3, rowH: 300, colW: 260, diagLen: 415, speedMluPerTick: 3400, interval: 106, jitter: 18, quota: 41 },
-  { band: 4, levels: [16, 22], C: 5, K: 4, R: 5, pBranchPct: 80, Jmin: 5, Jmax: 7, Ja: 5, Dmin: 2, Dmax: 4, rowH: 240, colW: 195, diagLen: 323, speedMluPerTick: 3600, interval: 110, jitter: 18, quota: 47 },
-  { band: 5, levels: [23, Infinity], C: 5, K: 5, R: 6, pBranchPct: 88, Jmin: 7, Jmax: 8, Ja: 7, Dmin: 2, Dmax: 4, rowH: 200, colW: 195, diagLen: 293, speedMluPerTick: 3800, interval: 120, jitter: 18, quota: 51 },
+  { band: 1, levels: [1, 4],   C: 3, K: 3, R: 5, pBranchPct: 85, Jmin: 3, Jmax: 4, Ja: 3, Dmin: 2, Dmax: 3, colW: 260, speedMluPerTick: 2750, interval: 204, jitter: 26 },
+  { band: 2, levels: [5, 9],   C: 4, K: 3, R: 5, pBranchPct: 80, Jmin: 3, Jmax: 5, Ja: 3, Dmin: 2, Dmax: 3, colW: 230, speedMluPerTick: 2900, interval: 150, jitter: 18 },
+  { band: 3, levels: [10, 15], C: 4, K: 4, R: 6, pBranchPct: 85, Jmin: 4, Jmax: 6, Ja: 4, Dmin: 2, Dmax: 4, colW: 230, speedMluPerTick: 3050, interval: 140, jitter: 18 },
+  { band: 4, levels: [16, 22], C: 5, K: 4, R: 6, pBranchPct: 85, Jmin: 5, Jmax: 7, Ja: 5, Dmin: 2, Dmax: 4, colW: 180, speedMluPerTick: 3200, interval: 132, jitter: 16 },
+  { band: 5, levels: [23, Infinity], C: 6, K: 5, R: 6, pBranchPct: 90, Jmin: 7, Jmax: 9, Ja: 7, Dmin: 2, Dmax: 5, colW: 150, speedMluPerTick: 3350, interval: 128, jitter: 16 },
 ];
 
 /** Level number -> band index (gameplay.md §5, AC-701). */
@@ -83,37 +98,12 @@ export function bandParams(band) {
   return p;
 }
 
-// --- Spawn slack, DERIVED (gameplay.md §2.7) --------------------------------------------
-//
-// SPAWN_SLACK is not a free parameter and is deliberately not a literal. Slice 1 shipped a
-// flat 8 and it had eroded to a margin of one car at band 5 without anything failing; every
-// difficulty lever in generation.md §7.4 moves a term below, and so does a geometry change —
-// ENTRY_LEN 100 -> 160 is exactly the silent walk this derivation exists to catch, and it is
-// what took band 2 from 8 to 9. Written as a derivation, a lever pull recomputes it — and
-// round 6's lever-0 pull is the first one that did: `interval` moved DOWN at bands 2 and 3 and
-// UP at bands 4 and 5, and the slack followed it both ways, 8/9/9/9/10 -> 8/10/10/9/9. Bands 2
-// and 3 needed a car more and got it without anyone noticing it was owed; band 5 needed one
-// fewer and gave it back, which a hand-written constant never does.
-
-/** The longest root-to-depot journey in the band, in ticks. */
-export function transitMaxTicks(P) {
-  const lu = ENTRY_LEN + P.R * Math.max(P.rowH, P.diagLen);
-  return Math.ceil((lu * MLU) / P.speedMluPerTick);
-}
-
 /**
- * Cars still on the network when the quota-completing car lands: one per interval of transit,
- * +1 for the partial interval, +1 because jitter can pull one spawn forward across it.
+ * The upper bound on the spawn count, from gameplay.md §2.7's schedule loop: the last `i` for
+ * which `SPAWN_LEAD + i*interval - jitter < LEVEL_TICKS`. 35 / 48 / 51 / 54 / 56 by band
+ * (AC-139). The actual count for a seed is that or one fewer, because the last nominal slot
+ * may be pushed past the clock by its own jitter draw.
  */
-export function inFlightMax(P) {
-  return Math.floor(transitMaxTicks(P) / P.interval) + 2;
-}
-
-/**
- * (LIVES - 1) misroutes a winning run may contain, plus the cars still in flight, plus one
- * reserve — the engine treats a schedule as short only when a further spawn is genuinely
- * needed, so the last entry must never have to be spawned (AC-123, AC-139).
- */
-export function spawnSlack(band) {
-  return LIVES - 1 + inFlightMax(bandParams(band)) + 1;
+export function spawnCountMax(P) {
+  return Math.floor((LEVEL_TICKS - 1 - SPAWN_LEAD + P.jitter) / P.interval) + 1;
 }

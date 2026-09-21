@@ -11,13 +11,20 @@
 // AC-401 to AC-410. It exists now.
 //
 // WHAT IT SWEEPS. Widths 320-520 pt in 1 pt steps (201 values) x heights 560-1200 pt in 2 pt
-// steps (321 values) x 8 safe-area inset profiles x 5 bands = 2,580,840 configurations,
-// which is the count ui.md §4.4 records.
+// steps (321 values) x 9 safe-area inset profiles x 5 bands, less the configurations below the
+// declared support floor — which is the count ui.md §4.4 records.
 //
 // EXPECTATIONS ARE TRANSCRIBED FROM ui.md, NOT IMPORTED (development-process.md §6.8): the
 // tap-target floor of 44 pt, the car-body floor of 20 pt, the 30 LU depot margin, the 8 pt
-// depot clearance and the design rectangle's 1000 x 1600 are literals below. The layout
-// module is the thing under test; it does not get to supply the answer.
+// depot clearance, the per-band colW and the design rectangle's 1000 x 1500 are literals
+// below. The layout module is the thing under test; it does not get to supply the answer.
+//
+// ROUND 8 MOVED EVERY NUMBER IN THIS FILE. The design rectangle is 1000 x 1500 rather than
+// 1000 x 1600, the support floor is 320 x 460 rather than 320 x 400, DEPOT_Y is 1350 rather
+// than 1420, DEPOT_W/H are 124 x 128 rather than 160 x 170, CAR_W is 66 rather than 84, and
+// `colW` is a band-table value rather than `min(300, 780/(C-1))`. BOTH FLOORS ARE NOW TIGHT:
+// 44.16 pt against 44, and 20.24 pt against 20, where the old geometry cleared them by 2.00
+// and 1.00. A sixth column at band 5 and a 66 LU car are as far as this rectangle goes.
 //
 // EVERY CHECK COUNTS ITS OBSERVATIONS AND ASSERTS THE COUNT IS NON-ZERO. §6.8 exists because
 // a tuning change made a safety check arithmetically unreachable and nothing failed. A check
@@ -25,31 +32,39 @@
 
 import { BANDS } from '../src/engine/index.js';
 import { computeLayout, hitRadiusLu, minSepLuForBand } from '../src/ui/layout.js';
-import { CAR_W, DEPOT_H, DEPOT_W, DEPOT_RECEIVING_SCALE } from '../src/render/geometry.js';
+import { CAR_L, CAR_W, DEPOT_H, DEPOT_W, DEPOT_RECEIVING_SCALE, ROAD_W } from '../src/render/geometry.js';
 import { arg, has, table } from './lib/report.mjs';
 
 // --- transcribed from ui.md ---------------------------------------------------------------
 const DESIGN_W = 1000; // ui.md §3.2
-const DESIGN_H = 1600;
-const TAP_FLOOR_PT = 44; // ui.md §4.4, §11.1
-const CAR_FLOOR_PT = 20; // ui.md §4.3, "the 20 px legibility floor"
+const DESIGN_H = 1500;
+const TAP_FLOOR_PT = 44; // ui.md §4.4, §11.1, AC-401
+const CAR_FLOOR_PT = 20; // ui.md §4.3, AC-402 — the 20 pt legibility floor
 const DEPOT_MARGIN_LU = 30; // ui.md §4.1, AC-410
 const DEPOT_CLEAR_PT = 8; // AC-411
-const DEPOT_Y = 1420; // generation.md §3.2 / ui.md §3.3
+const DEPOT_Y = 1350; // generation.md §3.2 / ui.md §3.3
 const SUPPORT_W = 320; // ui.md §4.4, "declared support floor"
-const SUPPORT_H = 400;
+const SUPPORT_H = 460; // moved 400 -> 460: the rectangle is shorter, so it hits its height
+                       // bound at a LARGER playH (AC-409)
+// generation.md §6.1 and §3.2, transcribed. `colW` is a BAND-TABLE value in round 8, not a
+// division — which is the whole reason integrality is now a property of the table.
+const DESIGN_COLW = { 1: 260, 2: 230, 3: 230, 4: 180, 5: 150 };
+const DESIGN_C = { 1: 3, 2: 4, 3: 4, 4: 5, 5: 6 };
+const DESIGN_MINSEP = { 1: 216, 2: 216, 3: 180, 4: 180, 5: 150 };
 
 const W_FROM = 320;
 const W_TO = 520;
 const W_STEP = 1;
 const H_FROM = 560;
 const H_TO = 1200;
-const H_STEP = 2;
+const H_STEP = 1;
 
 /**
- * Eight safe-area inset profiles. Seven of them are the distinct (top, bottom) pairs of
- * ui.md §3.3's device table; the eighth is a zero-inset baseline, which is the shape a
- * desktop browser and an older Android give.
+ * Safe-area inset profiles: the seven distinct (top, bottom) pairs of ui.md §3.3's device
+ * table, plus a zero-inset baseline, which is the shape a desktop browser and an older Android
+ * give. ui.md §4.4 says "nine"; §3.3's nine device rows contain seven distinct pairs, so eight
+ * is what that table plus a baseline actually yields and eight is what is swept. The sweep
+ * reports its own configuration count rather than quoting the designer's.
  */
 const INSETS = [
   [0, 0],
@@ -62,28 +77,28 @@ const INSETS = [
   [62, 34], // iPhone 16 Pro Max
 ];
 
-// ui.md §3.3, transcribed. name, W, H, insetTop, insetBottom, scale, playH, junction target,
-// car body W x L.
+// ui.md §3.3, transcribed. name, W, H, insetTop, insetBottom, scale, playH, junction target at
+// the worst band (always band 5, min(colW, rowH) = 150 LU), car body W x L, road width.
 const DEVICES = [
-  ['iPhone SE (1st)', 320, 568, 20, 0, 0.3025, 484, 46.0, 25.4, 42.4],
-  ['iPhone SE (2nd/3rd)', 375, 667, 20, 0, 0.3644, 583, 55.4, 30.6, 51.0],
-  ['iPhone 13 mini', 375, 812, 50, 34, 0.375, 664, 57.0, 31.5, 52.5],
-  ['iPhone 13/14', 390, 844, 47, 34, 0.39, 699, 59.3, 32.8, 54.6],
-  ['iPhone 15/16', 393, 852, 59, 34, 0.393, 695, 59.7, 33.0, 55.0],
-  ['iPhone 16 Pro Max', 440, 956, 62, 34, 0.44, 796, 66.9, 37.0, 61.6],
-  ['Galaxy S23', 360, 780, 24, 24, 0.36, 668, 54.7, 30.2, 50.4],
-  ['Pixel 7', 412, 915, 24, 24, 0.412, 803, 62.6, 34.6, 57.7],
-  ['Tall Android 21:9', 412, 1024, 32, 24, 0.412, 904, 62.6, 34.6, 57.7],
+  ['iPhone SE (1st)', 320, 568, 20, 0, 0.32, 484, 46.1, 21.1, 33.3, 26.9],
+  ['iPhone SE (2nd/3rd)', 375, 667, 20, 0, 0.375, 583, 54.0, 24.8, 39.0, 31.5],
+  ['iPhone 13 mini', 375, 812, 50, 34, 0.375, 664, 54.0, 24.8, 39.0, 31.5],
+  ['iPhone 13/14', 390, 844, 47, 34, 0.39, 699, 56.2, 25.7, 40.6, 32.8],
+  ['iPhone 15/16', 393, 852, 59, 34, 0.393, 695, 56.6, 25.9, 40.9, 33.0],
+  ['iPhone 16 Pro Max', 440, 956, 62, 34, 0.44, 796, 63.4, 29.0, 45.8, 37.0],
+  ['Galaxy S23', 360, 780, 24, 24, 0.36, 668, 51.8, 23.8, 37.4, 30.2],
+  ['Pixel 7', 412, 915, 24, 24, 0.412, 803, 59.3, 27.2, 42.8, 34.6],
+  ['Tall Android 21:9', 412, 1024, 32, 24, 0.412, 904, 59.3, 27.2, 42.8, 34.6],
 ];
 
 /**
- * AC-409. Viewports deliberately BELOW the declared support floor. The sweep range above
- * cannot produce one — the tightest configuration in it lands exactly on playH = 400 — so
- * without these probes the "outside the envelope" branch would never execute and the check
- * would be vacuous in exactly the way §6.8 describes.
+ * AC-409. Viewports deliberately BELOW the declared support floor, on BOTH axes. The width
+ * probes matter most: the sweep range starts at exactly 320 pt, so no width in it is ever
+ * below the floor and without these the width half of the envelope check would never execute.
+ * A check that never ran is a failure, not a pass (§6.8).
  */
 const OUT_OF_ENVELOPE = [
-  [300, 500, 20, 0],
+  [300, 560, 20, 0],
   [280, 640, 24, 24],
   [320, 540, 62, 34],
   [360, 480, 47, 34],
@@ -93,25 +108,29 @@ const OUT_OF_ENVELOPE = [
 // Never trust a green check you have not seen fail (development-process.md §6.2). Each name
 // breaks one thing the sweep claims to catch; `--inject <name>` must make the sweep fail.
 const INJECTIONS = {
-  'tap-round': 'round the 44 pt radius with floor instead of ceil',
+  'support-floor': 'admit playH 440-459, below the declared floor, so band 5 fails 44 pt',
   'hit-cap': 'halve the upper clamp so it binds and the target falls below 44 pt',
-  'car-width': 'shrink CAR_W from 84 to 60 LU',
-  'depot-depth': 'grow DEPOT_H from 170 to 200 LU',
-  'depot-width': 'grow DEPOT_W from 160 to 230 LU',
+  'car-width': 'shrink CAR_W from 66 to 60 LU',
+  'depot-depth': 'grow DEPOT_H from 128 to 200 LU',
+  'depot-width': 'grow DEPOT_W from 124 to 200 LU',
   'slack-split': 'move the vertical slack split from 55 % to 95 %',
   'hit-overlap': 'remove the upper clamp so hit circles can touch',
 };
 
 function injectedHitR(scale, minSep, inject) {
-  // NOTE, and it is a finding rather than a detail. Dropping the LOWER clamp (76 LU) does
-  // not threaten AC-401 at all: `ceil(22/scale)` is by construction the radius that yields
-  // 44 pt, so the 44 pt floor is delivered by that term and the 76 is generosity on large
-  // screens. The two things that CAN break it are rounding the wrong way and the upper clamp
-  // binding, so those are what is injected. An injection that cannot fail proves nothing,
-  // which is the same trap in miniature as the check it is meant to validate.
-  if (inject === 'tap-round') {
-    return Math.min(Math.max(Math.floor(22 / scale), 76), Math.floor((minSep - 6) / 2));
-  }
+  // ROUND 8 MADE THE OLD `tap-round` INJECTION UNREACHABLE, and that is a §6.8 finding rather
+  // than a detail. It replaced `ceil(22/scale)` with `floor`, and under the old geometry that
+  // mattered: the smallest in-envelope scale was 400/1600 = 0.2500, where `22/scale` is 88 and
+  // the `ceil` term beat the 76 LU lower clamp. Under round 8 the support floor is playH 460
+  // against a 1500 LU rectangle, so the smallest in-envelope scale is 0.30667 and `22/scale`
+  // is 71.7 — BELOW 76 everywhere in the envelope. `max(..., 76)` therefore returns 76 under
+  // either rounding, and the injection could no longer fail. Nothing in the code changed; a
+  // geometry constant moved and a fault injection stopped being able to inject a fault.
+  //
+  // What actually delivers 44 pt now: at bands 1-4 the lower clamp of 76 LU does (76*2*0.30667
+  // = 46.6 pt), and at band 5 the UPPER clamp does, at 72 LU — 2*72*0.30667 = 44.16 pt, a
+  // margin of 0.16 pt. Which is why the two reachable injections are the upper clamp binding
+  // harder (`hit-cap`) and the support floor being lowered under it (`support-floor`).
   if (inject === 'hit-cap') {
     return Math.min(Math.max(Math.ceil(22 / scale), 76), Math.floor((minSep - 6) / 4));
   }
@@ -139,7 +158,7 @@ function injectedDepotH(inject) {
 }
 
 function injectedDepotW(inject) {
-  return inject === 'depot-width' ? 230 : DEPOT_W;
+  return inject === 'depot-width' ? 200 : DEPOT_W;
 }
 
 function injectedOriginY(L, inject) {
@@ -164,7 +183,7 @@ function checkConfig(L, band, inject, obs, worst) {
   // AC-403 — one uniform scale, both axes.
   obs.scale += 1;
   const expectScale = Math.min(L.playW / DESIGN_W, L.playH / DESIGN_H);
-  if (L.scale !== expectScale) bad.push('scale ' + L.scale + ' !== min(playW/1000, playH/1600)');
+  if (L.scale !== expectScale) bad.push('scale ' + L.scale + ' !== min(playW/1000, playH/1500)');
 
   // AC-404 — slack split 55 / 45 vertically, centred horizontally.
   obs.origin += 1;
@@ -208,16 +227,25 @@ function checkConfig(L, band, inject, obs, worst) {
   return bad;
 }
 
-/** AC-410 — depot x +- DEPOT_W/2 inside [0, 1000] with >= 30 LU margin. Per band, not per viewport. */
+/**
+ * AC-410 — depot `x ± DEPOT_W/2` inside [0, 1000] with >= 30 LU margin, AND adjacent depots
+ * separated by at least 20 LU. Per band, not per viewport. The columns are computed from the
+ * TRANSCRIBED band table, so a `colW` edit in the engine that broke this would be caught here
+ * rather than agreed with (development-process.md §6.8).
+ */
 function checkDepotColumns(inject, obs) {
   const bad = [];
   let worst = Infinity;
+  let worstGap = Infinity;
   for (let band = 1; band <= 5; band += 1) {
-    const P = BANDS[band];
-    const colW = Math.min(300, 780 / (P.C - 1)); // generation.md §3.2, transcribed
+    const C = DESIGN_C[band];
+    const colW = DESIGN_COLW[band];
+    if (BANDS[band].C !== C || BANDS[band].colW !== colW) {
+      bad.push('band ' + band + ' band table disagrees with ui.md/generation.md §6.1');
+    }
     const depotW = injectedDepotW(inject);
-    for (let c = 0; c < P.C; c += 1) {
-      const x = 500 - (colW * (P.C - 1)) / 2 + c * colW;
+    for (let c = 0; c < C; c += 1) {
+      const x = 500 + ((2 * c - (C - 1)) * colW) / 2;
       obs.depotX += 1;
       const margin = Math.min(x - depotW / 2, 1000 - (x + depotW / 2));
       if (margin < worst) worst = margin;
@@ -225,24 +253,30 @@ function checkDepotColumns(inject, obs) {
         bad.push('band ' + band + ' col ' + c + ' margin ' + margin.toFixed(1) + ' LU');
       }
     }
+    const gap = colW - depotW;
+    if (gap < worstGap) worstGap = gap;
+    if (gap < 20 - 1e-9) bad.push('band ' + band + ' adjacent depots ' + gap.toFixed(1) + ' LU apart');
   }
-  return { bad, worst };
+  return { bad, worst, worstGap };
 }
 
 function runDeviceTable() {
   const rows = [];
   let bad = 0;
-  for (const [name, w, h, top, bottom, scale, playH, target, carW, carL] of DEVICES) {
+  for (const [name, w, h, top, bottom, scale, playH, target, carW, carL, roadW] of DEVICES) {
     const L = computeLayout({ screenW: w, screenH: h, insetTop: top, insetBottom: bottom });
+    // `minSepLuForBand(5)` is min(colW, rowH) = 150 LU at band 5 — the finest grid in the
+    // game and the binding case for AC-401.
     const r = hitRadiusLu(L.scale, minSepLuForBand(5));
     const gotScale = Math.round(L.scale * 1e4) / 1e4;
     const gotTarget = Math.round(2 * r * L.scale * 10) / 10;
     const gotCarW = Math.round(CAR_W * L.scale * 10) / 10;
-    const gotCarL = Math.round(140 * L.scale * 10) / 10;
+    const gotCarL = Math.round(CAR_L * L.scale * 10) / 10;
+    const gotRoadW = Math.round(ROAD_W * L.scale * 10) / 10;
     const receiving = DEPOT_Y + DEPOT_H / 2 + (DEPOT_H / 2) * DEPOT_RECEIVING_SCALE;
     const clear = h - (L.originY + receiving * L.scale);
-    const ok =
-      gotScale === scale && L.playH === playH && gotTarget === target && gotCarW === carW && gotCarL === carL;
+    const ok = gotScale === scale && L.playH === playH && gotTarget === target
+      && gotCarW === carW && gotCarL === carL && gotRoadW === roadW;
     if (!ok) bad += 1;
     rows.push({
       device: name,
@@ -253,6 +287,7 @@ function runDeviceTable() {
       slackY: L.slackY.toFixed(1),
       target: gotTarget.toFixed(1),
       car: gotCarW.toFixed(1) + '×' + gotCarL.toFixed(1),
+      road: gotRoadW.toFixed(1),
       'clear pt': clear.toFixed(1),
       'vs ui.md': ok ? 'match' : 'MISMATCH',
     });
@@ -294,7 +329,11 @@ function main() {
         const L = computeLayout({ screenW: w, screenH: h, insetTop: top, insetBottom: bottom });
         // AC-409: below the declared floor the game must still render, and the harness must
         // report the configuration as outside the envelope rather than as a pass.
-        if (L.playW < SUPPORT_W || L.playH < SUPPORT_H) {
+        // `support-floor` lowers the declared height floor by 20 pt, which admits scales
+        // below 22/72 = 0.30556 and makes band 5's target fall under 44 pt. It is the
+        // injection that proves the 0.16 pt margin is real and is being watched.
+        const floorH = inject === 'support-floor' ? SUPPORT_H - 20 : SUPPORT_H;
+        if (L.playW < SUPPORT_W || L.playH < floorH) {
           outsideEnvelope += 1;
           obs.envelope += 1;
           continue;
@@ -343,6 +382,7 @@ function main() {
       { check: 'car body (AC-402)', floor: CAR_FLOOR_PT + ' pt', measured: worst.carFloor.toFixed(2) + ' pt', observations: obs.car },
       { check: 'depot clearance (AC-411)', floor: DEPOT_CLEAR_PT + ' pt', measured: worst.depotClear.toFixed(2) + ' pt', observations: obs.depotClear },
       { check: 'depot margin (AC-410)', floor: DEPOT_MARGIN_LU + ' LU', measured: depots.worst.toFixed(1) + ' LU', observations: obs.depotX },
+    { check: 'adjacent depot gap (AC-410)', floor: '20 LU', measured: depots.worstGap.toFixed(1) + ' LU', observations: obs.depotX },
       { check: 'hit circles disjoint (AC-303)', floor: 'no overlap', measured: overflowing === 0 ? 'none' : 'see below', observations: obs.overlap },
       { check: 'uniform scale (AC-403)', floor: 'exact', measured: 'exact', observations: obs.scale },
       { check: 'slack split (AC-404)', floor: '55 / 45', measured: '55 / 45', observations: obs.origin },
@@ -357,11 +397,16 @@ function main() {
   // scale printed here. A future band table with a tighter min(colW, rowH), or a lower
   // support floor, walks into it — and this line is where that becomes visible.
   const head = tapHeadroom();
-  const minScale = Math.min(W_FROM / DESIGN_W, (H_FROM - 62 - 56 - 34 - 8) / DESIGN_H);
+  // The smallest scale the sweep actually REACHES INSIDE THE ENVELOPE, which is the number the
+  // margin is against: below the support floor the configuration is excluded, so the old
+  // unfiltered `min(W_FROM/1000, (H_FROM - insets)/1500)` understated the scale and overstated
+  // the margin.
+  const minScale = Math.min(W_FROM / DESIGN_W, SUPPORT_H / DESIGN_H);
   process.stdout.write(
     'AC-401 margin: the upper clamp (floor((' + head.minSep + ' - 6)/2) = ' + head.cap +
-      ' LU, band 5) begins to bind below scale ' + head.bindsBelow.toFixed(4) +
-      '; the sweep\'s smallest scale is ' + minScale.toFixed(4) + '.\n\n',
+      ' LU, band 5) begins to bind below scale ' + head.bindsBelow.toFixed(5) +
+      '; the sweep\'s smallest IN-ENVELOPE scale is ' + minScale.toFixed(5) +
+      ', a margin of ' + (2 * head.cap * minScale - TAP_FLOOR_PT).toFixed(2) + ' pt.\n\n',
   );
 
   // A check that never ran is a failure, not a pass (development-process.md §6.8).

@@ -9,9 +9,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { MAX_CATCHUP_TICKS, TICK_HZ, createState, resetClock } from '../src/engine/index.js';
+import { MAX_CATCHUP_TICKS, TICK_HZ, advanceClock, createState, resetClock } from '../src/engine/index.js';
 import { generate } from '../src/engine/generate.js';
 import { EVENT_WINDOW_TICKS, advanceFrame, collectEvents, enqueueTap } from '../src/ui/loop.js';
+import { MODE, backgroundAction } from '../src/ui/appState.js';
 
 function fresh(band = 2, seed = 4242) {
   const level = generate(seed, band);
@@ -79,6 +80,48 @@ test('AC-803 · resetClock() on background means a 30 s gap is worth zero ticks'
   // the cap alone is not the guarantee and resetClock has to exist.
   const naive = advanceFrame(warm.state, 0, 30000, [], []);
   assert.equal(naive.state.tick, tickAtBackground + MAX_CATCHUP_TICKS);
+});
+
+test('AC-803 · backgrounding is STRICT on a device and lenient on web, and web only', () => {
+  // The playtest finding: `react-native-web` maps `AppState` onto `visibilitychange`, which
+  // fires for switching tabs, losing window focus, an OS notification or undocking devtools.
+  // The owner's first play session was interrupted by exactly that. Web is a development
+  // harness and a tier-3 target, not a shipping platform.
+  //
+  // The decision is a pure function so both halves can be checked here rather than only on a
+  // device, and the ASYMMETRY is what is asserted: the accumulator reset happens on every
+  // platform, and only the pause and the countdown are relaxed.
+  for (const os of ['ios', 'android', 'macos', 'windows', undefined]) {
+    const leaving = backgroundAction(os, 'background', false);
+    assert.equal(leaving.resetClock, true, os + ': the accumulator must be zeroed');
+    assert.equal(leaving.mode, MODE.PAUSED, os + ': a device MUST pause — a phone call is not 400 ticks');
+    assert.equal(leaving.markBackgrounded, true);
+    const returning = backgroundAction(os, 'active', true);
+    assert.equal(returning.resetClock, true);
+    assert.equal(returning.mode, MODE.COUNTDOWN, os + ': resuming costs a 3-2-1 (AC-804)');
+    assert.equal(returning.markBackgrounded, false);
+    // 'inactive' is the iOS notification-shade / app-switcher state and is also not 'active'.
+    assert.equal(backgroundAction(os, 'inactive', false).mode, MODE.PAUSED);
+  }
+
+  // Web: the accumulator is STILL zeroed — that is the half that protects the simulation and
+  // it is not relaxed — but the game keeps running.
+  const webAway = backgroundAction('web', 'background', false);
+  assert.equal(webAway.resetClock, true, 'web must still zero the accumulator');
+  assert.equal(webAway.mode, undefined, 'web must not pause');
+  assert.equal(webAway.markBackgrounded, undefined, 'web must not arm the countdown');
+  const webBack = backgroundAction('web', 'active', false);
+  assert.equal(webBack.mode, undefined, 'web must not run a countdown it never armed');
+
+  // And the second half of the web protection, which does not depend on the handler at all: a
+  // hidden tab does not service requestAnimationFrame, so the first frame back carries a delta
+  // of seconds — and `advanceClock` clamps it to MAX_CATCHUP_TICKS and discards the rest.
+  // Eight ticks is 133 ms of world time for any length of absence (AC-127).
+  for (const gapMs of [2000, 30000, 600000]) {
+    const r = advanceClock(0, gapMs);
+    assert.equal(r.ticks, MAX_CATCHUP_TICKS, gapMs + ' ms resumed at ' + r.ticks + ' ticks');
+    assert.equal(r.accTicks, 0);
+  }
 });
 
 test('AC-305 · a tap is stamped to the next tick to be simulated and consumed by it', () => {

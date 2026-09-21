@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { SCORE_LIFE_BONUS } from '../engine/index.js';
+import { TICK_HZ } from '../engine/index.js';
 import { easeOutBack } from '../render/motion.js';
 import { C, MS, RADIUS, SPACE, TYPE } from './theme.js';
 
@@ -95,27 +95,32 @@ export function PauseOverlay({ onResume, onRestart, onQuit, reduceMotion }) {
   );
 }
 
-/** S5 — ui.md §8.6. */
-export function CompleteOverlay({ levelNumber, state, quota, onRetry, onNext, reduceMotion }) {
+/**
+ * S5 — ui.md §8.6. Shown when `phase === 'ended'`: the clock ran out with at least one life
+ * left, and THAT is what clearing a level is (gameplay.md §7, AC-132).
+ *
+ * The title is `TIME`, not `LEVEL CLEAR`, because what happened is that the two minutes ran
+ * out. The distinction matters on the one screen where the player learns what the game wants
+ * from them: they did not complete a job, they survived a shift.
+ */
+export function CompleteOverlay({ levelNumber, state, onRetry, onNext, reduceMotion }) {
   return (
     <Panel
-      title={'LEVEL ' + String(levelNumber).padStart(2, '0') + ' CLEAR'}
+      title={'TIME — LEVEL ' + String(levelNumber).padStart(2, '0')}
       testID="overlay-complete"
       reduceMotion={reduceMotion}
     >
       <View style={styles.rule} />
-      <Row label="Delivered" value={state.delivered + '/' + quota} testID="complete-delivered" />
       <Row label="Best streak" value={String(state.bestStreak)} testID="complete-streak" />
-      <Row
-        label="Lives remaining"
-        value={'+' + state.lives * SCORE_LIFE_BONUS}
-        note={state.lives + '   ×' + SCORE_LIFE_BONUS}
-        testID="complete-lives"
-      />
+      <Row label="Misrouted" value={String(state.misrouted)} testID="complete-misrouted" />
+      <Row label="Lives remaining" value={String(state.lives)} testID="complete-lives" />
       <View style={styles.rule} />
+      {/* gameplay.md §4.3 — `delivered` IS the score. There is no points total, no streak
+          multiplier and no life bonus, so there is no second number here that has to agree
+          with this one. */}
       <View style={styles.row}>
-        <Text style={styles.rowLabel}>SCORE</Text>
-        <Text style={styles.display} testID="complete-score">{state.score.toLocaleString('en-US')}</Text>
+        <Text style={styles.rowLabel}>DELIVERED</Text>
+        <Text style={styles.display} testID="complete-delivered">{String(state.delivered)}</Text>
       </View>
       {/* `Best` is a stored value and storage is slice 4 (gameplay.md §7); the row is kept so
           the layout is not invented later, and reads as unknown rather than as zero. */}
@@ -128,13 +133,19 @@ export function CompleteOverlay({ levelNumber, state, quota, onRetry, onNext, re
   );
 }
 
-/** S6 — ui.md §8.7. */
-export function FailedOverlay({ state, quota, onRetry, onLevels, reduceMotion }) {
+/**
+ * S6 — ui.md §8.7. `Time survived` is on THIS panel and not on §8.6's, because it is the only
+ * place it carries information: a cleared run survived 2:00 by definition.
+ */
+export function FailedOverlay({ state, onRetry, onLevels, reduceMotion }) {
+  const secs = Math.floor(state.tick / TICK_HZ);
+  const survived = Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0');
   return (
     <Panel title="OUT OF LIVES" testID="overlay-failed" reduceMotion={reduceMotion}>
       <View style={styles.rule} />
-      <Row label="Delivered" value={state.delivered + '/' + quota} testID="failed-delivered" />
-      <Row label="Score" value={state.score.toLocaleString('en-US')} testID="failed-score" />
+      <Row label="Delivered" value={String(state.delivered)} testID="failed-delivered" />
+      <Row label="Best streak" value={String(state.bestStreak)} testID="failed-streak" />
+      <Row label="Time survived" value={survived} testID="failed-time" />
       <View style={styles.buttons}>
         <Button label="RETRY" onPress={onRetry} testID="btn-retry" primary grow />
         <Button label="LEVELS" onPress={onLevels} testID="btn-levels" grow />

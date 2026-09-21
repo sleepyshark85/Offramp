@@ -104,7 +104,9 @@ test('tier 3 · the game boots, plays, takes input, pauses, resumes and ends', a
       const s = await snap(app.page);
       assert.equal(s.level.seed, level.seed);
       assert.equal(s.level.band, level.band);
-      assert.equal(s.level.quota, level.quota);
+      assert.equal(s.level.C, level.C);
+      assert.equal(s.level.colW, level.colW);
+      assert.equal(s.level.rowH, level.rowH);
       assert.deepEqual(
         s.level.junctions.map((j) => [j.junctionId, j.x, j.y]),
         level.junctions.map((nodeId, junctionId) => [junctionId, level.nodes[nodeId].x, level.nodes[nodeId].y]),
@@ -193,7 +195,19 @@ test('tier 3 · the game boots, plays, takes input, pauses, resumes and ends', a
       assert.equal(still.state.tick, tickAtPause, 'the simulation advanced while paused');
       assert.equal(still.frames, paused.frames, 'the animation-frame loop is still running while paused');
       // A tap on a junction, while paused, must not be enqueued.
-      const p = junctionScreen(still, 0);
+      //
+      // THE JUNCTION HAS TO BE ONE THE PAUSE PANEL IS NOT COVERING. The panel is a centred
+      // 340 pt card with RESUME / RESTART / QUIT in it, and under round 8's geometry junction 0
+      // sits underneath it — so clicking there hit RESTART and the test failed with the tick
+      // back at 10. That was the harness clicking a button, not a tap reaching the canvas, and
+      // it proved nothing about AC-307 either way.
+      const panel = await app.page.getByTestId('overlay-pause').locator('> *').first().boundingBox();
+      const outside = still.level.junctions
+        .map((j) => ({ j, p: junctionScreen(still, j.junctionId) }))
+        .find(({ p: q }) => q.x < panel.x - 8 || q.x > panel.x + panel.width + 8
+          || q.y < panel.y - 8 || q.y > panel.y + panel.height + 8);
+      assert.ok(outside, 'every junction is under the pause panel, so AC-307 cannot be tested here');
+      const p = outside.p;
       await app.page.mouse.click(p.x, p.y);
       await app.page.waitForTimeout(200);
       const after = await snap(app.page);
@@ -207,107 +221,90 @@ test('tier 3 · the game boots, plays, takes input, pauses, resumes and ends', a
       assert.ok(resumed.state.tick > tickAtPause);
     });
 
-    await t.test('AC-803 / AC-804 · backgrounding costs zero ticks and resumes on a 3-2-1', async () => {
-      await waitFor(app.page, (s) => s.mode === 'running', { label: 'a running game' });
-      // Read the tick and background the page in ONE round trip. Reading it from Node first
-      // would measure this harness's own latency rather than the app's, and the first version
-      // of this test failed on exactly that.
+    await t.test('AC-803 · a visibilitychange does NOT pause the web build, and costs no ticks', async () => {
+      // THIS TEST INVERTED IN ROUND 8, AND THE INVERSION IS THE FINDING IT NOW GUARDS.
+      //
+      // It used to assert that a `visibilitychange` pauses the game and resumes on a 3-2-1
+      // countdown (AC-803, AC-804). That behaviour is CORRECT ON A PHONE — `AppState` leaving
+      // 'active' there means the app is genuinely suspended and a phone call must not become
+      // 400 ticks — and it is WRONG ON WEB, where `react-native-web` maps `AppState` onto
+      // `visibilitychange`, which fires for switching tabs, losing window focus, an OS
+      // notification or undocking devtools. The owner's first play session was interrupted by
+      // exactly that.
+      //
+      // Tier 3 runs on web, so tier 3 asserts the web behaviour: no pause, no countdown, and
+      // the simulation keeps running. The DEVICE behaviour is unchanged and is asserted in
+      // test/loop.test.js against `backgroundAction('ios', …)` — the rule was extracted into a
+      // pure function precisely so that the half this tier cannot see is still checked
+      // somewhere.
+      //
+      // ONE THING IS LOST AND IT IS RECORDED RATHER THAN PAPERED OVER: the 3-2-1 resume
+      // countdown (AC-804) is armed only by the background path, and the background path no
+      // longer fires on web. `CountdownOverlay` is therefore NOT reachable at tier 3 any more.
+      // It is live on a device, it is unchanged, and it becomes a tier-5 obligation. The pause
+      // path below covers everything else the overlay path used to: the pause itself, AC-128's
+      // frozen clock, and the resume not paying back the time.
+      const running = await waitFor(app.page, (s) => s.mode === 'running', { label: 'a running game' });
       const tickAtBackground = await app.page.evaluate(() => {
         const t = window.__offramp.state.tick;
         Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
         document.dispatchEvent(new Event('visibilitychange'));
         return t;
       });
-      const hidden = await waitFor(app.page, (s) => s.mode === 'paused', { label: 'the app to pause on background' });
-      // Settle before reading the tick to measure from. `setMode('paused')` renders with the
-      // `view` React state as it stands, while the simulation itself lives in a ref that the
-      // last frame had already advanced — so the pause commit publishes, and then the
-      // `setView` that frame had already queued publishes too. Traced in the page, that is
-      // TWO publishes about 2 ms apart, both saying 'paused', the second up to one frame of
-      // ticks ahead; after that nothing moves again. Which of the two a poll from Node
-      // catches is this harness's latency, not the app's, and asserting the exact equality
-      // below against the first of them is what made this fail about one run in six. The
-      // equality itself is kept exactly as AC-803 states it — 2 s of background is worth ZERO
-      // ticks — it is just measured from the settled reading.
-      await app.page.waitForTimeout(250);
-      const settled = await snap(app.page);
-      const trailing = settled.state.tick - hidden.state.tick;
-      assert.ok(
-        trailing >= 0 && trailing <= MAX_CATCHUP_TICKS,
-        'the pause left ' + trailing + ' ticks trailing, which is more than the one frame a ' +
-          'queued setView can carry: the loop was not cancelled when the pause committed',
-      );
-      const tickWhileHidden = settled.state.tick;
-      await app.page.waitForTimeout(2000);
-      const stillHidden = await snap(app.page);
-      assert.equal(stillHidden.state.tick, tickWhileHidden, '2 s in the background advanced the simulation');
-      assert.ok(
-        tickWhileHidden - tickAtBackground <= 8,
-        'the pause was ' + (tickWhileHidden - tickAtBackground) + ' ticks late; more than one frame of catch-up ran',
-      );
-
+      assert.ok(tickAtBackground >= running.state.tick);
+      await app.page.waitForTimeout(600);
+      const after = await snap(app.page);
+      assert.equal(after.mode, 'running', 'a visibilitychange paused the web build');
+      assert.equal(after.state.phase, 'running');
       await app.page.evaluate(() => {
         Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
         document.dispatchEvent(new Event('visibilitychange'));
       });
-      const counting = await waitFor(app.page, (s) => s.mode === 'countdown', { label: 'the resume countdown' });
-      assert.equal(counting.countdown, 3);
-      assert.equal(counting.state.tick, tickWhileHidden, 'a tick ran during the countdown');
-      await app.page.getByTestId('overlay-countdown').waitFor();
-      await shot(app.page, '05-resume-countdown');
-
-      // Three 600 ms beats, and NO tick until they are done. The numerals are collected as
-      // they appear rather than sampled at a fixed instant: sampling at 900 ms tests this
-      // machine's scheduler, not the app, and it is what made the first version of this test
-      // flaky one run in five.
-      const seen = [];
-      const t0 = Date.now();
-      for (;;) {
-        const s = await snap(app.page);
-        if (s.mode !== 'countdown') break;
-        if (seen[seen.length - 1] !== s.countdown) seen.push(s.countdown);
-        assert.equal(s.state.tick, tickWhileHidden, 'a tick ran during the countdown');
-        if (Date.now() - t0 > 5000) break;
-        await app.page.waitForTimeout(30);
-      }
-      const elapsed = Date.now() - t0;
-      // The numerals are 3, 2, 1. `countdown` then reaches 0 in one committed React state
-      // before the effect that flips `mode` back to 'running' runs, so a poll can legitimately
-      // observe {mode:'countdown', countdown:0} — measured at 3.6 ms, and traced across
-      // requestAnimationFrame it is never on screen for a single frame, so no player ever sees
-      // a "0". Asserting that this poller never catches that 3.6 ms is asserting the poller's
-      // luck, not the app: it went from never catching it to catching it four runs in five on
-      // a heavier canvas, with the app's behaviour unchanged. What AC-804 requires is the
-      // three numerals, in order, at 600 ms, with no tick — so that is what is asserted, and a
-      // trailing 0 is tolerated while anything else still fails.
-      assert.deepEqual(
-        seen.slice(0, 3), [3, 2, 1],
-        'the countdown did not run 3-2-1, it ran ' + JSON.stringify(seen),
-      );
-      assert.deepEqual(
-        seen.slice(3), seen.length > 3 ? [0] : [],
-        'the countdown ran past zero: ' + JSON.stringify(seen),
-      );
-      assert.ok(elapsed > 1500 && elapsed < 2600, '3 x 600 ms took ' + elapsed + ' ms');
-
-      const back = await waitFor(app.page, (s) => s.mode === 'running', { label: 'play to resume', timeout: 4000 });
-      // "No tick ran during the countdown" is asserted on EVERY sample of the loop above,
-      // which is the tight form of it. This one is about what happens at the other end: the
-      // resume must not pay back the 1.8 s the countdown took. It is a bound rather than an
-      // equality because by the time a poll from Node observes `mode === 'running'` the game
-      // is running, and how many frames have gone by is this harness's latency, not the
-      // app's — the first published 'running' snapshot is at the pause tick in three runs out
-      // of five and a few ticks past it in the other two, on this tree and on the tree before
-      // it alike. 27 ticks is a quarter of the countdown's 108, so a build that replayed the
-      // countdown's wall clock fails and a slow poll does not.
-      const resumeCost = back.state.tick - tickWhileHidden;
-      assert.ok(
-        resumeCost >= 0 && resumeCost < 27,
-        'resuming cost ' + resumeCost + ' ticks; the countdown is 108 ticks of wall clock and must not be paid back',
-      );
+      await app.page.waitForTimeout(300);
+      const back = await snap(app.page);
+      assert.equal(back.mode, 'running', 'returning to the tab ran a countdown');
+      // The half of AC-803 that is NOT relaxed: the handler zeroes the tick accumulator, and
+      // the catch-up clamp bounds anything it misses. Over the ~900 ms of this test the
+      // simulation may not have advanced by more than that wall time allows.
+      const advanced = back.state.tick - tickAtBackground;
+      assert.ok(advanced >= 0 && advanced < 120,
+        'the hidden interval produced ' + advanced + ' ticks, which is more than 900 ms of play');
     });
 
-    await t.test('the game PLAYS: an autopilot routes cars and the quota bar moves', async () => {
+    await t.test('AC-128 · a paused game does not advance, and the clock does not run down', async () => {
+      await waitFor(app.page, (s) => s.mode === 'running', { label: 'a running game' });
+      await app.page.getByTestId('pause-button').click();
+      const paused = await waitFor(app.page, (s) => s.mode === 'paused', { label: 'the pause overlay' });
+      await app.page.getByTestId('overlay-pause').waitFor();
+      // AC-128 · a paused game does not advance, and the clock does not run down.
+      await app.page.waitForTimeout(250);
+      const settled = await snap(app.page);
+      const trailing = settled.state.tick - paused.state.tick;
+      assert.ok(trailing >= 0 && trailing <= MAX_CATCHUP_TICKS,
+        'the pause left ' + trailing + ' ticks trailing: the loop was not cancelled');
+      const tickWhilePaused = settled.state.tick;
+      const clockWhilePaused = await app.page.getByTestId('hud-clock').textContent();
+      const barWhilePaused = await app.page.getByTestId('hud-clock-fill')
+        .evaluate((el) => el.getBoundingClientRect().width);
+      await app.page.waitForTimeout(2000);
+      const stillPaused = await snap(app.page);
+      assert.equal(stillPaused.state.tick, tickWhilePaused, '2 s paused advanced the simulation');
+      assert.equal(await app.page.getByTestId('hud-clock').textContent(), clockWhilePaused,
+        'AC-128/AC-520: the clock caption moved while paused');
+      assert.equal(
+        await app.page.getByTestId('hud-clock-fill').evaluate((el) => el.getBoundingClientRect().width),
+        barWhilePaused,
+        'AC-128/AC-520: the clock bar moved while paused',
+      );
+      await shot(app.page, '05-paused-clock');
+      await app.page.getByTestId('btn-resume').click();
+      const back = await waitFor(app.page, (s) => s.mode === 'running', { label: 'play to resume', timeout: 4000 });
+      const resumeCost = back.state.tick - tickWhilePaused;
+      assert.ok(resumeCost >= 0 && resumeCost < 27,
+        'resuming cost ' + resumeCost + ' ticks; the pause must not be paid back');
+    });
+
+    await t.test('the game PLAYS: an autopilot routes cars and the clock bar drains', async () => {
       const start = await waitFor(app.page, (s) => s.mode === 'running', { label: 'a running game' });
       const deliveredAtStart = start.state.delivered;
       let clicks = 0;
@@ -343,14 +340,29 @@ test('tier 3 · the game boots, plays, takes input, pauses, resumes and ends', a
         end.state.delivered >= deliveredAtStart + 4,
         'only ' + end.state.delivered + ' cars were delivered after ' + clicks + ' taps',
       );
-      assert.ok(end.state.score > 0, 'score did not move');
       await shot(app.page, '07-after-deliveries');
       // The HUD is React Native views, so it IS queryable — and it is the one place a paint
       // can be read without a screenshot.
-      const quota = await app.page.getByTestId('hud-quota').textContent();
-      assert.equal(quota, end.state.delivered + ' / ' + end.level.quota);
-      const width = await app.page.getByTestId('hud-quota-fill').evaluate((el) => el.getBoundingClientRect().width);
-      assert.ok(width > 0, 'the quota bar has no fill after ' + end.state.delivered + ' deliveries');
+      //
+      // gameplay.md §4.3: `delivered` IS the score. The big number on the left is the delivered
+      // count and there is no points total beside it.
+      const shown = await app.page.getByTestId('hud-delivered').textContent();
+      assert.equal(Number(shown), end.state.delivered, 'the HUD number is not `delivered`');
+      assert.ok(end.state.delivered > 0);
+
+      // AC-520 · the clock bar DRAINS, and both it and its caption are pure functions of the
+      // tick. The bar filled under the quota model, so this is the assertion that a
+      // pre-round-8 build fails.
+      const LEVEL_TICKS = 7200;
+      const BAR_W = 180;
+      const width = await app.page.getByTestId('hud-clock-fill').evaluate((el) => el.getBoundingClientRect().width);
+      const want = (BAR_W * (LEVEL_TICKS - end.state.tick)) / LEVEL_TICKS;
+      assert.ok(Math.abs(width - want) < 2,
+        'clock bar is ' + width.toFixed(1) + ' pt at tick ' + end.state.tick + ', want ' + want.toFixed(1));
+      assert.ok(width < BAR_W, 'the clock bar has not drained at all after ' + end.state.tick + ' ticks');
+      const left = Math.floor((LEVEL_TICKS - end.state.tick) / 60);
+      const caption = await app.page.getByTestId('hud-clock').textContent();
+      assert.equal(caption, Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'));
     });
 
     assert.deepEqual(app.errors, [], 'the page logged errors');
@@ -377,7 +389,12 @@ test('tier 3 · a level that is left alone ends, and the failure overlay is real
     const title = await app.page.getByTestId('overlay-failed-title').textContent();
     assert.equal(title, 'OUT OF LIVES');
     const delivered = await app.page.getByTestId('failed-delivered').textContent();
-    assert.equal(delivered, lost.state.delivered + '/' + lost.level.quota);
+    assert.equal(delivered, String(lost.state.delivered));
+    // ui.md §8.7 — `Time survived` is on THIS panel and not on the clear panel, because it is
+    // the only place it carries information: a cleared run survived 2:00 by definition.
+    const survived = await app.page.getByTestId('failed-time').textContent();
+    const secs = Math.floor(lost.state.tick / 60);
+    assert.equal(survived, Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0'));
     await shot(app.page, '08-level-failed');
 
     // AC-308 · taps are discarded once the level has ended.
@@ -449,6 +466,37 @@ test('tier 3 · S1, S2 and S7 are operable stubs, and Symbol size reaches the ca
   // through, so they are driven here rather than assumed.
   const app = await openApp();
   try {
+    await t.test('S1 · the title screen’s buttons are CENTRED under the wordmark', async () => {
+      // OWNER-REPORTED. The button column was `alignSelf: 'stretch'` with `maxWidth: 340`, and
+      // stretch wins over the parent's `alignItems: 'center'` — so the column was laid out from
+      // the LEFT edge at 340 pt wide while the wordmark stayed centred. Above about 372 pt of
+      // screen width (340 plus two 16 pt gutters) the two visibly disagreed, and every device
+      // in ui.md §3.3 except the 320 pt iPhone SE is above that.
+      //
+      // Measured at THREE widths, because the defect is width-dependent: it is invisible below
+      // 372 and grows with the screen.
+      await app.page.getByTestId('title-wordmark').waitFor({ timeout: 30000 });
+      for (const width of [360, 393, 520]) {
+        await app.page.setViewportSize({ width, height: 852 });
+        await app.page.waitForTimeout(120);
+        const word = await app.page.getByTestId('title-wordmark').boundingBox();
+        for (const id of ['btn-play', 'btn-levels-menu', 'btn-settings']) {
+          const b = await app.page.getByTestId(id).boundingBox();
+          const buttonCentre = b.x + b.width / 2;
+          assert.ok(Math.abs(buttonCentre - width / 2) <= 1,
+            'at ' + width + ' pt, ' + id + ' is centred on ' + buttonCentre.toFixed(1)
+            + ' rather than ' + (width / 2));
+          assert.ok(Math.abs(buttonCentre - (word.x + word.width / 2)) <= 1,
+            'at ' + width + ' pt, ' + id + ' does not line up with the wordmark');
+          // ui.md §12 / §11.1: the column is capped at 340 pt and every control clears 44 pt.
+          assert.ok(b.width <= 340 + 0.5, 'at ' + width + ' pt, ' + id + ' is ' + b.width + ' pt wide');
+          assert.ok(b.height >= 44, id + ' is ' + b.height + ' pt tall');
+        }
+      }
+      await app.page.setViewportSize({ width: 393, height: 852 });
+      await app.page.waitForTimeout(120);
+    });
+
     await t.test('S1 -> S2 -> a level, by tapping', async () => {
       await app.page.getByTestId('title-wordmark').waitFor({ timeout: 30000 });
       await shot(app.page, '10-title');

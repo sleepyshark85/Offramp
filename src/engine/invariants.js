@@ -1,3 +1,5 @@
+import { LEVEL_TICKS } from './constants.js';
+
 // Offramp — engine invariants (docs/development-process.md §4).
 //
 // Asserted after every step() by the fuzz tests and by the harnesses in tools/. Returns an
@@ -26,15 +28,16 @@ export function checkInvariants(state, prev) {
     }
   }
 
-  // Scalars.
-  for (const k of ['tick', 'rng', 'nextSpawn', 'delivered', 'misrouted', 'lives', 'score', 'streak', 'bestStreak']) {
+  // Scalars. There is no `score`: `delivered` IS the score (gameplay.md §4.3, AC-117).
+  for (const k of ['tick', 'rng', 'nextSpawn', 'delivered', 'misrouted', 'lives', 'streak', 'bestStreak']) {
     if (!Number.isInteger(state[k])) bad.push('state.' + k + ' is not an integer: ' + state[k]);
   }
-  if (state.score < 0) bad.push('score negative');
+  if ('score' in state) bad.push('state carries a `score` field, which round 8 deleted');
+  if (state.delivered < 0) bad.push('delivered negative');
   if (state.lives < 0) bad.push('lives below zero');
   if (state.lives > 3) bad.push('lives above LIVES');
+  if (state.tick > LEVEL_TICKS) bad.push('tick past LEVEL_TICKS: ' + state.tick);
   if (prev) {
-    if (state.score < prev.score) bad.push('score decreased');
     if (state.lives > prev.lives) bad.push('lives increased');
     if (state.delivered < prev.delivered) bad.push('delivered decreased');
     if (state.misrouted < prev.misrouted) bad.push('misrouted decreased');
@@ -51,8 +54,14 @@ export function checkInvariants(state, prev) {
     if (state.open[j] !== 0 && state.open[j] !== 1) bad.push('open[' + j + '] is ' + state.open[j]);
   }
 
-  // Spawn slack (AC-123).
-  if (state.nextSpawn >= level.spawns.length) bad.push('spawn schedule exhausted');
+  // AC-123 — the schedule is exactly consumed and never over-consumed. Under a clock the
+  // schedule holds exactly the cars that fit in two minutes, so the failure to catch is a
+  // schedule that stops short of the clock or an engine that over-runs it; the equality
+  // `nextSpawn === spawns.length` at the bell is checked by the caller, which is the only
+  // place the bell is observable.
+  if (state.nextSpawn > level.spawns.length) {
+    bad.push('nextSpawn ' + state.nextSpawn + ' past spawns.length ' + level.spawns.length);
+  }
 
   return bad;
 }

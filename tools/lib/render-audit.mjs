@@ -13,10 +13,19 @@
 // test.
 
 import { LIVES, createState, generate, reachableColourMasks, step } from '../../src/engine/index.js';
-import { BLADE_LEN, buildLevelGeometry, pointAtLu } from '../../src/render/geometry.js';
+import { buildLevelGeometry } from '../../src/render/geometry.js';
 
-/** ui.md §7.3 / AC-504. The floor is stated in the design; it is not read off a measurement. */
-export const BLADE_SEPARATION_FLOOR_DEG = 30;
+/**
+ * ui.md §7.3 / AC-504. The floor is stated in the design; it is not read off a measurement.
+ *
+ * IT MOVED 30 -> 90 IN ROUND 8, and the restatement is EXACT rather than measured. The old
+ * threshold was derived from `atan(colW / rowH)` — the angle between a straight branch and a
+ * diagonal one under the cubic model — and measured out at 36.87 / 39.09 / 40.91 / 44.27° for
+ * straight-against-diagonal. Orthogonal branches leave the node at right angles by
+ * construction: a branch is {c, c±1} (one vertical, one horizontal -> 90°) or {c-1, c+1} (two
+ * opposed horizontals -> 180°). There are no other cases and no measurement is needed.
+ */
+export const BLADE_SEPARATION_FLOOR_DEG = 90;
 
 const DEG = 180 / Math.PI;
 const MAX_RUN_TICKS = 20000;
@@ -24,25 +33,34 @@ const MAX_RUN_TICKS = 20000;
 /**
  * The blade's heading for one branch of one junction, in radians.
  *
- *   'chord'    — production (src/render/geometry.js): the chord from the junction node to the
- *                branch's FAR node. ui.md §7.3 is normative on this.
- *   'tangent'  — the slice-2 defect: the road's tangent BLADE_LEN along the branch. Every edge
- *                leaves its node vertically by design (generation.md §2.3), so 40 LU down
- *                either branch the road still points straight down.
- *   'tangent0' — the same defect taken at the node itself, where the cubic's first control
- *                point is directly below the node, so the two branches are bit-identical.
+ *   'first-segment' — production (src/render/geometry.js): the direction of the FIRST SEGMENT
+ *                     of `out[k]` — down for a `straight`, left for a `jogL`, right for a
+ *                     `jogR`. ui.md §7.3 is normative on this.
+ *
+ *   'wrong-branch'  — the blade drawn along the OTHER branch. This is the injection the ≥ 90°
+ *                     clause is kept for: no construction prevents a renderer indexing `out`
+ *                     with `1 - open`, and the separation goes to 0 at every junction.
+ *
+ *   'far-chord'     — the chord to the branch's FAR node, which is what slices 0–2 used and
+ *                     what ui.md §7.3 said while roads were cubics. Under orthogonal routing
+ *                     it is wrong: a jog's far node sits down AND across, so the chord reads
+ *                     about 50° from vertical where the blade must read 90° or 180°. It is
+ *                     included because "the rule that was right last round" is the most likely
+ *                     way for this to regress.
+ *
+ * The slice-2 tangent defect — every cubic left its node vertically, so a tangent-derived
+ * blade drew the identical vertical bar for both branches — is GONE BY CONSTRUCTION rather
+ * than by discipline, because the tangent at the node now IS the first segment's direction.
+ * There is therefore nothing left to inject for it, and that is an improvement rather than a
+ * gap: the defect is unreachable, not merely unchecked.
  */
 function bladeAngle(level, geom, j, k, mode) {
-  const branch = j.branches[k];
-  if (mode === 'chord') return branch.angle;
-  const node = level.nodes[j.nodeId];
-  const curve = geom.curves[branch.edgeId];
-  if (mode === 'tangent0') {
-    return Math.atan2(curve.p[1][1] - curve.p[0][1], curve.p[1][0] - curve.p[0][0]);
-  }
-  if (mode === 'tangent') {
-    const q = pointAtLu(curve, Math.min(BLADE_LEN, curve.lengthLu));
-    return Math.atan2(q[1] - node.y, q[0] - node.x);
+  if (mode === 'first-segment') return j.branches[k].angle;
+  if (mode === 'wrong-branch') return j.branches[1 - k].angle;
+  if (mode === 'far-chord') {
+    const node = level.nodes[j.nodeId];
+    const far = level.nodes[level.edges[j.branches[k].edgeId].to];
+    return Math.atan2(far.y - node.y, far.x - node.x);
   }
   throw new Error('unknown blade mode: ' + mode);
 }
@@ -63,7 +81,7 @@ export function angularSeparationDeg(a, b) {
  * whether the eight values the lattice can produce are all above the threshold), and the count
  * of junctions below `BLADE_SEPARATION_FLOOR_DEG`.
  */
-export function auditBladeSeparation({ bands = [1, 2, 3, 4, 5], levels = 100, seedBase = 700000, mode = 'chord' } = {}) {
+export function auditBladeSeparation({ bands = [1, 2, 3, 4, 5], levels = 100, seedBase = 700000, mode = 'first-segment' } = {}) {
   let junctions = 0;
   let below = 0;
   let floor = Infinity;
@@ -104,6 +122,48 @@ export function auditBladeSeparation({ bands = [1, 2, 3, 4, 5], levels = 100, se
   };
 }
 
+/**
+ * AC-504's FIRST clause, and the one that actually catches a blade drawn along the wrong
+ * branch. The expected heading is re-derived from the edge's `shape` tag using ui.md §7.3's
+ * own words — "down for a `straight`, left for a `jogL`, right for a `jogR`" — which shares
+ * nothing with src/render/geometry.js's derivation from the polyline.
+ *
+ * THIS EXISTS BECAUSE THE SECOND CLAUSE CANNOT DO IT. ui.md §7.3 and AC-504 both say the ≥ 90°
+ * separation check "also catches a blade drawn along the wrong branch". It does not: drawing
+ * branch k's blade along `out[1 - k]` SWAPS the two angles, and the separation between a
+ * swapped pair is the separation between the original pair. Measured: the `wrong-branch`
+ * injection leaves the separation histogram bit-identical. The separation clause catches a
+ * blade that is wrong in DIRECTION; only this clause catches one that is wrong in CHOICE.
+ */
+export function auditBladeDirection({ bands = [1, 2, 3, 4, 5], levels = 100, seedBase = 700000, mode = 'first-segment' } = {}) {
+  // ui.md §7.3, transcribed. Angles in the blade's own convention: 0 points right along +x.
+  const EXPECTED = { straight: Math.PI / 2, jogL: Math.PI, jogR: 0, entry: Math.PI / 2 };
+  let checked = 0;
+  let wrong = 0;
+  const worst = { deg: 0, seed: 0, band: 0, junctionId: -1, shape: null };
+  for (const band of bands) {
+    for (let i = 0; i < levels; i += 1) {
+      const seed = seedBase + band * 1000003 + i;
+      const level = generate(seed, band);
+      const geom = buildLevelGeometry(level);
+      for (const j of geom.junctions) {
+        for (let k = 0; k < 2; k += 1) {
+          const shape = level.edges[j.branches[k].edgeId].shape;
+          const want = EXPECTED[shape];
+          const got = bladeAngle(level, geom, j, k, mode);
+          const off = angularSeparationDeg(want, got);
+          checked += 1;
+          if (off > 1e-9) {
+            wrong += 1;
+            if (off > worst.deg) Object.assign(worst, { deg: off, seed, band, junctionId: j.junctionId, shape });
+          }
+        }
+      }
+    }
+  }
+  return { checked, wrong, worst };
+}
+
 // --- AC-140 -------------------------------------------------------------------------------
 
 /** Does branch k of this branch node lead to a depot of `colour`? */
@@ -131,9 +191,9 @@ function branchesEnteredThisTick(level, open, car) {
  *
  * Runs the level with a router that routes perfectly except for the first `LIVES - 1` cars,
  * which are sent deliberately into a subtree that cannot reach their colour. Both `delivered`
- * and `misrouted` are therefore exercised on every run, and the run still reaches the quota
+ * and `misrouted` are therefore exercised on every run, and the run still reaches the BELL
  * rather than being cut short at zero lives — which is what makes an average level contribute
- * `quota + 2` arrivals instead of twelve. On every tick it records each car's
+ * `N + 2` arrivals instead of twelve. On every tick it records each car's
  * `edgeId` BEFORE `step()` — which is exactly the previous-tick inference the renderer used
  * through slice 2 (`withEdge()` in src/ui/loop.js, now deleted) — and compares it with the
  * `edgeId` the engine puts on the arrival event.

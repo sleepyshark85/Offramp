@@ -4,27 +4,40 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  LEVEL_TICKS,
   LIVES,
   MAX_CATCHUP_TICKS,
-  SCORE_DELIVERY,
-  SCORE_LIFE_BONUS,
-  BANDS,
-  inFlightMax,
-  spawnSlack,
-  transitMaxTicks,
-  STREAK_CAP,
+  SPAWN_LEAD,
   TICK_HZ,
+  spawnCountMax,
+  bandParams,
 } from '../src/engine/constants.js';
 import { createState, step, TRANSITION_STATS, resetTransitionStats } from '../src/engine/step.js';
-import { generate } from '../src/engine/generate.js';
+import { assertScheduleReachesClock, generate } from '../src/engine/generate.js';
 import { drive, twoDepotLevel } from './helpers.js';
 import { playLevel } from '../tools/lib/solver.mjs';
+import { lazyOptimal, lazyOptimalInputs } from '../tools/lib/oracle.mjs';
+import { advanceFrame } from '../src/ui/loop.js';
+import { reachableColourMasks } from '../src/engine/generate.js';
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const ENGINE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'engine');
+
+/**
+ * generation.md §6.2's lazy-optimal oracle, per tick, used wherever a test needs a run that
+ * REACHES THE BELL. A never-tapping run loses three lives long before tick 7,200 (AC-814), so
+ * a test that wants to observe `phase === 'ended'` has to route the cars. The routing itself
+ * lives in tools/lib/oracle.mjs and is not re-implemented here.
+ */
+const MASKS = new WeakMap();
+function oracleInputs(level, state) {
+  let masks = MASKS.get(level);
+  if (!masks) { masks = reachableColourMasks(level); MASKS.set(level, masks); }
+  return lazyOptimalInputs(level, masks, state);
+}
 
 test('AC-101 · TICK_HZ is the integer 60 and is defined once', () => {
   assert.equal(TICK_HZ, 60);
@@ -51,9 +64,10 @@ test('AC-103 · no floating point anywhere in the simulation after 10,000 ticks'
   let s = createState(level);
   const inputsAt = (t) => (t % 37 === 0 ? [{ tick: t, junctionId: t % level.junctions.length }] : []);
   for (let i = 0; i < 10000 && s.phase === 'running'; i += 1) s = step(s, inputsAt(s.tick));
-  for (const k of ['tick', 'rng', 'nextSpawn', 'delivered', 'misrouted', 'lives', 'score', 'streak', 'bestStreak']) {
+  for (const k of ['tick', 'rng', 'nextSpawn', 'delivered', 'misrouted', 'lives', 'streak', 'bestStreak']) {
     assert.ok(Number.isInteger(s[k]), k + ' = ' + s[k]);
   }
+  assert.ok(!('score' in s), 'there is no score field (AC-117)');
   for (const car of s.cars) {
     for (const k of ['id', 'colour', 'edgeId', 'progress']) assert.ok(Number.isInteger(car[k]));
   }
@@ -154,11 +168,11 @@ test('AC-112 · cars spawn on their scheduled tick', () => {
 
 test('AC-112 · every scheduled car of a real level arrives exactly once, on its tick', () => {
   // On the shipped geometry rather than the fixture, because AC-112's claim that a car cannot
-  // transition on its spawn tick rests on ENTRY_LEN = 160,000 MLU being far longer than one
-  // tick of travel at any band — 3,800 MLU at the fastest.
+  // transition on its spawn tick rests on ENTRY_LEN = 220,000 MLU being far longer than one
+  // tick of travel at any band — 3,350 MLU at the fastest, so sixty times over.
   for (let band = 1; band <= 5; band += 1) {
     const level = generate(40 + band, band);
-    assert.ok(level.edges[level.entryEdgeId].lengthMlu > 10 * level.speedMluPerTick);
+    assert.ok(level.edges[level.entryEdgeId].lengthMlu > 60 * level.speedMluPerTick);
     const wanted = new Map(level.spawns.map((sp) => [sp.tick, sp]));
     const seenIds = new Set();
     let prev = createState(level);
@@ -225,29 +239,67 @@ test('AC-115 · the colour bag never produces three in a row, and balances WITHI
   }
 });
 
-test('AC-116/AC-117 · delivery scores, counts, and the streak cap', () => {
+test('AC-116/AC-117 · delivery counts, and the points system is GONE', () => {
   const spawns = [];
   for (let i = 0; i < 14; i += 1) spawns.push({ index: i, tick: i * 60, colour: 0 });
-  const level = twoDepotLevel({ spawns, quota: 14 });
+  const level = twoDepotLevel({ spawns });
   let s = createState(level);
-  const increments = [];
-  let prevScore = 0;
   let prevDelivered = 0;
+  const deliveries = [];
   while (s.phase === 'running' && s.tick < 2000) {
     s = step(s, []);
     if (s.delivered !== prevDelivered) {
-      increments.push(s.score - prevScore);
-      prevScore = s.score;
+      assert.equal(s.delivered, prevDelivered + 1, 'delivered rises by exactly one');
       prevDelivered = s.delivered;
-      assert.equal(s.streak, s.delivered);
+      assert.equal(s.streak, s.delivered, 'streak tracks an unbroken run');
+      assert.equal(s.bestStreak, s.streak);
       assert.equal(s.lives, LIVES);
+      deliveries.push(s.tick);
+      const ev = s.events.find((e) => e.type === 'delivered');
+      assert.ok(ev && Number.isInteger(ev.edgeId), 'the event carries edgeId (AC-140)');
     }
   }
-  for (let n = 1; n <= 12; n += 1) {
-    assert.equal(increments[n - 1], SCORE_DELIVERY + 10 * Math.min(n - 1, STREAK_CAP), 'delivery #' + n);
-  }
-  assert.equal(increments[9], 190);
-  assert.equal(increments[11], 190);
+  assert.equal(s.delivered, 14);
+  assert.equal(s.bestStreak, 14, 'no cap: the streak runs to 14');
+});
+
+test('AC-117 · the score constants do not exist anywhere in src/', () => {
+  // The criterion is the DELETION, which is the check that catches a build keeping the old
+  // code path alive behind an unused field (AC-117's round-8 note). A grep over src/ is the
+  // only thing that can see that.
+  const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
+  const banned = ['SCORE_DELIVERY', 'SCORE_STREAK_STEP', 'STREAK_CAP', 'SCORE_LIFE_BONUS'];
+  const hits = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, name.name);
+      if (name.isDirectory()) { walk(full); continue; }
+      if (!name.name.endsWith('.js')) continue;
+      const src = readFileSync(full, 'utf8');
+      for (const b of banned) if (src.includes(b)) hits.push(full + ' -> ' + b);
+      if (/\bstate\.score\b/.test(src)) hits.push(full + ' -> state.score');
+    }
+  };
+  walk(SRC);
+  assert.deepEqual(hits, []);
+  // And the check is sensitive: it finds the strings when they are there.
+  assert.ok(banned.every((b) => 'const ' + b + ' = 1'.includes(b)));
+});
+
+test('AC-117 · streak resets on a misroute and multiplies nothing', () => {
+  const level = twoDepotLevel({
+    spawns: [
+      { index: 0, tick: 0, colour: 0 },
+      { index: 1, tick: 200, colour: 1 },
+      { index: 2, tick: 400, colour: 0 },
+    ],
+  });
+  let s = drive(step, createState(level), new Map(), 700);
+  assert.equal(s.delivered, 2, 'two cars matched depot colour 0');
+  assert.equal(s.misrouted, 1);
+  assert.equal(s.streak, 1, 'the misroute broke the streak and the last car rebuilt it');
+  assert.equal(s.bestStreak, 1);
+  assert.equal(s.lives, LIVES - 1);
 });
 
 test('AC-118 · the transition loop is single-pass over 20,000 ticks at every band', () => {
@@ -266,8 +318,8 @@ test('AC-118 · the transition loop is single-pass over 20,000 ticks at every ba
   assert.equal(TRANSITION_STATS.maxPerCarTick, 1);
 });
 
-test('AC-119 · a misroute costs a life, no points, and resets the streak', () => {
-  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 1 }], quota: 5 });
+test('AC-119 · a misroute costs a life, delivers nothing, and resets the streak', () => {
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 1 }] });
   let s = createState(level);
   let ev = null;
   while (s.tick < 200) {
@@ -276,17 +328,50 @@ test('AC-119 · a misroute costs a life, no points, and resets the streak', () =
   }
   assert.equal(s.misrouted, 1);
   assert.equal(s.lives, LIVES - 1);
-  assert.equal(s.score, 0);
+  assert.equal(s.delivered, 0);
   assert.equal(s.streak, 0);
   assert.ok(ev && ev.carColour === 1 && ev.depotColour === 0);
+  assert.ok(Number.isInteger(ev.edgeId), 'the event carries edgeId (AC-140)');
 });
 
-test('AC-122/AC-802 · quota and misroute on the same tick is a win', () => {
-  // Car 0 (colour 0) takes the long branch to depot colour 0; car 1 (colour 0) takes the
-  // short branch to depot colour 1. Both resolve on tick 153.
+test('AC-122/AC-802 · the clock and the third misroute on the same tick is a LOSS', () => {
+  // THE ORDER REVERSED IN ROUND 8. Under a quota the tie resolved as a win, because the player
+  // had completed the job. Under a clock there is no job to have finished — every run reaches
+  // the bell — so resolving the tie in the player's favour would make tick 7,199 the one tick
+  // on which a misroute is free (gameplay.md §2.5).
+  //
+  // The construction: a car whose arrival lands on tick LEVEL_TICKS - 1 into the WRONG depot,
+  // with one life left. Step 4 resolves it, step 5 checks `lives` BEFORE the clock, so the
+  // phase is 'lost' even though the clock also expired on that tick.
+  const arrive = LEVEL_TICKS - 1;
+  const spawnTick = arrive - 153; // the fixture's jogL journey is 153 ticks
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: spawnTick, colour: 1 }] });
+  let s = createState(level);
+  s.lives = 1;
+  while (s.phase === 'running') s = step(s, []);
+  assert.equal(s.tick, LEVEL_TICKS, 'the run is exactly 7,200 ticks long');
+  assert.equal(s.misrouted, 1);
+  assert.equal(s.lives, 0);
+  assert.equal(s.phase, 'lost', 'lives are checked BEFORE the clock');
+
+  // The control: the same tick, the same clock expiry, but the car matches its depot. Now the
+  // clock decides and the phase is 'ended'. Without this the assertion above could be passing
+  // for the wrong reason.
+  const ok = twoDepotLevel({ spawns: [{ index: 0, tick: spawnTick, colour: 0 }] });
+  let t = createState(ok);
+  t.lives = 1;
+  while (t.phase === 'running') t = step(t, []);
+  assert.equal(t.tick, LEVEL_TICKS);
+  assert.equal(t.delivered, 1);
+  assert.equal(t.lives, 1);
+  assert.equal(t.phase, 'ended');
+});
+
+test('AC-122/AC-136 · two misroutes on one tick with one life: both resolve, lives floor at 0', () => {
+  // Car 0 (colour 1) takes the long branch to depot colour 0; car 1 (colour 0) takes the short
+  // branch to depot colour 1. Both misroute, and both resolve on the same tick.
   const level = twoDepotLevel({
-    spawns: [{ index: 0, tick: 0, colour: 0 }, { index: 1, tick: 20, colour: 0 }],
-    quota: 1,
+    spawns: [{ index: 0, tick: 0, colour: 1 }, { index: 1, tick: 20, colour: 0 }],
   });
   let s = createState(level);
   s.lives = 1;
@@ -294,20 +379,20 @@ test('AC-122/AC-802 · quota and misroute on the same tick is a win', () => {
   let arrivalTick = null;
   while (s.phase === 'running' && s.tick < 300) {
     s = step(s, inputs.get(s.tick) || []);
-    if (s.events.some((e) => e.type === 'delivered')) arrivalTick = s.tick - 1;
+    if (s.events.some((e) => e.type === 'misrouted')) arrivalTick = s.tick - 1;
   }
-  assert.equal(arrivalTick, 153);
-  assert.equal(s.delivered, 1);
-  assert.equal(s.misrouted, 1, 'both cars resolved on the same tick');
+  assert.equal(arrivalTick, 153, 'both arrivals land on tick 153');
+  assert.equal(s.misrouted, 2, 'misrouted counts BOTH, unconditionally');
+  assert.equal(s.events.filter((e) => e.type === 'misrouted').length, 2);
+  assert.equal(s.delivered, 0);
   assert.equal(s.cars.length, 0, 'neither car was skipped by the removal pass');
-  assert.equal(s.lives, 0);
-  assert.equal(s.phase, 'won');
+  assert.equal(s.lives, 0, 'floored, not -1');
+  assert.equal(s.phase, 'lost');
 });
 
 test('two deliveries on the same tick both resolve (mutation-during-iteration guard)', () => {
   const level = twoDepotLevel({
     spawns: [{ index: 0, tick: 0, colour: 0 }, { index: 1, tick: 20, colour: 1 }],
-    quota: 9,
   });
   let s = createState(level);
   const inputs = new Map([[40, [{ tick: 40, junctionId: 0 }]]]);
@@ -317,7 +402,7 @@ test('two deliveries on the same tick both resolve (mutation-during-iteration gu
   assert.equal(s.cars.length, 0);
 });
 
-test('AC-120/AC-121 · score non-decreasing, lives non-increasing and floored', () => {
+test('AC-120/AC-121 · delivered non-decreasing, lives non-increasing and floored', () => {
   for (let band = 1; band <= 5; band += 1) {
     const level = generate(band * 7 + 1, band);
     let s = createState(level);
@@ -327,7 +412,11 @@ test('AC-120/AC-121 · score non-decreasing, lives non-increasing and floored', 
         ? [{ tick: s.tick, junctionId: (i * 40503) % level.junctions.length }]
         : [];
       s = step(s, inputs);
-      assert.ok(s.score >= prev.score && Number.isInteger(s.score) && s.score >= 0);
+      assert.ok(s.delivered >= prev.delivered && Number.isInteger(s.delivered) && s.delivered >= 0);
+      if (s.delivered > prev.delivered) {
+        assert.ok(s.events.some((e) => e.type === 'delivered'),
+          'delivered rose only on a tick that emitted a delivered event');
+      }
       assert.ok(s.lives <= prev.lives && s.lives >= 0);
       prev = s;
       if (s.phase !== 'running') { s = createState(level); prev = s; }
@@ -335,39 +424,56 @@ test('AC-120/AC-121 · score non-decreasing, lives non-increasing and floored', 
   }
 });
 
-test('AC-123 · the spawn array carries quota + the DERIVED slack, and is never exhausted', () => {
-  // gameplay.md §2.7's table: slack 8 / 10 / 10 / 9 / 9 and counts 24 / 43 / 51 / 56 / 60.
-  // transitMax is untouched by round 6 — it has no `interval` term — so the slack moved purely
-  // through inFlightMax = floor(transitMax / interval) + 2. `interval` fell at bands 2 and 3, so
-  // a seventh car is in flight there and the slack rises 9 -> 10; it rose at band 5, so a car
-  // comes off and the slack falls 10 -> 9. Both directions are the point: a literal would have
-  // kept band 5's tenth car and missed bands 2 and 3's seventh.
-  const wantTransit = [null, 575, 569, 536, 494, 505];
-  const wantInFlight = [null, 5, 7, 7, 6, 6];
-  const wantSlack = [null, 8, 10, 10, 9, 9];
-  const wantCount = [null, 24, 43, 51, 56, 60];
+test('AC-139 · the spawn schedule matches its closed form', () => {
+  // gameplay.md §2.7 / AC-139. TRANSCRIBED, not imported: the closed form is
+  // floor((LEVEL_TICKS - 1 - SPAWN_LEAD + JITTER) / INTERVAL) + 1 and it comes out at
+  // 35 / 48 / 51 / 54 / 56. `SPAWN_SLACK`, `inFlightMax` and `transitMax` are deleted — under a
+  // clock the schedule is not a guess about how many cars a level will need, it is the list of
+  // cars that fit in two minutes.
+  const wantCount = [null, 35, 48, 51, 54, 56];
   for (let band = 1; band <= 5; band += 1) {
-    // Every term of the derivation, not only its result — a lever move in §7.4 changes one of
-    // these and the slack must follow it.
-    assert.equal(transitMaxTicks(BANDS[band]), wantTransit[band], 'band ' + band + ' transitMax');
-    assert.equal(inFlightMax(BANDS[band]), wantInFlight[band], 'band ' + band + ' inFlightMax');
-    assert.equal(spawnSlack(band), wantSlack[band], 'band ' + band + ' slack');
-    assert.ok(Number.isInteger(spawnSlack(band)));
-    const level = generate(band, band);
-    assert.equal(level.spawns.length, level.quota + spawnSlack(band));
-    assert.equal(level.spawns.length, wantCount[band], 'band ' + band + ' SPAWN_COUNT');
+    assert.equal(spawnCountMax(bandParams(band)), wantCount[band], 'band ' + band + ' closed form');
+    for (let seed = 0; seed < 40; seed += 1) {
+      const level = generate(seed, band);
+      const sp = level.spawns;
+      assert.ok(sp.length === wantCount[band] || sp.length === wantCount[band] - 1,
+        'band ' + band + ' seed ' + seed + ' length ' + sp.length);
+      for (let i = 0; i < sp.length; i += 1) {
+        assert.equal(sp[i].index, i);
+        assert.ok(sp[i].tick < LEVEL_TICKS, 'every scheduled tick is inside the clock');
+      }
+      assert.ok(Math.abs(sp[0].tick - SPAWN_LEAD) <= level.jitter);
+    }
   }
 });
 
-test('AC-123 · nextSpawn stays below spawns.length at EVERY tick, not only the last', () => {
-  // "not only at the final tick" is the clause the old test did not cover: it compared two
-  // array lengths and never ran a level.
+test('AC-123 · a run that reaches the bell has consumed its whole schedule', () => {
+  // The identity that replaced the old margin, and it has to be measured on runs that REACH
+  // the bell: a never-tapping run loses three lives long before tick 7,200 (AC-814), so
+  // driving with no inputs would observe nothing and report green. The lazy-optimal oracle
+  // delivers every car, so its runs always reach it.
+  let observed = 0;
   for (let band = 1; band <= 5; band += 1) {
-    for (let seed = 0; seed < 25; seed += 1) {
+    for (let seed = 0; seed < 3; seed += 1) {
+      const level = generate(seed, band);
+      const r = lazyOptimal(level);
+      assert.equal(r.state.phase, 'ended', 'band ' + band + ' seed ' + seed);
+      assert.equal(r.state.tick, LEVEL_TICKS);
+      assert.equal(r.state.nextSpawn, level.spawns.length,
+        'band ' + band + ' seed ' + seed + ': every scheduled car entered');
+      observed += 1;
+    }
+  }
+  assert.ok(observed > 0, 'the identity was actually evaluated');
+});
+
+test('AC-123 · nextSpawn never runs past spawns.length at any tick', () => {
+  for (let band = 1; band <= 5; band += 1) {
+    for (let seed = 0; seed < 15; seed += 1) {
       const level = generate(seed, band);
       const r = playLevel(level, 'constrained', {
         onTick: (state) => {
-          assert.ok(state.nextSpawn < level.spawns.length,
+          assert.ok(state.nextSpawn <= level.spawns.length,
             'band ' + band + ' seed ' + seed + ' tick ' + state.tick +
             ': nextSpawn ' + state.nextSpawn + ' of ' + level.spawns.length);
         },
@@ -375,6 +481,69 @@ test('AC-123 · nextSpawn stays below spawns.length at EVERY tick, not only the 
       assert.ok(!r.stalled);
     }
   }
+});
+
+test('AC-141 · a level is exactly 7,200 ticks, and the off-by-one is checked hardest', () => {
+  // The criterion the fixed clock rests on. Step 5 tests `tick + 1 >= LEVEL_TICKS` and step 6
+  // increments, so a level that runs 7,201 or 7,199 ticks passes every other AC in the
+  // document. Driven with the lazy-optimal oracle so no life is lost.
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(band * 3, band);
+    let state = createState(level);
+    let steps = 0;
+    let lastSimulated = -1;
+    while (state.phase === 'running') {
+      lastSimulated = state.tick;
+      state = step(state, oracleInputs(level, state));
+      steps += 1;
+      assert.ok(steps <= LEVEL_TICKS + 1, 'band ' + band + ' ran past the clock');
+    }
+    assert.equal(steps, LEVEL_TICKS, 'band ' + band + ': exactly 7,200 step() calls');
+    assert.equal(lastSimulated, LEVEL_TICKS - 1, 'the last tick simulated is 7,199');
+    assert.equal(state.tick, LEVEL_TICKS);
+    assert.equal(state.phase, 'ended');
+    assert.ok(state.lives >= 1);
+  }
+});
+
+test('AC-141 · the level is the same length in ticks however long it took in seconds', () => {
+  // The second clause: the SAME run, replayed at a deliberately degraded frame rate that
+  // triggers MAX_CATCHUP_TICKS clamping, must reach a deeply equal final state. The clamp
+  // lives in the React layer, so this drives the recorded tick stream through `advanceFrame`
+  // with 500 ms frames — 30 ticks owed, 8 run, the remainder discarded (AC-127).
+  //
+  // Both runs are driven by the oracle, because a never-tapping run loses at tick ~1,100 and
+  // would make the comparison a statement about two short runs rather than about the clock.
+  const level = generate(7, 2);
+  const recorded = [];
+  const live = (() => {
+    let s0 = createState(level);
+    while (s0.phase === 'running') {
+      const inputs = oracleInputs(level, s0);
+      for (const i of inputs) recorded.push(i);
+      s0 = step(s0, inputs);
+    }
+    return s0;
+  })();
+  assert.equal(live.phase, 'ended');
+  assert.equal(live.tick, LEVEL_TICKS);
+  assert.ok(recorded.length > 20, 'the run actually tapped: ' + recorded.length);
+
+  let r = { state: createState(level), accTicks: 0, pending: recorded.slice(), recent: [] };
+  let frames = 0;
+  while (r.state.phase === 'running' && frames < 4000) {
+    r = advanceFrame(r.state, r.accTicks, 500, r.pending, r.recent);
+    frames += 1;
+  }
+  assert.equal(r.state.tick, LEVEL_TICKS, 'the same number of ticks');
+  assert.equal(r.state.phase, 'ended');
+  assert.deepEqual(
+    { ...r.state, level: null, events: [] },
+    { ...live, level: null, events: [] },
+  );
+  // 500 ms a frame clamps to 8 ticks, so the run needs at least 900 frames — i.e. the clamp
+  // really did bite, and this is not a 60 fps run wearing a slow hat.
+  assert.ok(frames >= LEVEL_TICKS / MAX_CATCHUP_TICKS, 'the clamp bit: ' + frames + ' frames');
 });
 
 test('AC-138 · every junction starts on branch 0', () => {
@@ -427,75 +596,91 @@ test('AC-130/AC-131 · ids strictly ascending, no car on two edges, conservation
   }
 });
 
-test('AC-132 · the level-clear bonus is 50 per remaining life', () => {
-  const spawns = [];
-  for (let i = 0; i < 3; i += 1) spawns.push({ index: i, tick: i * 60, colour: 0 });
-  const level = twoDepotLevel({ spawns, quota: 2 });
-  const s = drive(step, createState(level), new Map(), 400);
-  assert.equal(s.phase, 'won');
-  assert.equal(s.lives, 3);
-  assert.equal(s.score, 100 + 110 + SCORE_LIFE_BONUS * 3);
+test('AC-132 · clearing a level is surviving it, and there is no third phase', () => {
+  // 'ended' iff the run reached LEVEL_TICKS with lives >= 1; 'lost' iff lives reached 0.
+  // There is no 'won'.
+  const seen = new Set();
+  for (let band = 1; band <= 5; band += 1) {
+    for (let seed = 0; seed < 6; seed += 1) {
+      const level = generate(seed, band);
+      // Two drivers, so both terminal phases are observed: the oracle always survives, the
+      // never-tapping bot always loses.
+      for (const inputs of [oracleInputs, () => []]) {
+        let s = createState(level);
+        while (s.phase === 'running') s = step(s, inputs(level, s));
+        seen.add(s.phase);
+        assert.ok(s.phase === 'ended' || s.phase === 'lost', 'phase ' + s.phase);
+        if (s.phase === 'ended') {
+          assert.equal(s.tick, LEVEL_TICKS);
+          assert.ok(s.lives >= 1);
+        } else {
+          assert.equal(s.lives, 0);
+          assert.ok(s.tick < LEVEL_TICKS);
+        }
+      }
+    }
+  }
+  assert.deepEqual([...seen].sort(), ['ended', 'lost'], 'both phases were reached');
 });
 
-test('AC-133 · cars in flight at level end are kept, unscored', () => {
-  const spawns = [{ index: 0, tick: 0, colour: 0 }, { index: 1, tick: 100, colour: 0 }];
-  const level = twoDepotLevel({ spawns, quota: 1 });
-  const s = drive(step, createState(level), new Map(), 400);
-  assert.equal(s.phase, 'won');
-  assert.equal(s.cars.length, 1, 'the second car is frozen in place');
-  assert.equal(s.delivered, 1);
-  assert.equal(s.misrouted, 0);
+test('AC-133 · cars in flight at the bell are kept, unscored, and number 2 to 5', () => {
+  // Which is EVERY level: the clock does not wait for the board to drain.
+  for (let band = 1; band <= 5; band += 1) {
+    const counts = [];
+    for (let seed = 0; seed < 25; seed += 1) {
+      const level = generate(seed, band);
+      const r = lazyOptimal(level);
+      assert.equal(r.state.phase, 'ended');
+      counts.push(r.state.cars.length);
+      // Unscored: every spawned car is either delivered, misrouted or still on the board.
+      assert.equal(
+        r.state.delivered + r.state.misrouted + r.state.cars.length,
+        r.state.nextSpawn,
+      );
+    }
+    const min = Math.min(...counts);
+    const max = Math.max(...counts);
+    assert.ok(min >= 2 && max <= 5, 'band ' + band + ' in flight at the bell: ' + min + '-' + max);
+  }
 });
 
 test('AC-801 · the last misroute ends the level on that tick', () => {
-  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 1 }], quota: 9 });
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 1 }] });
   let s = createState(level);
   s.lives = 1;
   s = drive(step, s, new Map(), 400);
   assert.equal(s.phase, 'lost');
   assert.equal(s.lives, 0);
   assert.equal(s.tick, 154, 'ended on the arrival tick, not later');
+  assert.ok(s.tick < LEVEL_TICKS);
 });
 
-test('AC-808 · spawn exhaustion throws rather than stalling', () => {
-  // A schedule that genuinely cannot reach the quota: one car, quota 99, nothing left to
-  // spawn. delivered + in-flight can never reach 99, so the run would stall silently.
-  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 0 }], quota: 99, slack: false });
-  assert.throws(() => step(createState(level), []), /SPAWN_EXHAUSTED/);
+test('AC-808 · a schedule that stops short of the clock is a build error', () => {
+  // The failure that replaced SPAWN_EXHAUSTED, and it is the harder of the two: a silently
+  // short schedule still plays, still ends on the bell, and simply has fewer cars in it than
+  // the difficulty model says.
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(band, band);
+    assert.doesNotThrow(() => assertScheduleReachesClock(level));
+    const short = { ...level, spawns: level.spawns.slice(0, -4) };
+    assert.throws(() => assertScheduleReachesClock(short), /SHORT_SCHEDULE/);
+    assert.throws(() => assertScheduleReachesClock({ ...level, spawns: [] }), /SHORT_SCHEDULE/);
+  }
 });
 
-test('AC-808 · consuming the LAST scheduled car is not exhaustion', () => {
-  // The canary used to test `nextSpawn >= spawns.length` immediately after the increment, so
-  // spawning the final car of a perfectly valid schedule threw. That made the usable schedule
-  // `quota + SPAWN_SLACK - 1`; under the flat slack of 8, band 5 seed 160 consumed 71 of its
-  // 72 cars, one short of the throw. The derived slack makes band 5's schedule 74 and the
-  // oracle's worst consumption 71, a margin of 3 (AC-139) — but the canary's shape is what
-  // this test is about, and nothing in the design says the last car is unusable.
-  const spawns = [
-    { index: 0, tick: 0, colour: 1 },
-    { index: 1, tick: 20, colour: 1 },
-    { index: 2, tick: 40, colour: 1 },
-  ];
-  const level = twoDepotLevel({ spawns, quota: 2, slack: false });
-  const flip = new Map([[0, [{ tick: 0, junctionId: 0 }]]]); // send every car to depot colour 1
-  let s;
-  assert.doesNotThrow(() => { s = drive(step, createState(level), flip, 400); });
-  assert.equal(s.nextSpawn, 3, 'all three scheduled cars were consumed');
-  assert.equal(s.phase, 'won');
-  assert.equal(s.delivered, 2);
-});
-
-test('AC-808 · the canary still fires once the run can no longer reach its quota', () => {
-  // Same schedule, quota raised past what the three cars can deliver: the moment the last one
-  // has spawned and the arithmetic says the quota is unreachable, the engine stops.
-  const spawns = [
-    { index: 0, tick: 0, colour: 1 },
-    { index: 1, tick: 20, colour: 1 },
-    { index: 2, tick: 40, colour: 1 },
-  ];
-  const level = twoDepotLevel({ spawns, quota: 4, slack: false });
-  const flip = new Map([[0, [{ tick: 0, junctionId: 0 }]]]);
-  assert.throws(() => drive(step, createState(level), flip, 400), /SPAWN_EXHAUSTED/);
+test('AC-808 · consuming the LAST scheduled car is not an error', () => {
+  // Nothing in the design says the last car is unusable, and the old canary made the usable
+  // schedule one shorter than the real one.
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(band * 11, band);
+    let s;
+    assert.doesNotThrow(() => {
+      s = createState(level);
+      while (s.phase === 'running') s = step(s, oracleInputs(level, s));
+    });
+    assert.equal(s.nextSpawn, level.spawns.length);
+    assert.equal(s.phase, 'ended');
+  }
 });
 
 test('AC-809 · an empty input array advances the tick and changes no junction', () => {
@@ -507,10 +692,11 @@ test('AC-809 · an empty input array advances the tick and changes no junction',
 });
 
 test('AC-810 · step() after a terminal state returns a deeply equal state', () => {
-  const spawns = [{ index: 0, tick: 0, colour: 0 }];
-  const level = twoDepotLevel({ spawns, quota: 1 });
-  const done = drive(step, createState(level), new Map(), 400);
-  assert.notEqual(done.phase, 'running');
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: 0, colour: 1 }] });
+  let start = createState(level);
+  start.lives = 1;
+  const done = drive(step, start, new Map(), 400);
+  assert.equal(done.phase, 'lost');
 
   // The expectation is built BEFORE the call and is an independent object graph. Comparing
   // the return value against `done` itself could not fail: step() returns the very same
@@ -523,7 +709,7 @@ test('AC-810 · step() after a terminal state returns a deeply equal state', () 
   // And the comparison is sensitive: any of the fields a broken early-return would move is
   // caught by it.
   assert.throws(() => assert.deepEqual({ ...expected, tick: expected.tick + 1 }, expected));
-  assert.throws(() => assert.deepEqual({ ...expected, score: expected.score + 1 }, expected));
+  assert.throws(() => assert.deepEqual({ ...expected, delivered: expected.delivered + 1 }, expected));
   const flipped = structuredClone(expected);
   flipped.open[0] ^= 1;
   assert.throws(() => assert.deepEqual(flipped, expected));

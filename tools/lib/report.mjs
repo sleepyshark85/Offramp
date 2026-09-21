@@ -9,6 +9,7 @@ export function percentile(sorted, p) {
 export function summary(values) {
   const s = values.slice().sort((a, b) => a - b);
   return {
+    sorted: s,
     n: s.length,
     min: s[0],
     median: percentile(s, 0.5),

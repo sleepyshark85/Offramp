@@ -5,8 +5,8 @@
 // persistence: there is no store yet, so the level grid is the ladder rather than an unlock
 // record and Settings live in memory for the session (gameplay.md §7 is slice 4).
 //
-// Settings is NOT decorative here. Symbol size drives GLYPH_CAR 48 -> 66 and GLYPH_DEPOT
-// 64 -> 88 in the renderer (AC-604) and Reduce motion drives ui.md §11.2 throughout, so both
+// Settings is NOT decorative here. Symbol size drives GLYPH_CAR 42 -> 58 and GLYPH_DEPOT
+// 52 -> 72 in the renderer (AC-604) and Reduce motion drives ui.md §11.2 throughout, so both
 // are exercised in slice 2 rather than waiting for a slice that would find them broken.
 
 import React from 'react';
@@ -120,7 +120,13 @@ const styles = StyleSheet.create({
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   wordmark: { ...TYPE.display, color: C.text, letterSpacing: 4 },
   tagline: { ...TYPE.body, color: C.textDim, marginTop: SPACE.sm },
-  stack: { marginTop: SPACE.xxxl, alignSelf: 'stretch', gap: SPACE.md, maxWidth: 340 },
+  // The button column is CENTRED under the wordmark. It was `alignSelf: 'stretch'` with a
+  // `maxWidth`, and stretch wins over the parent's `alignItems: 'center'` — so above about
+  // 372 pt of screen width (340 + two 16 pt gutters) the column stopped filling the row and
+  // sat hard against the left edge while the title stayed centred. Owner-reported.
+  // `alignSelf: 'center'` plus an explicit `width: '100%'` keeps the 340 pt cap and centres
+  // what is left over.
+  stack: { marginTop: SPACE.xxxl, alignSelf: 'center', width: '100%', gap: SPACE.md, maxWidth: 340 },
   screenTitle: { ...TYPE.title, color: C.text, marginTop: SPACE.xl, marginBottom: SPACE.lg },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.md, paddingBottom: SPACE.lg },
   tile: {

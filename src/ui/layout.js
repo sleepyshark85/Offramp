@@ -9,7 +9,7 @@
 // engine's design space) for everything inside the canvas. `scale` is the single boundary
 // between them and is applied once.
 
-import { DESIGN_H, DESIGN_W, bandParams } from '../engine/index.js';
+import { DESIGN_H, DESIGN_W, ROUTE_H, bandParams } from '../engine/index.js';
 
 // ui.md §3.1
 export const HUD_H = 56;
@@ -18,9 +18,12 @@ const GUTTER_BOT = 8;
 // ui.md §3.2 — the vertical slack is split 55 % above / 45 % below.
 const SLACK_TOP_FRACTION = 0.55;
 
-// ui.md §4.4 — the declared support floor.
+// ui.md §4.4 — the declared support floor. The height floor moved 400 -> 460 in round 8: the
+// design rectangle is shorter (1500 rather than 1600 LU), so it reaches its height bound at a
+// LARGER playH, and at playH = 460 the scale is 0.30667 where AC-401 and AC-402 clear their
+// floors by 0.16 pt and 0.24 pt. Below it, band 5's 44 pt target cannot be met (AC-409).
 const MIN_PLAY_W = 320;
-const MIN_PLAY_H = 400;
+const MIN_PLAY_H = 460;
 
 // ui.md §4.4 — `ceil(22 / scale)` is the radius in LU that yields exactly a 44 pt diameter.
 const TAP_TARGET_PT = 44;
@@ -70,10 +73,16 @@ export function hitRadiusLu(scale, minSepLu) {
   );
 }
 
-/** `min(colW, rowH)` for a band, from the engine's band table. */
+/**
+ * `min(colW, rowH)` for a band — the minimum distance between two lattice sites, which is the
+ * number the whole 44 pt tap-target arithmetic is built on (generation.md §3.2). `colW` is a
+ * band-table value; `rowH` is `ROUTE_H / R`, the one division §3.2 has left.
+ * 216 / 216 / 180 / 180 / 150 LU by band, and at band 5 it is the binding constraint on the
+ * entire design.
+ */
 export function minSepLuForBand(band) {
   const p = bandParams(band);
-  return Math.min(p.colW, p.rowH);
+  return Math.min(p.colW, ROUTE_H / p.R);
 }
 
 /** LU point -> screen pt. `screen = origin + design * scale` (ui.md §3.2). */

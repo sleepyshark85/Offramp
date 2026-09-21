@@ -540,7 +540,8 @@ export function playLevel(level, mode = 'constrained', opts = {}) {
     state,
     bot,
     inputs,
-    cleared: state.phase === 'won',
+    // A level is CLEARED by surviving its two minutes (gameplay.md §4.2, AC-221–AC-225).
+    cleared: state.phase === 'ended',
     stalled: state.phase === 'running',
     ticks: state.tick,
     seconds: state.tick / 60,
@@ -548,7 +549,6 @@ export function playLevel(level, mode = 'constrained', opts = {}) {
     tapsPerSecond: inputs.length / (state.tick / 60),
     misroutes: state.misrouted,
     delivered: state.delivered,
-    score: state.score,
     attention: mode === 'constrained' ? summariseAttention(bot, state.tick) : null,
   };
 }

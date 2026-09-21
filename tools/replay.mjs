@@ -10,7 +10,7 @@
 import { execFileSync } from 'node:child_process';
 import { deepStrictEqual } from 'node:assert';
 
-import { PALETTE, createState, generate, step } from '../src/engine/index.js';
+import { DESIGN_H, DESIGN_W, LEVEL_TICKS, PALETTE, createState, generate, step } from '../src/engine/index.js';
 import { playLevel } from './lib/solver.mjs';
 import { buildCurves, carPoint } from './lib/curve.mjs';
 import { arg, has } from './lib/report.mjs';
@@ -21,7 +21,7 @@ function fingerprint(s) {
   return JSON.stringify({
     tick: s.tick, phase: s.phase, rng: s.rng, cars: s.cars, open: Array.from(s.open),
     nextSpawn: s.nextSpawn, delivered: s.delivered, misrouted: s.misrouted,
-    lives: s.lives, score: s.score, streak: s.streak, bestStreak: s.bestStreak,
+    lives: s.lives, streak: s.streak, bestStreak: s.bestStreak,
   });
 }
 
@@ -35,7 +35,7 @@ function replayRun(run, capture) {
   }
   let s = createState(level);
   const frames = [];
-  while (s.phase === 'running' && s.tick < 20000) {
+  while (s.phase === 'running' && s.tick < LEVEL_TICKS + 10) {
     s = step(s, byTick.get(s.tick) || []);
     if (capture && capture.has(s.tick)) frames.push({ tick: s.tick, state: s });
   }
@@ -49,8 +49,8 @@ const H = 33;
 
 function ascii(level, state) {
   const grid = Array.from({ length: H }, () => new Array(W).fill(' '));
-  const px = (x) => Math.round((x / 1000) * (W - 1));
-  const py = (y) => Math.round((y / 1600) * (H - 1));
+  const px = (x) => Math.round((x / DESIGN_W) * (W - 1));
+  const py = (y) => Math.round((y / DESIGN_H) * (H - 1));
   const put = (x, y, ch, force) => {
     const c = px(x);
     const r = py(y);
@@ -58,13 +58,17 @@ function ascii(level, state) {
     if (force || grid[r][c] === ' ') grid[r][c] = ch;
   };
 
+  // Roads are orthogonal now, so the ASCII draws them as runs rather than as sampled curves:
+  // `|` for a vertical, `-` for a horizontal run, `+` at the corner (generation.md §2.3).
   const curves = buildCurves(level);
-  for (const e of level.edges) {
-    for (let i = 0; i <= 64; i += 1) {
-      const pt = carPoint(curves, { edgeId: e.id, progress: Math.round((i / 64) * e.lengthMlu) });
-      const a = level.nodes[e.from];
-      const b = level.nodes[e.to];
-      put(pt[0], pt[1], b.col === a.col ? '|' : b.col > a.col ? '\\' : '/');
+  for (const c of curves) {
+    for (let s = 0; s < c.segs.length; s += 1) {
+      const seg = c.segs[s];
+      const ch = seg.dx === 0 ? '|' : '-';
+      for (let i = 0; i <= 64; i += 1) {
+        put(seg.x0 + ((seg.x1 - seg.x0) * i) / 64, seg.y0 + ((seg.y1 - seg.y0) * i) / 64, ch);
+      }
+      if (s === 1) put(seg.x0, seg.y0, '+', true);
     }
   }
   for (const n of level.nodes) {
@@ -114,19 +118,22 @@ const childOut = execFileSync(
 
 console.log(`Offramp replay — seed ${seed}, band ${band}`);
 console.log(`network: ${level.nodes.length} nodes, ${level.edges.length} edges, ` +
-  `${level.junctions.length} junctions, ${level.K} colours, quota ${level.quota}`);
+  `${level.junctions.length} junctions, ${level.K} colours, ` +
+  `${level.spawns.length} cars scheduled in ${LEVEL_TICKS} ticks`);
 console.log(`run: ${run.inputs.length} taps over ${bot.ticks} ticks (${bot.seconds.toFixed(2)} s)`);
-console.log('legend: # entry, < / > junction (open branch), UPPER-case car, lower-case depot,');
+console.log('legend: # entry, | and - road, + corner, < / > junction (open branch),');
+console.log('        UPPER-case car, lower-case depot,');
 console.log('        ' + PALETTE.map((hex, i) => GLYPH[i] + '=' + hex).join(' ') + '\n');
 
 for (const f of a.frames) {
   console.log(`--- tick ${f.tick}  (${(f.tick / 60).toFixed(2)} s)  ` +
-    `delivered ${f.state.delivered}/${level.quota}  lives ${f.state.lives}  score ${f.state.score}`);
+    `delivered ${f.state.delivered}  lives ${f.state.lives}  ` +
+    `${((LEVEL_TICKS - f.tick) / 60).toFixed(1)} s left`);
   console.log(ascii(level, f.state));
   console.log('');
 }
 
-console.log(`--- final: ${a.state.phase} at tick ${a.state.tick}, score ${a.state.score}, ` +
+console.log(`--- final: ${a.state.phase} at tick ${a.state.tick}, ` +
   `delivered ${a.state.delivered}, misrouted ${a.state.misrouted}, lives ${a.state.lives}`);
 console.log(ascii(level, a.state));
 

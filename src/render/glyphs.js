@@ -1,9 +1,9 @@
 // Offramp — the five colour glyphs (ui.md §5.1, §6.2).
 //
 // Shapes are chosen for maximum silhouette difference: a filled disc, a filled equilateral
-// triangle apex-up, a filled square, a plus with 16 LU-thick arms at GLYPH_CAR = 48, and two
-// horizontal bars with a gap equal to the bar height. No two share an outline family and no
-// shape is another shape rotated.
+// triangle apex-up, a filled square, a plus with arms 0.33 x s thick, and two horizontal bars
+// with a gap equal to the bar height. No two share an outline family and no shape is another
+// shape rotated (ui.md §6.2).
 //
 // Every path is centred on (0, 0) and sized to fit an `s x s` box, so the caller places it by
 // translating and — on a car — counter-rotating (ui.md §6.2). Paths are built once per
@@ -13,8 +13,8 @@ import { Skia } from '@shopify/react-native-skia';
 
 const cache = new Map();
 
-/** The 16 LU arm thickness of the plus is specified at GLYPH_CAR = 48, i.e. one third. */
-const PLUS_ARM_FRACTION = 16 / 48;
+/** ui.md §6.2 — "a plus with arms 0.33 x s thick", held as an exact third. */
+const PLUS_ARM_FRACTION = 1 / 3;
 
 function build(index, s) {
   const p = Skia.Path.Make();

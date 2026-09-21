@@ -45,7 +45,6 @@ function fingerprint(state) {
     delivered: state.delivered,
     misrouted: state.misrouted,
     lives: state.lives,
-    score: state.score,
     streak: state.streak,
     bestStreak: state.bestStreak,
   });
@@ -81,7 +80,7 @@ test('AC-125/AC-811 · the same run replays identically in a separate process', 
       while (s.phase === 'running' && s.tick < 6000) s = step(s, byTick.get(s.tick) || []);
       return JSON.stringify({ tick: s.tick, phase: s.phase, rng: s.rng, cars: s.cars,
         open: Array.from(s.open), nextSpawn: s.nextSpawn, delivered: s.delivered,
-        misrouted: s.misrouted, lives: s.lives, score: s.score, streak: s.streak,
+        misrouted: s.misrouted, lives: s.lives, streak: s.streak,
         bestStreak: s.bestStreak });
     });
     process.stdout.write(JSON.stringify(out));

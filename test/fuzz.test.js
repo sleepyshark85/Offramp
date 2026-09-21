@@ -57,13 +57,22 @@ test('the invariant checker catches the faults it exists to catch', () => {
   const dupIds = { ...s, cars: [{ ...s.cars[0] }, { ...s.cars[0] }] };
   assert.ok(checkInvariants(dupIds, null).some((m) => m.includes('ascending')));
 
-  const floaty = { ...s, score: 1.5 };
+  const floaty = { ...s, delivered: 1.5 };
   assert.ok(checkInvariants(floaty, null).some((m) => m.includes('not an integer')));
 
-  assert.ok(checkInvariants({ ...s, score: 0 }, { ...s, score: 10 }).some((m) => m.includes('score decreased')));
+  // `delivered` IS the score (gameplay.md §4.3), so the non-decreasing invariant moved to it
+  // and the `score` field itself is now a violation to carry at all (AC-117).
+  assert.ok(checkInvariants({ ...s, delivered: 0 }, { ...s, delivered: 10 })
+    .some((m) => m.includes('delivered decreased')));
+  assert.ok(checkInvariants({ ...s, score: 0 }, null).some((m) => m.includes('`score` field')));
   assert.ok(checkInvariants({ ...s, lives: 3 }, { ...s, lives: 2 }).some((m) => m.includes('lives increased')));
   assert.ok(checkInvariants({ ...s, tick: s.tick + 5 }, s).some((m) => m.includes('tick did not advance')));
   assert.ok(checkInvariants({ ...s, delivered: s.delivered + 1 }, null).some((m) => m.includes('spawned-delivered-misrouted')));
+  // The clock bound, which is new in round 8: nothing may hold a tick past LEVEL_TICKS.
+  assert.ok(checkInvariants({ ...s, tick: 7201 }, null).some((m) => m.includes('past LEVEL_TICKS')));
+  // ...and the schedule bound, which replaced "spawn schedule exhausted".
+  assert.ok(checkInvariants({ ...s, nextSpawn: level.spawns.length + 1 }, null)
+    .some((m) => m.includes('past spawns.length')));
 });
 
 /**
@@ -97,21 +106,30 @@ test('AC-124 · cars sharing an edge are never closer than the spawn gap allows'
   // band now sweeps ten seeds in both a no-tap and a tapped pass, and the observation count is
   // itself asserted, so a band that stops exercising the rule fails instead of passing.
   //
-  // Round 6's lever pull made band 5 a THIRD case, and the `observations > 0` guard is what
-  // found it rather than letting it pass green. Two cars can only share an edge if the edge is
-  // longer than the separation they hold, and band 5's `interval` 96 -> 120 took the floor to
-  // (120 - 36) * 3800 / 1000 = 319.2 LU against a longest edge of 293 LU (`diagLen`). At band 5
-  // the case is now ARITHMETICALLY UNREACHABLE, so requiring an observation there would be
-  // requiring a violation. The band is therefore asserted the other way — zero observations,
-  // which is the stronger statement — and one sighting would fail this test, correctly.
+  // ROUND 8 MOVED THE REACHABILITY AGAIN, AND IN THE OTHER DIRECTION. Round 6's lever pull had
+  // made band 5 arithmetically unreachable — the floor was 319.2 LU against a longest edge of
+  // 293 — so the band was asserted the other way, at exactly zero observations. Round 8's
+  // geometry makes the longest edge `rowH + colW` = 330 LU against a floor of 321.6, so the
+  // case is reachable again but only just: the window is 8.4 LU of a 330 LU edge, and ten
+  // seeds find nothing. Measured over 200 seeds, band 5 yields 11 observations with the first
+  // at seed 13, against 383 / 20,599 / 6,330 / 833 for bands 1-4.
+  //
+  // The response §6.8 prescribes is to make the check able to observe, not to loosen it: band
+  // 5 sweeps a larger seed budget, and the `observations > 0` guard stays. A band that stops
+  // exercising the rule fails instead of passing.
+  const SEEDS_FOR_BAND = [null, 20, 20, 20, 20, 80];
   for (let band = 1; band <= 5; band += 1) {
     const P = BANDS[band];
     const floorLu = ((P.interval - 2 * P.jitter) * P.speedMluPerTick) / MLU;
-    assert.ok(floorLu >= 228, 'band ' + band + ' separation floor ' + floorLu);
+    // gameplay.md §4.5's table, transcribed: 418 / 331 / 317 / 320 / 322 LU, never below 317 —
+    // three times CAR_L = 104.
+    const WANT_FLOOR = [null, 418, 330.6, 317.2, 320, 321.6];
+    assert.equal(Number(floorLu.toFixed(1)), WANT_FLOOR[band], 'band ' + band + ' separation floor');
+    assert.ok(floorLu >= 317, 'band ' + band + ' separation floor ' + floorLu);
     let observedMinMlu = Infinity;
     let observations = 0;
     let longestEdgeLu = 0;
-    for (let seed = 0; seed < 10; seed += 1) {
+    for (let seed = 0; seed < SEEDS_FOR_BAND[band]; seed += 1) {
       const level = generate(seed, band);
       for (const e of level.edges) {
         if (e.lengthMlu / MLU > longestEdgeLu) longestEdgeLu = e.lengthMlu / MLU;
@@ -139,7 +157,8 @@ test('AC-124 · cars sharing an edge are never closer than the spawn gap allows'
       observedMinMlu / MLU >= floorLu,
       'band ' + band + ' observed ' + observedMinMlu / MLU + ' LU < floor ' + floorLu + ' LU',
     );
-    assert.ok(observedMinMlu / MLU > 140, 'band ' + band + ' closer than one car length');
+    assert.ok(observedMinMlu / MLU > 3 * 104,
+      'band ' + band + ' closer than three car lengths: ' + observedMinMlu / MLU);
   }
 });
 

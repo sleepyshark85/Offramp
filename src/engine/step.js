@@ -5,14 +5,7 @@
 // `step(state, inputs)` advances exactly one tick; `apply(state, action)` is step 2 of that
 // tick and the only place a junction changes state.
 
-import {
-  LIVES,
-  SCORE_DELIVERY,
-  SCORE_LIFE_BONUS,
-  SCORE_STREAK_STEP,
-  SPAWN_SALT,
-  STREAK_CAP,
-} from './constants.js';
+import { LEVEL_TICKS, LIVES, SPAWN_SALT } from './constants.js';
 import { mix32 } from './rng.js';
 
 /**
@@ -30,6 +23,9 @@ export function resetTransitionStats() {
 export function createState(level) {
   return {
     tick: 0,
+    // Two terminal phases and they are not the same outcome (gameplay.md §2.4). 'ended' means
+    // the clock ran out with a life left — the level is CLEARED. 'lost' means the third life
+    // went first. There is no 'won': finishing is what winning is.
     phase: 'running',
     level,
     // The spawn schedule is materialised at level construction (gameplay.md §2.7), so the
@@ -37,12 +33,14 @@ export function createState(level) {
     // determinism contract can compare it (AC-125).
     rng: mix32(level.seed, SPAWN_SALT),
     cars: [],
+    // AC-138 — normative, not an allocation default: every junction starts pointing at
+    // node.out[0], the lower-column branch, so an untouched network sends every car to the
+    // leftmost depot it can reach (gameplay.md §4.8).
     open: new Uint8Array(level.junctions.length),
     nextSpawn: 0,
-    delivered: 0,
+    delivered: 0, // THE SCORE (gameplay.md §4.3)
     misrouted: 0,
     lives: LIVES,
-    score: 0,
     streak: 0,
     bestStreak: 0,
     events: [],
@@ -61,7 +59,6 @@ function cloneState(s) {
     delivered: s.delivered,
     misrouted: s.misrouted,
     lives: s.lives,
-    score: s.score,
     streak: s.streak,
     bestStreak: s.bestStreak,
     events: [],
@@ -87,21 +84,23 @@ export function apply(state, action) {
  * The caller removes the car from the list; this function never mutates the list it is being
  * iterated over (docs/reports/slice-0-orchestrator-verification.md, finding 2).
  *
+ * `delivered` IS the score. There is no points total and no `score` field: the four slice-0
+ * scoring constants are deleted (gameplay.md §4.3, AC-117), and they are not named here
+ * because AC-117's check is a grep over src/ for exactly those names. `streak` and
+ * `bestStreak` survive as reported statistics and multiply nothing.
+ *
  * `edgeId` is the TERMINAL EDGE the car was on when it reached the depot (gameplay.md §2.6,
  * AC-140). It exists because a depot has an in-degree of up to 3 (§4.5b), so `depotId` does
  * not identify the road the car came down, and ui.md §8.3 / §8.4 anchor the delivery glow and
- * the misroute shatter to that road's mouth line. It is RENDER-ONLY, like the rest of the
- * event (§2.9): nothing in the engine reads it back, and no counter, score, phase or
- * invariant depends on it. §2.5's transition loop already holds the edge in a local variable
- * at the moment it calls this, so passing it through removes the renderer's second derivation
- * rather than adding a first (docs/development-process.md:173).
+ * the misroute shatter to that road's terrace line. It is RENDER-ONLY, like the rest of the
+ * event (§2.9): nothing in the engine reads it back, and no counter, phase or invariant
+ * depends on it.
  */
 function resolveArrival(state, car, depotNode, edgeId) {
   if (depotNode.depotColour === car.colour) {
     state.delivered += 1;
     state.streak += 1;
     if (state.streak > state.bestStreak) state.bestStreak = state.streak;
-    state.score += SCORE_DELIVERY + SCORE_STREAK_STEP * Math.min(state.streak - 1, STREAK_CAP);
     state.events.push({
       type: 'delivered',
       tick: state.tick,
@@ -114,7 +113,7 @@ function resolveArrival(state, car, depotNode, edgeId) {
     state.misrouted += 1;
     state.streak = 0;
     // Floored at zero: two cars can arrive on the same tick, and AC-121 requires lives never
-    // to go below 0 while AC-122 requires both arrivals to resolve.
+    // to go below 0 while AC-122/AC-136 require both arrivals to resolve and both to count.
     if (state.lives > 0) state.lives -= 1;
     state.events.push({
       type: 'misrouted',
@@ -176,35 +175,22 @@ export function step(state, inputs) {
   }
   next.cars = kept;
 
-  // 5. TERMINAL CHECK — quota first, so a tick that completes the quota and misroutes another
-  // car is a win (gameplay.md §4.2).
-  if (next.delivered >= level.quota) {
-    next.phase = 'won';
-    next.score += SCORE_LIFE_BONUS * next.lives;
-  } else if (next.lives <= 0) {
+  // 5. TERMINAL CHECK — LIVES FIRST, then the clock (gameplay.md §2.5, AC-122, AC-802).
+  //
+  // A tick in which the third life is lost AND the clock expires is a LOSS. This is the
+  // opposite of the old quota rule, which resolved the tie in the player's favour, and the
+  // reversal is deliberate: under a quota the tie was "you finished the job and also made a
+  // mistake", and the job was the point. Under a clock there is no job to have finished —
+  // every run reaches the bell — so resolving it as a clear would make tick 7,199 the one tick
+  // on which a misroute is free.
+  //
+  // The clock is checked against `tick + 1`, the tick that has just finished, and step 6
+  // increments afterwards: so the last tick simulated is LEVEL_TICKS - 1 and a run contains
+  // exactly LEVEL_TICKS ticks numbered 0 … 7199 (AC-141).
+  if (next.lives <= 0) {
     next.phase = 'lost';
-  }
-
-  // 5b. SPAWN-EXHAUSTION CANARY — gameplay.md §2.7 / AC-808.
-  //
-  // The canary fires when a further spawn is GENUINELY NEEDED and unavailable, not when the
-  // last legitimately scheduled car is consumed. A schedule of `quota + SPAWN_SLACK` cars is
-  // only short if the cars already spawned cannot reach the quota: delivered + in-flight is
-  // the best remaining outcome, so `delivered + cars.length < quota` with nothing left to
-  // spawn means the run can never end in a win and would stall silently. Stopping is better.
-  //
-  // The previous form tested `nextSpawn >= spawns.length` immediately after the increment,
-  // which throws on consuming the final car of a perfectly valid schedule — it made the
-  // usable schedule `quota + SPAWN_SLACK - 1`, not `quota + SPAWN_SLACK`.
-  if (
-    next.phase === 'running' &&
-    next.nextSpawn >= spawns.length &&
-    next.delivered + next.cars.length < level.quota
-  ) {
-    throw new Error(
-      'SPAWN_EXHAUSTED: seed=' + level.seed + ' band=' + level.band + ' tick=' + next.tick +
-        ' delivered=' + next.delivered + ' inFlight=' + next.cars.length + ' quota=' + level.quota,
-    );
+  } else if (next.tick + 1 >= LEVEL_TICKS) {
+    next.phase = 'ended';
   }
 
   // 6.

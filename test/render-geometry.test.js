@@ -14,29 +14,43 @@ import { advanceFrame } from '../src/ui/loop.js';
 import {
   BLADE_LEN,
   BLADE_W,
+  CAR_L,
+  CAR_RADIUS,
+  CAR_W,
+  CORNER_R,
   DEPOT_DISC_RATIO,
   DEPOT_H,
   DEPOT_HATCH_W,
+  DEPOT_RADIUS,
   DEPOT_SILL_BARS,
   DEPOT_SILL_BOTTOM,
   DEPOT_SILL_INSET,
   DEPOT_SILL_PITCH,
   DEPOT_W,
+  GLASS_L,
+  GLASS_OFFSET,
+  GLASS_RADIUS,
+  GLASS_W,
+  GLYPH_CAR,
   GLYPH_DEPOT,
   GLYPH_DEPOT_LARGE,
   JUNCTION_MARK_R,
   JUNCTION_RING_W,
-  MOUTH_FADE,
   MOUTH_LU,
   OPEN_BRANCH_FADE,
+  ROAD_W,
+  TERRACE_FADE,
   buildLevelGeometry,
   carPose,
+  edgePolyline,
+  filletedCentreline,
   pointAtLu,
   subPathPoints,
 } from '../src/render/geometry.js';
 import {
   BLADE_SEPARATION_FLOOR_DEG,
   auditArrivalEdges,
+  auditBladeDirection,
   auditBladeSeparation,
 } from '../tools/lib/render-audit.mjs';
 import { CAR_COLOURS, C, OPACITY } from '../src/ui/theme.js';
@@ -63,21 +77,97 @@ test('a car at progress 0 sits on the edge start, and at lengthMlu on the edge e
   assert.ok(checked > 0, 'edges were observed');
 });
 
-test('every edge leaves and arrives pointing down the screen, so the sprite never spins', () => {
-  // generation.md §2.3 consequence 3: the tangent is always "downward-ish".
-  const level = generate(555, 5);
-  const geom = buildLevelGeometry(level);
-  let worst = 0;
+test('generation.md §2.3 · every road is horizontal or vertical, and a corner is 90 deg', () => {
+  // ROUND 8 REPLACED THE CLAIM THIS TEST USED TO MAKE. Under the cubic model every edge left
+  // and arrived pointing down the screen, so the sprite never turned past horizontal. Under
+  // orthogonal routing a car's heading is one of FOUR values — down, left, right, and the 90°
+  // sweep between them — and the sweep is what the test has to pin.
+  const DOWN = 0;
+  const LEFT = Math.PI / 2;
+  const RIGHT = -Math.PI / 2;
+  let segments = 0;
+  let corners = 0;
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(555 + band, band);
+    const geom = buildLevelGeometry(level);
+    for (const e of level.edges) {
+      const pts = edgePolyline(level, e);
+      // Every segment is axis-aligned: one of its two deltas is exactly zero.
+      for (let i = 1; i < pts.length; i += 1) {
+        const dx = pts[i][0] - pts[i - 1][0];
+        const dy = pts[i][1] - pts[i - 1][1];
+        assert.ok((dx === 0) !== (dy === 0), 'edge ' + e.id + ' segment ' + i + ' is diagonal');
+        segments += 1;
+      }
+      const c = geom.curves[e.id];
+      // The last segment is always a vertical DROP, so a car enters a node heading down and a
+      // depot is entered from directly above (ui.md §7.4).
+      const endPose = carPose(geom.curves, { edgeId: e.id, progress: e.lengthMlu });
+      assert.ok(Math.abs(endPose.angle - DOWN) < 1e-9, 'edge ' + e.id + ' does not arrive vertically');
+      const startPose = carPose(geom.curves, { edgeId: e.id, progress: 0 });
+      const startAngle = startPose.angle;
+      assert.ok([DOWN, LEFT, RIGHT].some((a) => Math.abs(startAngle - a) < 1e-9),
+        'edge ' + e.id + ' leaves at ' + startAngle);
+      if (c.segs.length === 1) {
+        assert.equal(e.shape === 'straight' || e.shape === 'entry', true);
+        continue;
+      }
+      corners += 1;
+      // The 90° sweep occupies exactly 2 * CORNER_R of centreline and is LINEAR in arc length
+      // — not eased, because easing would make the car appear to hesitate at a junction.
+      const L1 = c.segs[0].len;
+      const before = carPose(geom.curves, { edgeId: e.id, progress: Math.round((L1 - CORNER_R) * MLU) });
+      const after = carPose(geom.curves, { edgeId: e.id, progress: Math.round((L1 + CORNER_R) * MLU) });
+      assert.ok(Math.abs(Math.abs(before.angle - after.angle) - Math.PI / 2) < 1e-6,
+        'the corner sweep is ' + ((before.angle - after.angle) * 180 / Math.PI).toFixed(2) + ' deg');
+      const mid = carPose(geom.curves, { edgeId: e.id, progress: Math.round(L1 * MLU) });
+      assert.ok(Math.abs(mid.angle - (before.angle + after.angle) / 2) < 1e-6,
+        'the rotation is not linear in arc length at the mid-point');
+      // And the car never leaves the tarmac: the fillet's worst deviation from the polyline is
+      // CORNER_R * (sqrt(2) - 1) ~ 11.6 LU, inside the road's 42 LU half-width.
+      const corner = [c.segs[0].x1, c.segs[0].y1];
+      const dev = Math.hypot(mid.x - corner[0], mid.y - corner[1]);
+      assert.ok(dev <= CORNER_R * (Math.SQRT2 - 1) + 1e-6, 'fillet deviation ' + dev.toFixed(2));
+      assert.ok(dev < ROAD_W / 2, 'the car left the tarmac on a turn');
+    }
+  }
+  assert.ok(segments > 100 && corners > 20, segments + ' segments, ' + corners + ' corners');
+  assert.equal(CORNER_R, 28, 'ui.md §4.1: a third of the road width');
+  assert.equal(CORNER_R * 3, ROAD_W, 'CORNER_R is a third of ROAD_W');
+});
+
+test('generation.md §3.4 · the filleted centreline abuts the polyline it is built from', () => {
+  // The lane dashes follow this so a dash turns the corner instead of meeting it at a point
+  // (ui.md §7.2). Its two ends must be the edge's two ends, and its control point the corner.
   let checked = 0;
-  for (const e of level.edges) {
-    for (let f = 0; f <= 1; f += 0.05) {
-      const pose = carPose(geom.curves, { edgeId: e.id, progress: Math.round(e.lengthMlu * f) });
-      worst = Math.max(worst, Math.abs(pose.angle));
+  for (let band = 1; band <= 5; band += 1) {
+    const level = generate(77 + band, band);
+    const geom = buildLevelGeometry(level);
+    for (const e of level.edges) {
+      const c = geom.curves[e.id];
+      const f = filletedCentreline(c);
+      const a = level.nodes[e.from];
+      const b = level.nodes[e.to];
+      assert.deepEqual(f.start, [a.x, a.y]);
+      assert.deepEqual(f.end, [b.x, b.y]);
+      if (c.segs.length === 1) {
+        assert.equal(f.corner, null, 'a straight edge has no corner');
+      } else {
+        assert.deepEqual(f.corner.control, [c.segs[0].x1, c.segs[0].y1]);
+        const r = Math.min(CORNER_R, c.segs[0].len, c.segs[1].len);
+        assert.ok(Math.abs(Math.hypot(
+          f.corner.before[0] - f.corner.control[0],
+          f.corner.before[1] - f.corner.control[1],
+        ) - r) < 1e-9);
+        assert.ok(Math.abs(Math.hypot(
+          f.corner.after[0] - f.corner.control[0],
+          f.corner.after[1] - f.corner.control[1],
+        ) - r) < 1e-9);
+      }
       checked += 1;
     }
   }
-  assert.ok(checked > 0);
-  assert.ok(worst < Math.PI / 2, 'a car heading turned past horizontal: ' + worst);
+  assert.ok(checked > 50, 'only ' + checked + ' edges were checked');
 });
 
 test('AC-517 · nothing in the render path fades, ramps or scales a car in', () => {
@@ -101,9 +191,9 @@ test('AC-517 · nothing in the render path fades, ramps or scales a car in', () 
 test('AC-501 · the draw order in the source is ui.md §4.2, and cars are under the depot layer', () => {
   const src = readFile('src/render/PlaySurface.js');
   // ui.md §4.2 steps 2-4 (road), 5 (junctions), 6 (flares), 7 (car shadows), 8 (car bodies),
-  // 9 (aprons), 10 (depots), 11 (transient effects). Cars come BEFORE the depot layer: a car
-  // drives under the mouth and under the building (ui.md §7.6).
-  const order = ['Roads', 'Junction', 'Flares', 'Cars', 'Mouths', 'Depot', 'Shatter'];
+  // 9 (the depot terrace), 10 (depots), 11 (transient effects). Cars come BEFORE the depot
+  // layer: a car drives UNDER the terrace and under the building (ui.md §7.6).
+  const order = ['Roads', 'Junction', 'Flares', 'Cars', 'Terrace', 'Depot', 'Shatter'];
   let last = -1;
   for (const token of order) {
     const at = src.search(new RegExp('<' + token + '[\\s/>]'));
@@ -128,22 +218,53 @@ test('AC-501 · the draw order in the source is ui.md §4.2, and cars are under 
   assert.ok(cars.slice(0, bodyAt).indexOf('CAR_COLOURS') === -1, 'the shadow pass fills a body colour');
 });
 
-test('AC-515 · the mouth line is mouthLu back from the depot, not the depot node', () => {
+test('AC-513/AC-515 · the terrace line is mouthLu back from the depot, and the terrace covers it', () => {
+  // ui.md §7.6, transcribed: mouthLu = rowH - JUNCTION_MARK_R - 12, at EQUALITY, so the
+  // terrace top is DEPOT_Y - mouthLu and exactly `rowH - mouthLu = 46` LU of shared approach
+  // is left visible at every band. The 46 is AC-513's residual and it is the same at all five
+  // bands, which is a consequence of mouthLu being at its maximum legal value.
   let observed = 0;
   for (let band = 1; band <= 5; band += 1) {
     const level = generate(1000 + band, band);
     const geom = buildLevelGeometry(level);
     assert.ok(geom.mouths.length > 0, 'band ' + band + ' had terminal edges');
+    assert.equal(geom.terrace.mouthLu, MOUTH_LU[band]);
+    assert.equal(geom.terrace.fade, TERRACE_FADE);
+    assert.equal(level.rowH - MOUTH_LU[band], 46, 'band ' + band + ' visible shared approach');
+    // The terrace's top edge, and the depot row it has to reach.
+    const depotY = level.nodes.find((n) => n.kind === 'depot').y;
+    assert.equal(geom.terrace.y, depotY - MOUTH_LU[band]);
+    assert.equal(geom.terrace.y + geom.terrace.h, depotY + DEPOT_H);
+    // It spans from x(0) - DEPOT_W/2 - 12 to x(C-1) + DEPOT_W/2 + 12 (AC-514's second clause),
+    // which contains every terminal edge's horizontal run and both ends of every depot body.
+    const xs = level.nodes.filter((n) => n.kind === 'depot').map((n) => n.x);
+    assert.equal(geom.terrace.x, Math.min(...xs) - DEPOT_W / 2 - 12);
+    assert.equal(geom.terrace.x + geom.terrace.w, Math.max(...xs) + DEPOT_W / 2 + 12);
+    for (const e of level.edges) {
+      if (level.nodes[e.to].kind !== 'depot') continue;
+      for (const p of edgePolyline(level, e)) {
+        assert.ok(p[0] >= geom.terrace.x - 1e-9 && p[0] <= geom.terrace.x + geom.terrace.w + 1e-9,
+          'a terminal edge leaves the terrace horizontally');
+      }
+    }
     for (const m of geom.mouths) {
       const depot = level.nodes[m.depotNodeId];
-      const d = Math.hypot(m.mouthPoint[0] - depot.x, m.mouthPoint[1] - depot.y);
-      assert.ok(d > 0.6 * MOUTH_LU[band], 'mouth line only ' + d.toFixed(1) + ' LU from the depot');
+      // The terrace LINE is mouthLu of arc length back from the depot, and under orthogonal
+      // routing the last mouthLu is entirely within the vertical drop, so it is also mouthLu
+      // straight up.
       assert.equal(m.mouthLu, MOUTH_LU[band]);
-      // The core covers mouthLu - MOUTH_FADE and the fade covers MOUTH_FADE above it.
+      assert.ok(Math.abs(m.mouthPoint[0] - depot.x) < 1e-9, 'the terrace line is not in the depot column');
+      assert.ok(Math.abs((depot.y - m.mouthPoint[1]) - MOUTH_LU[band]) < 1e-6,
+        'terrace line ' + (depot.y - m.mouthPoint[1]).toFixed(1) + ' LU above the depot');
+      // The line is exactly on the terrace's top edge: that is what makes it "the last point
+      // at which the car was visible" (AC-515).
+      assert.ok(Math.abs(m.mouthPoint[1] - geom.terrace.y) < 1e-6);
+      // The glow sub-path runs from the line to the depot and nowhere else.
       const c = geom.curves[m.edgeId];
-      const coreStart = pointAtLu(c, c.lengthLu - (MOUTH_LU[band] - MOUTH_FADE));
-      assert.ok(Math.hypot(m.core[0][0] - coreStart[0], m.core[0][1] - coreStart[1]) < 1);
-      assert.ok(Math.hypot(m.fade[m.fade.length - 1][0] - coreStart[0]) < 1);
+      const start = pointAtLu(c, c.lengthLu - MOUTH_LU[band]);
+      assert.ok(Math.hypot(m.glow[0][0] - start[0], m.glow[0][1] - start[1]) < 1e-6);
+      const end = m.glow[m.glow.length - 1];
+      assert.ok(Math.hypot(end[0] - depot.x, end[1] - depot.y) < 1e-6);
       observed += 1;
     }
   }
@@ -245,40 +366,61 @@ test('AC-140 · an arrival event names the edge the car came down, over a seeded
   assert.ok(injected.disagreements > 0, 'the audit did not catch the depot-first inference');
 });
 
-test('AC-504 · the blade angle differs by at least 30 deg between the two switch states', () => {
+test('AC-504 · the blade points along the first segment, and the two states differ by >= 90 deg', () => {
   const r = auditBladeSeparation({ levels: 8 });
-  assert.equal(BLADE_SEPARATION_FLOOR_DEG, 30, 'the floor is ui.md §7.3\'s, not a measurement');
+  assert.equal(BLADE_SEPARATION_FLOOR_DEG, 90, 'the floor is ui.md §7.3\'s, not a measurement');
   assert.ok(r.junctions > 200, 'only ' + r.junctions + ' junctions were measured');
   assert.equal(r.below, 0, r.below + ' junctions below the floor, worst ' + JSON.stringify(r.worst));
-  // The measured floor is 36.87 deg = atan(colW / rowH) at band 1, so 30 is a real threshold
-  // with room in it rather than a restatement of the geometry.
-  assert.ok(r.floorDeg > 36, 'floor was ' + r.floorDeg.toFixed(2) + ' deg');
-  assert.ok(r.floorDeg < 90);
+  // THE RESTATEMENT IS EXACT RATHER THAN MEASURED. A branch is {c, c±1} — one vertical, one
+  // horizontal, 90° — or {c-1, c+1} — two opposed horizontals, 180°. There are no other
+  // cases, so the histogram has exactly two entries and no third value is possible.
+  assert.deepEqual(r.distinct.map((d) => d.deg), [90, 180], 'unexpected separation values');
+  assert.equal(r.floorDeg, 90);
 
-  // POSITIVE CONTROL, and this is the whole point of the AC. The previous wording — "rotated
-  // to lie along out[k]" — was SATISFIED by a tangent-derived blade, which drew the identical
-  // vertical bar for both branches because every edge leaves its node vertically
-  // (generation.md §2.3). Both tangent derivations must be caught.
-  for (const mode of ['tangent', 'tangent0']) {
-    const bad = auditBladeSeparation({ levels: 8, mode });
-    assert.ok(bad.below > 0, 'the ' + mode + ' blade went undetected');
-    assert.ok(bad.floorDeg < BLADE_SEPARATION_FLOOR_DEG, mode + ' floor was ' + bad.floorDeg);
-  }
+  // CLAUSE 1, and it is the one that actually catches a blade on the wrong branch.
+  const dir = auditBladeDirection({ levels: 8 });
+  assert.ok(dir.checked > 400, 'only ' + dir.checked + ' branch headings were checked');
+  assert.equal(dir.wrong, 0, JSON.stringify(dir.worst));
+
+  // POSITIVE CONTROLS.
+  //
+  // `far-chord` is the rule that was RIGHT LAST ROUND — the chord to the branch's far node —
+  // and under orthogonal routing it is wrong, because a jog's far node sits down AND across.
+  // It must fail both clauses.
+  const chord = auditBladeSeparation({ levels: 8, mode: 'far-chord' });
+  assert.ok(chord.below > 0, 'the far-chord blade went undetected by the separation clause');
+  assert.ok(auditBladeDirection({ levels: 8, mode: 'far-chord' }).wrong > 0);
+
+  // `wrong-branch` — the blade drawn along `out[1 - k]` — must fail clause 1, AND IT DOES NOT
+  // FAIL CLAUSE 2. ui.md §7.3 and AC-504 both say the >= 90° separation check "also catches a
+  // blade drawn along the wrong branch"; it cannot, because swapping the two blades swaps the
+  // two angles and the separation between a swapped pair is the separation between the
+  // original pair. That is asserted here rather than left as a comment, because a claim in a
+  // document is a claim and not a fact, and this one is false.
+  const swapped = auditBladeSeparation({ levels: 8, mode: 'wrong-branch' });
+  assert.equal(swapped.below, 0, 'the separation clause caught the swap after all');
+  assert.deepEqual(swapped.distinct, r.distinct, 'the swap left the histogram bit-identical');
+  assert.ok(auditBladeDirection({ levels: 8, mode: 'wrong-branch' }).wrong > 0,
+    'clause 1 did not catch the swapped blade either, so nothing does');
 });
 
 test('AC-504 / ui.md §7.3 · the blade fits the marker, and the open branch fades out', () => {
-  // The two blade dimensions, ratified in round 7 as proportions of the marker.
-  assert.equal(BLADE_LEN, 40);
-  assert.equal(BLADE_W, 12);
-  assert.equal(BLADE_W, 3 * JUNCTION_RING_W, 'the blade is three times the ring');
-  const clear = JUNCTION_MARK_R - JUNCTION_RING_W - BLADE_LEN;
-  assert.equal(clear, 2, 'blade tip to the inside of the ring');
+  // The two blade dimensions, proportions of the marker, shrunk with it in round 8.
+  assert.equal(JUNCTION_MARK_R, 34);
+  assert.equal(BLADE_LEN, 30);
+  assert.equal(BLADE_W, 9);
+  assert.equal(JUNCTION_MARK_R - BLADE_LEN, 4, 'ui.md §7.3: 4 LU of disc face past the blade tip');
   assert.ok(BLADE_LEN / BLADE_W > 3.3 && BLADE_LEN / BLADE_W < 3.4, 'a 3.3 : 1 bar');
+  // AC-503: the marker's DIAMETER is now smaller than the road, so it sits inside its road
+  // rather than overhanging it. The old 92 LU marker on a 104 LU road did not.
+  assert.equal(2 * JUNCTION_MARK_R, 68);
+  assert.ok(2 * JUNCTION_MARK_R < ROAD_W, 'the marker overhangs the road');
+  assert.equal(JUNCTION_RING_W, 4);
 
-  // The open-branch overdraw: solid, then a ramp to zero over its final 36 LU. Both stretches
-  // together are the specified 150 LU, they abut exactly, and neither is drawn twice.
-  assert.equal(OPEN_BRANCH_FADE, 36);
-  assert.equal(OPEN_BRANCH_FADE, MOUTH_FADE, 'the same distance as the apron fade, ui.md §7.3');
+  // The open-branch overdraw: solid, then a ramp to zero over its final 28 LU. Both stretches
+  // together are the specified 120 LU, they abut exactly, and neither is drawn twice.
+  assert.equal(OPEN_BRANCH_FADE, 28);
+  assert.equal(OPEN_BRANCH_FADE, TERRACE_FADE, 'the same distance as the terrace fade, ui.md §7.3');
   let checked = 0;
   for (let band = 1; band <= 5; band += 1) {
     const geom = buildLevelGeometry(generate(8800 + band, band));
@@ -305,21 +447,77 @@ test('AC-504 / ui.md §7.3 · the blade fits the marker, and the open branch fad
   assert.ok(checked > 0, 'no junction branches were observed');
 });
 
+test('AC-502 · the windscreen and glyph cover under 35 % of the car body', () => {
+  // ui.md §4.3, measured by RASTERISING the exact shapes at 0.25 LU, which is what AC-502
+  // specifies. The share rose from the old car's 31.5 % because the body's area fell 42 %
+  // while GLYPH_CAR fell only 13 % — it has to stay legible at 13.4 pt on the binding device —
+  // so the windscreen gave up the difference. THE 1.0 pp OF HEADROOM IS WHAT SAYS THE CAR IS
+  // AS SMALL AS THE CURRENT GLYPH SIZES ALLOW.
+  assert.equal(CAR_L, 104);
+  assert.equal(CAR_W, 66);
+  assert.equal(CAR_RADIUS, 12);
+  assert.equal(GLYPH_CAR, 42);
+  assert.deepEqual([GLASS_W, GLASS_L, GLASS_RADIUS, GLASS_OFFSET], [26, 36, 6, 24]);
+  assert.equal(CAR_W + 2 * 9, ROAD_W, 'AC-503: a 9 LU shoulder each side of the car');
+
+  const step = 0.25;
+  const inRoundRect = (x, y, w, h, r) => {
+    const hx = w / 2;
+    const hy = h / 2;
+    const ax = Math.abs(x);
+    const ay = Math.abs(y);
+    if (ax > hx || ay > hy) return false;
+    const dx = ax - (hx - r);
+    const dy = ay - (hy - r);
+    if (dx <= 0 || dy <= 0) return true;
+    return dx * dx + dy * dy <= r * r;
+  };
+  let body = 0;
+  let cover = 0;
+  for (let x = -CAR_W / 2; x < CAR_W / 2; x += step) {
+    for (let y = -CAR_L / 2; y < CAR_L / 2; y += step) {
+      const px = x + step / 2;
+      const py = y + step / 2;
+      if (!inRoundRect(px, py, CAR_W, CAR_L, CAR_RADIUS)) continue;
+      body += 1;
+      // The windscreen, offset toward the NOSE, which is +y in the car's own frame.
+      const glass = inRoundRect(px, py - GLASS_OFFSET, GLASS_W, GLASS_L, GLASS_RADIUS);
+      // The widest glyph is Rose's filled square, GLYPH_CAR on a side, centred. Overlap with
+      // the windscreen is counted once, which is what AC-502 says.
+      const glyph = Math.abs(px) <= GLYPH_CAR / 2 && Math.abs(py) <= GLYPH_CAR / 2;
+      if (glass || glyph) cover += 1;
+    }
+  }
+  const areaLu2 = body * step * step;
+  const pct = (100 * cover) / body;
+  assert.equal(Math.round(areaLu2), 6740, 'ui.md §4.3 measures the body at 6,740 LU²');
+  assert.equal(Number(pct.toFixed(1)), 34.0, 'ui.md §4.3 measures 34.0 %');
+  assert.ok(pct < 35, 'AC-502 ceiling');
+  // The windscreen sits entirely on the body, and forward of centre.
+  assert.ok(GLASS_OFFSET + GLASS_L / 2 < CAR_L / 2, 'the windscreen overhangs the nose');
+});
+
 test('AC-518 · the depot glyph disc and sill bars are ui.md §7.4\'s geometry', () => {
   // The disc ratio is derived: the widest glyph is a filled square, whose corners sit at
   // sqrt(2)/2 = 0.7071 of the glyph size from the centre.
   assert.equal(DEPOT_DISC_RATIO, 0.75);
   assert.ok(DEPOT_DISC_RATIO > Math.SQRT1_2, 'the disc would clip the square glyph');
   assert.ok(DEPOT_DISC_RATIO >= 0.72, 'ui.md §7.4: do not take this below 0.72');
-  assert.equal(DEPOT_DISC_RATIO * GLYPH_DEPOT, 48);
-  assert.equal(DEPOT_DISC_RATIO * GLYPH_DEPOT_LARGE, 66);
-  assert.ok(DEPOT_W / 2 - DEPOT_DISC_RATIO * GLYPH_DEPOT_LARGE >= 14, 'the Large disc crowds DEPOT_W');
+  assert.equal(GLYPH_DEPOT, 52);
+  assert.equal(GLYPH_DEPOT_LARGE, 72);
+  assert.equal(DEPOT_DISC_RATIO * GLYPH_DEPOT, 39);
+  assert.equal(DEPOT_DISC_RATIO * GLYPH_DEPOT_LARGE, 54);
+  assert.equal(DEPOT_W / 2 - DEPOT_DISC_RATIO * GLYPH_DEPOT_LARGE, 8,
+    'ui.md §7.4: the Large disc clears DEPOT_W by 8 LU a side');
 
+  assert.equal(DEPOT_W, 124);
+  assert.equal(DEPOT_H, 128);
+  assert.equal(DEPOT_RADIUS, 10);
   assert.equal(DEPOT_SILL_BARS, 3);
-  assert.equal(DEPOT_HATCH_W, 6);
-  assert.equal(DEPOT_SILL_PITCH, 10);
-  assert.equal(DEPOT_SILL_INSET, 16);
-  assert.equal(DEPOT_SILL_BOTTOM, 8);
+  assert.equal(DEPOT_HATCH_W, 5);
+  assert.equal(DEPOT_SILL_PITCH, 8);
+  assert.equal(DEPOT_SILL_INSET, 12);
+  assert.equal(DEPOT_SILL_BOTTOM, 6);
   assert.equal(OPACITY.depotHatch, 0.18);
 
   const geom = buildLevelGeometry(generate(4711, 3));
@@ -330,16 +528,16 @@ test('AC-518 · the depot glyph disc and sill bars are ui.md §7.4\'s geometry',
       assert.equal(bar.h, DEPOT_HATCH_W);
       assert.equal(bar.x - d.x, DEPOT_SILL_INSET);
       assert.equal(d.x + d.w - (bar.x + bar.w), DEPOT_SILL_INSET);
-      assert.equal(bar.w, DEPOT_W - 2 * DEPOT_SILL_INSET, 'the bars are 128 LU wide');
+      assert.equal(bar.w, DEPOT_W - 2 * DEPOT_SILL_INSET, 'the bars are 100 LU wide');
     }
     for (let i = 1; i < d.sill.length; i += 1) {
-      assert.equal(d.sill[i].y - d.sill[i - 1].y, DEPOT_SILL_PITCH, 'a 10 LU pitch');
+      assert.equal(d.sill[i].y - d.sill[i - 1].y, DEPOT_SILL_PITCH, 'an 8 LU pitch');
     }
     const lowest = d.sill[d.sill.length - 1];
-    assert.equal(d.y + d.h - (lowest.y + lowest.h), DEPOT_SILL_BOTTOM, 'lowest bar 8 LU up');
+    assert.equal(d.y + d.h - (lowest.y + lowest.h), DEPOT_SILL_BOTTOM, 'lowest bar 6 LU up');
     const band = lowest.y + lowest.h - d.sill[0].y;
-    assert.equal(band, 26, 'the sill occupies the bottom 26 LU');
-    assert.ok(band / DEPOT_H < 0.2, 'ui.md §7.4: 15 % of the body, not a third — got ' + (band / DEPOT_H));
+    assert.equal(band, 21, 'the sill occupies the bottom 21 LU');
+    assert.ok(band / DEPOT_H < 0.2, 'ui.md §7.4: 16 % of the body, not a third — got ' + (band / DEPOT_H));
   }
 });
 
@@ -363,18 +561,18 @@ test('AC-519 · a delivery glows the arriving mouth, not every mouth of its depo
   // shows this assertion is not vacuous.
   const src = readFile('src/render/PlaySurface.js');
   const surface = src.slice(src.indexOf('export default function PlaySurface'));
-  assert.ok(!/corePathByDepot|mouthByDepot/.test(surface), 'a mouth lookup is still keyed by depot');
-  assert.ok(/corePathByEdge\.get\(e\.edgeId\)/.test(surface), 'the glow does not read e.edgeId');
+  assert.ok(!/glowPathByDepot|mouthByDepot/.test(surface), 'a mouth lookup is still keyed by depot');
+  assert.ok(/glowPathByEdge\.get\(e\.edgeId\)/.test(surface), 'the glow does not read e.edgeId');
   assert.ok(/mouthByEdge\.get\(e\.edgeId\)/.test(surface), 'the shatter does not read e.edgeId');
   // No fallback to "some mouth of this depot": that is the same defect wearing another hat.
   assert.ok(!/\|\| list\[0\]/.test(surface), 'the shatter still falls back to an arbitrary mouth');
 
   // POSITIVE CONTROL: the slice-2 text must fail every assertion above.
   const broken = surface
-    .replace(/corePathByEdge\.get\(e\.edgeId\)/, 'corePathByDepot.get(e.depotId)')
+    .replace(/glowPathByEdge\.get\(e\.edgeId\)/, 'glowPathByDepot.get(e.depotId)')
     .replace(/mouthByEdge\.get\(e\.edgeId\)/, 'mouthByDepot.get(e.depotId) || list[0]');
-  assert.ok(/corePathByDepot|mouthByDepot/.test(broken), 'the injection did not reintroduce the defect');
-  assert.ok(!/corePathByEdge\.get\(e\.edgeId\)/.test(broken));
+  assert.ok(/glowPathByDepot|mouthByDepot/.test(broken), 'the injection did not reintroduce the defect');
+  assert.ok(!/glowPathByEdge\.get\(e\.edgeId\)/.test(broken));
 });
 
 test('AC-502 / AC-606 · the windscreen is --text at 22 %, and the composite clears the floor', () => {

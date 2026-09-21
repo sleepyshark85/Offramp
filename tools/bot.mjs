@@ -18,7 +18,7 @@
 // measured tap rate against AC-233, and the depot-mouth near-miss statistic slice 3 needs
 // (docs/reports/slice-0-orchestrator-verification.md, finding 1).
 
-import { ENTRY_LEN, MLU, generate, reachableColourMasks } from '../src/engine/index.js';
+import { ENTRY_LEN, LEVEL_TICKS, TICK_HZ, generate, reachableColourMasks } from '../src/engine/index.js';
 import {
   BOT_ACQUIRE_TICKS,
   BOT_LOCKOUT_TICKS,
@@ -33,15 +33,33 @@ import {
 import { buildCurves, carPoint } from './lib/curve.mjs';
 import { arg, has, summary, table } from './lib/report.mjs';
 
-const CAR_L = 140; // ui.md §4.1
+const CAR_L = 104; // ui.md §4.1, transcribed — NOT imported from the module under test
+
+// generation.md §6.1 — `N`, the number of cars that ARRIVE inside the two-minute clock. It
+// replaced `quota` and it is what AC-246's ceiling (0.25 x 2/N) and AC-220 are stated against.
+// TRANSCRIBED from the design, never read back out of the level object: a check that reads its
+// expectation from the source under test is not a check (development-process.md §6.8).
+const N_BY_BAND = { 1: 32, 2: 44, 3: 47, 4: 50, 5: 52 };
+// generation.md §7.3 / AC-226–AC-230 — the delivery band, a report with a sanity range.
+const DELIVERED_BAND = { 1: [28, 32], 2: [38, 44], 3: [40, 47], 4: [42, 50], 5: [43, 52] };
 
 // generation.md §7.2.2 — the shape the design requires. `null` means "no bound".
 const CLEAR_TARGET = { 1: [95, null], 2: [86, 97], 3: [76, 92], 4: [66, 85], 5: [55, 78] };
+// generation.md §7.1.10's feasible per-car windows, computed by inverting P(Bin(N, p) <= 2) at
+// each end of the band's clear-rate target. TRANSCRIBED; this is the quantity §7.1.10.3 says a
+// regression should be stated in, because it is the one that is not amplified.
+const P_WINDOW = { 1: [0.00, 2.60], 2: [1.53, 2.95], 3: [2.15, 3.61], 4: [2.68, 4.12], 5: [3.11, 4.74] };
 const R2_MIN_DROP = 4; // pp, AC-237
 const R3_MAX_DROP = 15; // pp, AC-238
+const TAP_RATE_CEILING = 1.25; // /s, AC-233 — at EVERY band now, not only band 5
 const AC240_MIN_RISE = 20; // pp
 const AC240_HEADROOM_CEILING = 80; // pp — above this a 20 pp rise cannot be asked for
 const AC247_MAX_GLANCE_DRIFT = 2; // %, AC-247's fourth check
+
+/** The p-th percentile of an already-summarised sample, for the delivery band's p10. */
+function percentileOf(sum, p) {
+  return sum.sorted ? sum.sorted[Math.floor((sum.sorted.length - 1) * p)] : '-';
+}
 
 /** Terminal edges grouped by the depot they feed, for depots fed by more than one edge. */
 function convergingGroups(level) {
@@ -69,6 +87,14 @@ function runBand(band, seeds, mode, opts = {}) {
   const allTimes = [];
   const taps = [];
   const tapRates = [];
+  const delivered = [];
+  let carTickSum = 0; // sum over ticks of cars on the board — §6.1's "cars in flight"
+  let tickSum = 0;
+  const deliveredCleared = [];
+  const inFlightAtEnd = [];
+  let overRunTicks = 0;
+  let endedTickWrong = 0;
+  let spawnShortfall = 0;
   const att = {
     glances: 0, lapses: 0, focusSwitch: 0, focusAcquire: 0, evictions: 0,
     expiries: 0, memMeanSum: 0, memMax: 0, evaluations: 0, evaluatedNothing: 0,
@@ -76,6 +102,7 @@ function runBand(band, seeds, mode, opts = {}) {
     captures: 0,
   };
   let misroutes = 0;
+  let arrivals = 0; // delivered + misrouted, summed across runs — AC-246/§7.1.10's denominator
   let stalled = 0;
   let levelsWithConvergence = 0;
   let nearMissRuns = 0;
@@ -149,8 +176,11 @@ function runBand(band, seeds, mode, opts = {}) {
     }
     const tracker = measureDecisions ? makeDecisionTracker(level, reachableColourMasks(level)) : null;
 
+    const countCars = (state) => { carTickSum += state.cars.length; tickSum += 1; };
+    const observe = onTick ? (state, before, inputs) => { countCars(state); onTick(state, before, inputs); }
+      : countCars;
     const r = playLevel(level, mode, {
-      onTick, onBotTick, attention, sweepMode, decisions: tracker,
+      onTick: observe, onBotTick, attention, sweepMode, decisions: tracker,
     });
     if (tracker) for (const k of Object.keys(dec)) dec[k] += tracker.totals[k];
     if (measureCapture) {
@@ -160,7 +190,19 @@ function runBand(band, seeds, mode, opts = {}) {
       cap.glancedDistinct += r.attention.glancedDistinct;
     }
     clears.push(r.cleared ? 1 : 0);
+    delivered.push(r.delivered);
+    if (r.cleared) deliveredCleared.push(r.delivered);
+    // AC-231 — every level is the same two minutes, enforced identically at every band.
+    if (r.state.tick > LEVEL_TICKS) overRunTicks += 1;
+    if (r.cleared && r.state.tick !== LEVEL_TICKS) endedTickWrong += 1;
+    if (!r.cleared && r.state.tick >= LEVEL_TICKS) endedTickWrong += 1;
+    // AC-123 — a run that reaches the bell has consumed its whole schedule.
+    if (r.cleared) {
+      inFlightAtEnd.push(r.state.cars.length);
+      if (r.state.nextSpawn !== level.spawns.length) spawnShortfall += 1;
+    }
     misroutes += r.misroutes;
+    arrivals += r.delivered + r.misroutes;
     if (r.stalled) stalled += 1;
     allTimes.push(r.seconds);
     if (r.cleared) times.push(r.seconds);
@@ -203,7 +245,22 @@ function runBand(band, seeds, mode, opts = {}) {
     band,
     seeds,
     clearPct: (100 * cleared) / seeds,
+    delivered: summary(delivered),
+    deliveredCleared: summary(deliveredCleared),
+    inFlightAtEnd: summary(inFlightAtEnd),
+    overRunTicks,
+    endedTickWrong,
+    spawnShortfall,
     misroutes,
+    arrivals,
+    // §6.1's "cars in flight": the mean number of cars on the board, measured rather than
+    // computed from `transit / interval`.
+    inFlight: tickSum ? carTickSum / tickSum : 0,
+    // §7.1.10.3 — the per-car error rate, summed across all runs in the band and NOT averaged
+    // per level. It is the unamplified quantity: a 1 pp change in it shows up as anywhere
+    // between 0 and 60 points of clear rate depending on where the band sits, which is how an
+    // 8 pp gap survived two rounds of measurement while looking like a difficulty result.
+    p: arrivals ? (100 * misroutes) / arrivals : 0,
     stalled,
     time: summary(times),
     allTime: summary(allTimes),
@@ -245,23 +302,36 @@ function inTarget(band, pct) {
 }
 
 if (has('unconstrained')) {
+  // AC-220 — stated per CAR rather than per level. Under a clock every level "completes": an
+  // unconstrained bot cannot fail to reach the bell, so "clears 100 %" would be vacuous. What
+  // is not vacuous is that it never misroutes, and that `delivered` equals §6.1's `N` to
+  // within one car.
   console.log(`# Unconstrained bot — ${seeds} seeds per band (AC-220)\n`);
   const rows = [];
   for (const band of bands) {
     const r = runBand(band, seeds, 'unconstrained');
-    const ok = r.clearPct === 100 && r.misroutes === 0;
+    const N = N_BY_BAND[band];
+    const medianOk = Math.abs(r.delivered.median - N) <= 1;
+    const ok = r.clearPct === 100 && r.misroutes === 0 && medianOk && r.overRunTicks === 0
+      && r.endedTickWrong === 0 && r.spawnShortfall === 0;
     if (!ok) failures += 1;
     rows.push({
       band: r.band,
-      cleared: r.clearPct.toFixed(1) + '%',
+      'reached the bell': r.clearPct.toFixed(1) + '%',
       misroutes: r.misroutes,
       stalled: r.stalled,
-      'median s': r.time.n ? r.time.median.toFixed(1) : '-',
-      'max s': r.time.n ? r.time.max.toFixed(1) : '-',
+      'delivered min/med/max': r.delivered.min + '/' + r.delivered.median + '/' + r.delivered.max,
+      'N (§6.1)': N,
+      'in flight at the bell': r.inFlightAtEnd.n ? r.inFlightAtEnd.min + '-' + r.inFlightAtEnd.max : '-',
+      'tick !== 7200': r.endedTickWrong,
+      'schedule unconsumed': r.spawnShortfall,
       'AC-220': ok ? 'PASS' : 'FAIL',
     });
   }
   console.log(table(rows));
+  console.log('\n"delivered" is per car: every car that ARRIVES is delivered, with zero misroutes.');
+  console.log('Cars still in flight when the clock stops are discarded without scoring (AC-133),');
+  console.log('which is why delivered is N and not the spawn count.');
 } else if (has('ac240')) {
   // AC-240 — the fault injection required by development-process.md:136. Every ATTENTION
   // constraint removed, every TIMING constraint kept. If the clear rate does not rise, the
@@ -383,17 +453,18 @@ if (has('unconstrained')) {
   console.log('4. the control is the same seeds under a pure round-robin sweep.');
 } else if (has('entry-window')) {
   // AC-246 — the first decision is as reliable as every other decision — plus §7.1.7's
-  // deadline table and the row-0 split, measured rather than tabulated.
+  // deadline table.
   //
-  // The first junction sits ENTRY_LEN LU after the spawn point, and that is the whole runway
-  // a car's first decision gets: its colour cannot be known before it spawns, so nothing
-  // about the decision can be prepared (gameplay.md §4.6b).
+  // A car's colour cannot be known before it spawns, so nothing about its first junction can
+  // be prepared: the whole decision has to fit inside the time the car takes to reach that
+  // junction (gameplay.md §4.6b). Under V14 the row-0 node is always a pass, so that time is
+  // `ENTRY_LEN + rowH` and not `ENTRY_LEN`.
   //
-  // ENTRY_LEN is READ FROM THE ENGINE. It was hard-coded as 100 here through slice 1b, which
-  // is how a diagnostic built to explain a geometry problem came to be reporting the old
-  // geometry back at itself.
+  // THE PER-ARM SPLIT IS GONE. This sweep used to report the clear rate separately for levels
+  // whose row-0 node was a branch and levels whose was not — the largest structural variable
+  // in the game. V14 means no level has a row-0 branch, so there is only one arm (AC-246).
   console.log(`# Entry window — ${seeds} seeds per band (AC-246, generation.md §7.1.7)\n`);
-  console.log(`ENTRY_LEN = ${ENTRY_LEN} LU`);
+  console.log(`ENTRY_LEN = ${ENTRY_LEN} LU; row 0 is a pass at every band (V14)`);
   console.log('sweep: ' + sweepLabel + '\n');
   const rows = [];
   const ac246 = [];
@@ -401,45 +472,55 @@ if (has('unconstrained')) {
   for (const band of bands) {
     const r = runBand(band, seeds, 'constrained', { sweepMode, measureDecisions: true });
     const lvl = generate(0, band);
-    const transit = Math.ceil((ENTRY_LEN * MLU) / lvl.speedMluPerTick);
+    // The first-decision transit: ENTRY_LEN + rowH, in ticks. Computed from the level's own
+    // geometry rather than tabled, and cross-checked against firstDecisionTicks() by
+    // generator-audit, which is where AC-245's floor is asserted.
+    const transit = Math.ceil(((ENTRY_LEN + lvl.rowH) * 1000) / lvl.speedMluPerTick);
     // A glance that lands when the car is `a` ticks old escalates (E2), and C1 emits the tap
     // BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS ticks later when the car is cold, or
     // BOT_SCAN_TICKS + BOT_SWITCH_TICKS later when it is already held. The lockout then needs
     // the car to be BOT_LOCKOUT_TICKS or more from the junction at that moment.
     const cold = BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS + BOT_LOCKOUT_TICKS;
     const warm = BOT_SCAN_TICKS + BOT_SWITCH_TICKS + BOT_LOCKOUT_TICKS;
+    // §7.1.7's other column: the LATENCY TO STARTING the decision, which grows with traffic.
+    // A pure round-robin reaches a new car only after every older one, at BOT_SCAN_TICKS each,
+    // so the cycle is `BOT_SCAN_TICKS x cars in flight` — and cars in flight is MEASURED off
+    // the runs rather than taken from §6.1's computed column.
+    const inFlight = r.inFlight;
     rows.push({
       band,
-      'entry transit ticks': transit,
-      'as ms': Math.round((1000 * transit) / 60),
+      'row0 branches': r.row0Branch + '/' + r.seeds,
+      'ENTRY_LEN + rowH': ENTRY_LEN + lvl.rowH,
+      'first decision ticks': transit,
+      'as ms': Math.round((1000 * transit) / TICK_HZ),
       'cold glance→tap+lockout': cold,
       'cold deadline (car age)': transit - cold,
       'held deadline (car age)': transit - warm,
-      'levels with branch at row 0': r.row0Branch + '/' + r.seeds,
-      'cleared, row0 = branch': r.row0BranchCleared + '/' + r.row0Branch,
-      'cleared, row0 = pass': r.row0PassCleared + '/' + (r.seeds - r.row0Branch),
+      'cars in flight (measured)': inFlight.toFixed(2),
+      'scan cycle 6×inFlight': (BOT_SCAN_TICKS * inFlight).toFixed(0),
+      'deadline wins by': (transit - cold - BOT_SCAN_TICKS * inFlight).toFixed(0),
     });
 
     // AC-246. The ceiling is a quarter of the band's per-car error budget, and the budget is
-    // 2/quota because a level clears on at most LIVES - 1 = 2 misroutes in `quota` cars. It is
-    // read from the generated level, not from a table, so a §7.4 lever that moves `quota`
-    // moves the ceiling with it.
+    // 2/N because a level clears on at most LIVES - 1 = 2 misroutes across the N cars that
+    // arrive inside the clock. `N` is TRANSCRIBED from generation.md §6.1: reading it back out
+    // of the level object would make the check satisfy itself (development-process.md §6.8).
     const d = r.dec;
     const pFirst = (100 * d.firstBad) / (d.firstN || 1);
     const pLater = (100 * d.laterBad) / (d.laterN || 1);
     const gap = pFirst - pLater;
-    const ceiling = (100 * 0.25 * 2) / lvl.quota;
+    const ceiling = (100 * 0.25 * 2) / N_BY_BAND[band];
     const ok = d.firstN > 0 && d.laterN > 0 && d.walkFailures === 0 && gap <= ceiling;
     if (!ok) failures += 1;
     ac246.push({
       band,
-      quota: lvl.quota,
+      N: N_BY_BAND[band],
       'first decisions': d.firstN,
       p_first: pFirst.toFixed(2) + '%',
       'later decisions': d.laterN,
       p_later: pLater.toFixed(2) + '%',
       'gap pp': (gap >= 0 ? '+' : '') + gap.toFixed(2),
-      'ceiling 0.25×(2/quota)': ceiling.toFixed(2),
+      'ceiling 0.25×(2/N)': ceiling.toFixed(2),
       'AC-246': ok ? 'PASS' : 'FAIL',
       'walk failures': d.walkFailures,
     });
@@ -455,9 +536,8 @@ if (has('unconstrained')) {
   console.log('whether they reach THAT car\'s colour — §7.1.6 evaluate\'s own test. Under the other');
   console.log('reading of AC-246\'s parenthesis, branches differing in their reachable-colour SETS,');
   console.log('the gaps are ' + altGaps.join(' / ') + ' pp; the verdict is taken on the first.');
-  console.log('\nAt ENTRY_LEN = 100 the cold deadline read 7/5/3/2/0 ticks: at band 5 the glance had');
-  console.log('to land on the tick the car spawned, and the bot emitted zero taps at the row-0');
-  console.log('junction across 269 levels that had one. That is what AC-240 caught.');
+  console.log('\n"row0 branches" must be 0/N at every band: V14 is a construction constraint, so a');
+  console.log('non-zero count is a generator regression and not a statistic.');
 } else {
   console.log(`# Constrained bot — ${seeds} seeds per band (generation.md §7.1 attention model)\n`);
   console.log('sweep: ' + sweepLabel + '\n');
@@ -468,20 +548,35 @@ if (has('unconstrained')) {
     pcts[band] = r.clearPct;
     const ok = inTarget(band, r.clearPct);
     if (!ok) failures += 1;
+    // AC-233's ceiling now applies at EVERY band, because the rate is sustained for exactly
+    // 120 s at every band and band 1 is no longer the short one (gameplay.md §8.6).
+    const tapOk = r.tapRate.mean <= TAP_RATE_CEILING;
+    if (!tapOk) failures += 1;
+    // AC-226–AC-230, the delivery band: a REPORT with a sanity range, not a constraint.
+    const [dlo, dhi] = DELIVERED_BAND[band];
+    const dOk = r.delivered.median >= dlo && r.delivered.median <= dhi;
+    // AC-231 — every run is the same two minutes or shorter, at every band.
+    const clockOk = r.overRunTicks === 0 && r.endedTickWrong === 0 && r.spawnShortfall === 0;
+    if (!clockOk) failures += 1;
     rows.push({
       band: r.band,
       cleared: r.clearPct.toFixed(1) + '%',
       'target §7.2': targetText(band),
       verdict: ok ? 'in band' : r.clearPct < CLEAR_TARGET[band][0] ? 'BELOW' : 'ABOVE',
-      'median s': r.time.n ? r.time.median.toFixed(1) : '-',
+      'per-car p': r.p.toFixed(2) + '%',
+      '§7.1.10 window': P_WINDOW[band][0].toFixed(2) + '–' + P_WINDOW[band][1].toFixed(2) + '%',
+      'p verdict': r.p < P_WINDOW[band][0] ? 'BELOW' : r.p > P_WINDOW[band][1] ? 'ABOVE' : 'in window',
+      'delivered med/p10': r.delivered.median + '/' + percentileOf(r.delivered, 0.1),
+      'band §7.3': dlo + '–' + dhi,
+      'AC-226…230': dOk ? 'PASS' : 'out',
       'taps/s': r.tapRate.mean.toFixed(2),
-      'AC-233': band === 5 ? (r.tapRate.mean <= 1.25 ? 'PASS' : 'FAIL') : '-',
+      'AC-233 (≤1.25)': tapOk ? 'PASS' : 'FAIL',
+      'AC-231': clockOk ? 'PASS' : 'FAIL',
       stalled: r.stalled,
       'depots fed by 2+ edges': r.levelsWithConvergence + '/' + seeds,
-      'runs with <140 LU gap': r.nearMissRuns,
+      'runs with <104 LU gap': r.nearMissRuns,
       'min gap LU': Number.isFinite(r.minDistLu) ? r.minDistLu.toFixed(0) : '-',
     });
-    if (band === 5 && r.tapRate.mean > 1.25) failures += 1;
   }
   console.log(table(rows));
 
@@ -505,8 +600,9 @@ if (has('unconstrained')) {
 
   console.log('');
   console.log('Near-miss column: two cars on DIFFERENT terminal edges feeding the SAME depot,');
-  console.log('measured centre-to-centre in LU from the real Bezier geometry, against CAR_L = 140.');
-  console.log('gameplay.md §4.5 does not cover this case (slice-0 verification, finding 1).');
+  console.log('measured centre-to-centre in LU from the real orthogonal geometry, against');
+  console.log('CAR_L = 104. gameplay.md §4.5 does not cover this case; §4.5b and AC-513 do, and');
+  console.log('tools/converge.mjs is where it is measured properly.');
 }
 
 process.exit(failures === 0 ? 0 : 1);

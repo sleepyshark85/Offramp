@@ -11,12 +11,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 
 import PlaySurface from '../render/PlaySurface.js';
-import HUD from './HUD.js';
+import HUD, { clockCaption } from './HUD.js';
 import { computeLayout } from './layout.js';
 import { CompleteOverlay, CountdownOverlay, FailedOverlay, PauseOverlay } from './overlays.js';
 import { C, MS, OPACITY } from './theme.js';
 import { useFade } from './useCountUp.js';
-import { MODE, useGame } from './useGame.js';
+import { MODE } from './appState.js';
+import { useGame } from './useGame.js';
 
 // ui.md §10.3 — the only gesture the game understands is a tap (AC-312).
 const TAP_MAX_DURATION_MS = 400;
@@ -27,7 +28,7 @@ function haptic(kind) {
   if (Platform.OS === 'web') return;
   if (kind === 'flip') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   else if (kind === 'misrouted') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-  else if (kind === 'won') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  else if (kind === 'ended') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 }
 
 export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onNext, onRestart }) {
@@ -104,8 +105,9 @@ export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onN
     hapticTickRef.current = state.tick;
   }, [events, state.tick, settings.haptics]);
 
+  // gameplay.md §2.4 — 'ended' is the CLEAR: the clock ran out with a life left.
   useEffect(() => {
-    if (settings.haptics && state.phase === 'won') haptic('won');
+    if (settings.haptics && state.phase === 'ended') haptic('ended');
   }, [state.phase, settings.haptics]);
 
   const ended = state.phase !== 'running';
@@ -113,7 +115,7 @@ export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onN
   // panels, and it un-dims on resume rather than snapping back.
   const paused = (mode === MODE.PAUSED || mode === MODE.COUNTDOWN) && !ended;
   const pauseFade = useFade(paused, MS.dim, settings.reduceMotion);
-  const dim = state.phase === 'won' ? endFade : ended ? 0 : pauseFade;
+  const dim = state.phase === 'ended' ? endFade : ended ? 0 : pauseFade;
   const desaturate = state.phase === 'lost' ? endFade : 0;
 
   return (
@@ -138,8 +140,8 @@ export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onN
           accessible
           accessibilityRole="image"
           accessibilityLabel={
-            'Level ' + levelNumber + '. ' + state.delivered + ' of ' + geom.level.quota +
-            ' delivered. ' + state.lives + ' lives.'
+            'Level ' + levelNumber + '. ' + state.delivered + ' delivered. ' +
+            clockCaption(state.tick) + ' remaining. ' + state.lives + ' lives.'
           }
         />
       </GestureDetector>
@@ -153,7 +155,7 @@ export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onN
       <HUD
         top={insets.top}
         width={width}
-        level={{ number: levelNumber, quota: geom.level.quota }}
+        level={{ number: levelNumber }}
         state={state}
         onPause={pause}
         reduceMotion={settings.reduceMotion}
@@ -172,11 +174,10 @@ export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onN
         <CountdownOverlay n={countdown} reduceMotion={settings.reduceMotion} />
       ) : null}
 
-      {state.phase === 'won' ? (
+      {state.phase === 'ended' ? (
         <CompleteOverlay
           levelNumber={levelNumber}
           state={state}
-          quota={geom.level.quota}
           onRetry={onRestart}
           onNext={onNext}
           reduceMotion={settings.reduceMotion}
@@ -186,7 +187,6 @@ export default function PlayScreen({ runSeed, levelNumber, settings, onQuit, onN
       {state.phase === 'lost' ? (
         <FailedOverlay
           state={state}
-          quota={geom.level.quota}
           onRetry={onRestart}
           onLevels={onQuit}
           reduceMotion={settings.reduceMotion}

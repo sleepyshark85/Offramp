@@ -3,8 +3,8 @@
 //
 //   node tools/render-audit.mjs                            1,000 levels a band, both audits
 //   node tools/render-audit.mjs --seeds 100
-//   node tools/render-audit.mjs --inject tangent           AC-504, the slice-2 blade
-//   node tools/render-audit.mjs --inject tangent0          AC-504, the blade at the node
+//   node tools/render-audit.mjs --inject wrong-branch      AC-504, the blade on the other arm
+//   node tools/render-audit.mjs --inject far-chord         AC-504, the pre-round-8 blade rule
 //   node tools/render-audit.mjs --inject depot-first       AC-140, the slice-2 mouth lookup
 //
 // Both of these exist because slice 2 shipped a defect that every check it had was blind to,
@@ -12,12 +12,13 @@
 // run against the defect first — `--inject` is not a debugging aid, it is the evidence that a
 // green run means something (docs/development-process.md §6.2).
 //
-//   AC-504  The blade's heading must differ by >= 30 deg between `open === 0` and
+//   AC-504  The blade's heading must differ by >= 90 deg between `open === 0` and
 //           `open === 1`, at every junction of every level. ui.md §7.3 is normative that the
-//           heading is the CHORD to the branch's far node. Slice 2 derived it from the road's
-//           tangent, and every edge leaves its node vertically by design
-//           (generation.md §2.3), so the same vertical bar was drawn whichever way the switch
-//           was set. The old wording — "rotated to lie along out[k]" — was satisfied by that.
+//           heading is the FIRST SEGMENT of `out[k]`. The floor moved 30 -> 90 in round 8 and
+//           the restatement is exact rather than measured: orthogonal branches leave the node
+//           at right angles by construction. The slice-2 tangent defect is gone by
+//           construction, so what the clause is kept for is a blade drawn along the WRONG
+//           branch — which no construction prevents.
 //
 //   AC-140  `delivered` and `misrouted` carry `edgeId`, the terminal edge the car arrived on.
 //           The check is that the engine's value equals the previous-tick inference the
@@ -28,6 +29,7 @@ import { BANDS } from '../src/engine/index.js';
 import {
   BLADE_SEPARATION_FLOOR_DEG,
   auditArrivalEdges,
+  auditBladeDirection,
   auditBladeSeparation,
 } from './lib/render-audit.mjs';
 import { arg, table } from './lib/report.mjs';
@@ -36,10 +38,10 @@ const seeds = Number(arg('seeds', 1000));
 const inject = arg('inject', null);
 const bands = BANDS.slice(1).map((p) => p.band);
 
-const bladeMode = inject === 'tangent' || inject === 'tangent0' ? inject : 'chord';
+const bladeMode = inject === 'wrong-branch' || inject === 'far-chord' ? inject : 'first-segment';
 const arrivalInject = inject === 'depot-first' ? 'depot-first' : null;
-if (inject && bladeMode === 'chord' && arrivalInject === null) {
-  console.error('unknown --inject: ' + inject + ' (tangent | tangent0 | depot-first)');
+if (inject && bladeMode === 'first-segment' && arrivalInject === null) {
+  console.error('unknown --inject: ' + inject + ' (wrong-branch | far-chord | depot-first)');
   process.exit(2);
 }
 
@@ -55,7 +57,7 @@ console.log(
     blade.distinct.map((d) => ({
       'separation deg': d.deg.toFixed(2),
       junctions: d.n,
-      'vs 30 deg floor': d.deg >= BLADE_SEPARATION_FLOOR_DEG ? 'ok' : 'BELOW',
+      ['vs ' + BLADE_SEPARATION_FLOOR_DEG + ' deg floor']: d.deg >= BLADE_SEPARATION_FLOOR_DEG ? 'ok' : 'BELOW',
     })),
   ),
 );
@@ -67,8 +69,20 @@ console.log(`  below the floor    : ${blade.below}`);
 if (blade.below > 0) {
   console.log(`  worst              : ${blade.worst.deg.toFixed(2)} deg at band ${blade.worst.band}, seed ${blade.worst.seed}, junction ${blade.worst.junctionId}`);
 }
-const bladeOk = blade.below === 0 && blade.junctions > 0;
+const dir = auditBladeDirection({ bands, levels: seeds, mode: bladeMode });
+console.log('');
+console.log(`AC-504 · clause 1 — the blade points along the FIRST SEGMENT of out[k]`);
+console.log(`  branch headings checked : ${dir.checked}`);
+console.log(`  wrong heading           : ${dir.wrong}`);
+if (dir.wrong > 0) {
+  console.log(`  worst                   : ${dir.worst.deg.toFixed(2)} deg off on a '${dir.worst.shape}' edge, band ${dir.worst.band}, seed ${dir.worst.seed}, junction ${dir.worst.junctionId}`);
+}
+const bladeOk = blade.below === 0 && blade.junctions > 0 && dir.wrong === 0 && dir.checked > 0;
 console.log(`  AC-504: ${bladeOk ? 'PASS' : 'FAIL'}`);
+console.log('');
+console.log('Clause 2 (>= 90 deg separation) cannot catch a blade drawn along the WRONG branch:');
+console.log('swapping the two blades swaps the two angles and the separation between them is');
+console.log('unchanged. Clause 1 is what catches that, and it is why both are run.');
 console.log('');
 
 // --- AC-140 -------------------------------------------------------------------------------
