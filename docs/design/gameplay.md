@@ -220,24 +220,38 @@ Notes the implementation must honour:
 ### 2.6 `resolveArrival` — the single place scoring happens
 
 ```
-resolveArrival(car, depotNode):
+resolveArrival(car, depotNode, edgeId):                // edgeId: the terminal edge car arrived on
   remove car from state.cars
   if depotNode.depotColour === car.colour:
      state.delivered += 1
      state.streak    += 1
      state.bestStreak = max(state.bestStreak, state.streak)
      state.score     += SCORE_DELIVERY + SCORE_STREAK_STEP * min(state.streak - 1, STREAK_CAP)
-     push { type:'delivered', carId, depotId, colour }
+     push { type:'delivered', carId, depotId, edgeId, colour }
   else:
      state.misrouted += 1
      state.streak     = 0
      state.lives      = max(0, state.lives - 1)        // floored; see below
-     push { type:'misrouted', carId, depotId, carColour, depotColour }
+     push { type:'misrouted', carId, depotId, edgeId, carColour, depotColour }
 ```
 
 Counters and the event are written by the same function, in one place. There is deliberately no
 second derivation of the score from the event stream — two sources that must agree is the shape
 of a bug, not the absence of one (`docs/development-process.md:173`).
+
+**Why `edgeId` is on both events, added in round 7.** A depot has an in-degree of up to 3 (§4.5b,
+measured at 100 % of levels), so `depotId` does **not** identify which road the car came down. The
+renderer needs that road: [`ui.md` §8.4](ui.md#84-car-misrouted) throws the misroute shatter from
+the **mouth line of the arriving edge**, not from the depot node, and
+[`ui.md` §8.3](ui.md#83-car-delivered) glows the same mouth on a delivery. Slice 2 recovered the
+edge in the UI by reading the car's `edgeId` from the state snapshot at the start of the arrival
+tick — correct, because one tick advances at most 3.8 LU against a terminal edge of at least
+200 LU, but it is a second derivation of a fact the engine already had in a local variable, and the
+UI has to keep a previous-tick snapshot alive to do it. §2.5's transition loop holds the arriving
+edge in `edge` at the moment it calls `resolveArrival`; passing `edge.id` through costs one
+argument and removes the inference. The field is **render-only** like the rest of the event (§2.9):
+nothing in the engine reads it, and no counter, score or phase depends on it.
+([AC-140](acceptance-criteria.md), [AC-515](acceptance-criteria.md))
 
 **Why `lives` is floored at 0 and `misrouted` is not.** Step 4 of §2.5 resolves *every* arrival in
 the tick before step 5 checks for a terminal condition, so two cars can misroute on the same tick
@@ -398,6 +412,15 @@ engine never reads it back. Every animation inside the play surface derives its 
 `currentTick - eventTick`, which means a replay paints identically to the live run
 ([AC-505](acceptance-criteria.md)).
 
+**An event therefore carries everything its animation needs to be placed, and nothing else.** That
+is the rule that decides what goes on an event. `edgeId` on `delivered` and `misrouted` (§2.6) is
+there because the animation is anchored to a mouth line and the depot does not identify the mouth;
+the alternative is the renderer re-deriving a fact the engine already had, which is the shape of a
+bug (`docs/development-process.md:173`) even when — as in slice 2 — the derivation happens to be
+sound. The test for a proposed event field is not "could the renderer work it out?" but "is the
+renderer's only route to it a second derivation?" A field that fails that test does not go on the
+event, because `state.events` is not a general-purpose state export; `serialise.js` is.
+
 ---
 
 ## 3. The junction rule — the most important rule in the game
@@ -462,9 +485,15 @@ keep the order they were submitted in, applied with a stable sort, and each one 
 on the same junction in the same tick therefore net to **no change**, which is correct: two
 toggles is two toggles.
 
-Multi-touch is allowed up to `MAX_POINTERS = 2`. Two fingers landing on two junctions in the same
-frame produce two inputs stamped to the same tick, and they resolve by junction id. There is no
-debounce and no coalescing.
+**Two inputs on one tick are reachable with one finger, which is why this rule is load-bearing
+even though the game is single-pointer** ([`ui.md` §10.3](ui.md#103-gestures), round 7). A tap is
+stamped to the next tick the layer will simulate (§3.3), so any two taps that arrive between two
+consecutive `step()` calls share a tick stamp. At 60 fps that window is 16.7 ms and the case is
+rare; on a device running at 30 fps it is 33 ms, and two taps 20 ms apart — which
+[AC-309](acceptance-criteria.md) requires to both be enqueued — land in it. Under a
+`MAX_CATCHUP_TICKS` catch-up the window is longer still. There is no debounce and no coalescing,
+so the queue must order them, and ordering by arrival would make the result depend on how the
+platform happened to deliver two touches. Ascending `junctionId` is a property of the board.
 
 ---
 
@@ -780,6 +809,16 @@ focus events per second 1.80 / 2.36 / 2.65 / 3.09 / 3.30) and **cars that must b
 row** (quota 16 / 33 / 41 / 47 / 51). Colour count and topology alternate, so that consecutive
 bands never feel like the same level with a bigger number.
 
+**What does *not* escalate monotonically is per-car error**, and round 7 is when that became
+visible: measured `p` is `0.92 / 2.53 / 3.38 / 3.38 / 3.80 %` and it is **flat at the 3 → 4 step**
+— the one step in this table whose entry says "traffic eases". Band 4 asks each car more questions
+and gives it more time to answer each one, and the two cancel almost exactly
+([`generation.md` §7.2.4](generation.md#724-what-the-instrument-reads-now-and-what-is-left-to-do-about-it)
+decomposes it). The 7.4 pp of clear rate between the bands is bought by `quota` rising 41 → 47, not
+by the player being less reliable. That is a legitimate way to build a step — a longer level at the
+same reliability is a harder level — but it is a different one from every other step in the table,
+and a lever pull that assumes depth alone raises `p` will be surprised here.
+
 **One honest note on the 2 → 3 step.** Measured at a common spawn interval, the fourth colour on
 its own is worth about 0.3 pp of per-car error against 0.8 and 1.5 pp for the two topology steps —
 the bot pays per *car held*, not per colour in the world, so a colour costs attention mainly
@@ -829,9 +868,11 @@ minutes before the player knows whether they are good at this is two minutes of 
 ladder therefore starts at roughly 50 s and grows to roughly 110 s, so that:
 
 - A player's first complete win arrives inside the first minute.
-- The hardest band approaches the attention ceiling without crossing it — 108.8 s nominal, 122 s
-  at the top of the design band, and a hard acceptance ceiling of **130 s for any seed at any
-  band** ([AC-231](acceptance-criteria.md)).
+- The hardest band approaches the attention ceiling without crossing it — 108.3 s nominal (the
+  table above), 122 s at the top of the design band, and a hard acceptance ceiling of **130 s for
+  any seed at any band** ([AC-231](acceptance-criteria.md)). Measured against the unconstrained
+  router over 300 zero-misroute band-5 runs the nominal reads 108.5 s, which is the jitter in
+  §2.7's schedule and not a second number.
 - A losing run is always *shorter* than a winning one, so failure never costs more time than
   success.
 
@@ -915,9 +956,15 @@ car. Nothing had crashed; the margin had simply been spent without anyone notici
 clear rate — raise `quota`, then cut `interval` — drives straight through what was left.
 
 §2.7 now derives the slack from the three quantities that consume it, so the same lever that used
-to spend the margin silently now recomputes it. The derived values are `8 / 8 / 9 / 9 / 10`, which
-restores a measured margin of `3 / 2 / 3 / 3 / 3` against a worst case of `21 / 32 / 42 / 54 / 71`
-([AC-139](acceptance-criteria.md)). The lesson generalises past this number: **a safety constant
+to spend the margin silently now recomputes it — and round 6's lever pull is the proof that it
+works, because it moved `interval` and `quota` at four bands and the slack moved with them without
+anyone editing a constant. Under round 6's parameters the derived values are `8 / 10 / 10 / 9 / 9`,
+giving `SPAWN_COUNT` `24 / 43 / 51 / 56 / 60` against a worst-case `max(nextSpawn)` of
+`21 / 40 / 48 / 53 / 57` over 2,000 seeds per band in both oracle variants — a measured margin of
+**3 at every band**, and 3 is also the worst margin over all 20,000 runs
+([AC-139](acceptance-criteria.md)). The pre-round-6 reading, for comparison, was a derived
+`8 / 8 / 9 / 9 / 10` and a margin of `3 / 2 / 3 / 3 / 3`; the band that was tightest is no longer
+tighter than any other, which is the property the derivation was written to produce. The lesson generalises past this number: **a safety constant
 that a normative lever moves through must be written as a function of the lever, not as a
 literal.**
 

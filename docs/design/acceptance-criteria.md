@@ -288,6 +288,23 @@ per band in both variants is `21 / 40 / 48 / 53 / 57` against `SPAWN_COUNT`
 `24 / 43 / 51 / 56 / 60`, leaving a margin of **3 at every band** and a worst margin of 3 over all
 20,000 runs.*
 
+**AC-140 · An arrival event names the edge the car came down**
+**Given** a `delivered` or `misrouted` event emitted by `resolveArrival`,
+**Then** it carries `edgeId`, the id of the terminal edge the car was on when it reached the
+depot; `level.edges[edgeId].to === depotId`; and in a seeded run of 1,000 levels per band every
+such event's `edgeId` equals the `edgeId` that car held in `state.cars` at the end of the previous
+tick.
+*A depot has an in-degree of up to 3 and 100 % of levels have a shared depot
+([`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)), so `depotId`
+does not identify the road. AC-515 needs it: the shatter is thrown from the mouth line of the
+arriving edge. Slice 2 recovered it in the renderer from a previous-tick snapshot — sound, because
+one tick moves at most 3.8 LU against a ≥ 200 LU terminal edge, but it is a second derivation of a
+fact §2.5's transition loop holds in a local variable at the moment it calls `resolveArrival`. The
+field is render-only: no counter, score, phase or invariant may read it
+([`gameplay.md` §2.6](gameplay.md#26-resolvearrival--the-single-place-scoring-happens), §2.9). The
+third clause is the check that the engine's value and the renderer's old inference agree, and it
+is what makes the workaround safe to delete rather than merely unnecessary.*
+
 ---
 
 ## 200 — Generation
@@ -695,9 +712,18 @@ glances per second `7.20 / 5.97 / 5.74 / 5.45 / 5.53` against a round-robin's
 **Given** a tap received between two `step()` calls where the next is tick `T`,
 **Then** the enqueued input is `{tick: T, junctionId}` and it is consumed by that `step()`.
 
-**AC-306 · Two pointers, two inputs, one tick**
-**Given** two simultaneous taps on two different junctions within one frame,
-**Then** two inputs are enqueued with the same `tick`, and they resolve by ascending junction id.
+**AC-306 · Two taps in one frame are two inputs on one tick**
+**Given** two taps on two different junctions that both arrive between the same pair of `step()`
+calls — reachable with one finger at 30 fps, or under any catch-up frame
+([`ui.md` §10.3](ui.md#103-gestures)),
+**Then** two inputs are enqueued with the same `tick`, neither is coalesced or dropped, and
+`step()` applies them in ascending junction id regardless of arrival order
+(AC-110).
+*This was "two simultaneous pointers" through slice 2 and it was not testable — a mouse has one
+pointer, and round 7 made Offramp a one-pointer game
+([`ui.md` §10.3](ui.md#103-gestures)). The guarantee it was protecting is a property of the input
+**queue**, not of the touch layer, and in that form it is reachable from a unit test and from
+tier 3.*
 
 **AC-307 · Taps are discarded while paused**
 **Given** a paused game or an active resume countdown,
@@ -725,8 +751,25 @@ glances per second `7.20 / 5.97 / 5.74 / 5.45 / 5.53` against a round-robin's
 
 **AC-312 · Tap is the only gesture**
 **Given** the gesture configuration over the canvas,
-**Then** only `Gesture.Tap()` is registered; there is no pan, swipe, long-press or double-tap
-handler.
+**Then** exactly one gesture is registered, it is a `Gesture.Tap()`, and there is no pan, swipe,
+long-press, double-tap or `Manual` handler.
+*Reaffirmed in round 7 against the alternative of relaxing it to `Gesture.Manual()` for two-finger
+play. [`ui.md` §10.3](ui.md#103-gestures) records why the game is one-pointer and what the three
+arguments were.*
+
+**AC-313 · A second pointer does not move the tap**
+**Given** a recognised tap,
+**Then** the point hit-tested is the position of the gesture's **first** pointer, captured when the
+gesture begins — not the centroid of its live pointers;
+**And given** a second pointer that lands on the canvas while the first is still down and lifts
+before or with it,
+**Then** the tap still resolves to the first pointer's junction, exactly one input is enqueued,
+and the gesture is not cancelled.
+*RNGH tracks the centroid, so the default behaviour is that a second finger drags the reported
+point toward it and two fingers on two junctions report one tap at the midpoint — which usually
+hits neither junction and occasionally hits a third. Verifiable at tier 3 with
+`CDPSession.Input.dispatchTouchEvent` and two touch points, and at tier 5 by resting a second
+finger on the glass; both are required, because the web and native recognisers are different code.*
 
 ---
 
@@ -795,15 +838,23 @@ to spend it fail loudly. The binding device is the iPhone SE 1st generation at 1
 
 **AC-501 · Draw order**
 **Given** a rendered frame,
-**Then** elements are painted in the order of [`ui.md` §4.2](ui.md#42-draw-order); a car is never
-occluded by a junction marker, by the road, by another car's shadow or by anything outside the
-depot layer; and a car **is** occluded by the depot-mouth apron and the depot body, which are the
-two things painted after it ([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
+**Then** elements are painted in the order of [`ui.md` §4.2](ui.md#42-draw-order); **every car
+shadow is painted before every car body** (§4.2 steps 7 and 8 are two passes over the car list,
+not one); a car is never occluded by a junction marker, by the road, by another car's shadow or by
+anything outside the depot layer; and a car **is** occluded by the depot-mouth apron and the depot
+body, which are the two things painted after it ([`ui.md` §7.6](ui.md#76-the-depot-mouth)).
+*Through slice 2 §4.2 said "cars, ascending by id, each with body, roof glyph and shadow", which
+draws car n+1's shadow over car n's body and contradicts this AC's own third clause. Round 7 split
+the step. The case is reachable: §4.5's no-overlap guarantee stops at a shared depot mouth
+([`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)), which every
+level at every band has.*
 
 **AC-502 · The car body is one colour fill**
 **Given** a rendered car,
-**Then** its body is a single rounded rectangle filled with one palette colour; the windscreen and
-glyph are drawn over it and together cover less than 35 % of its area.
+**Then** its body is a single rounded rectangle filled with one palette colour; the windscreen is
+`--text` at 22 % and the glyph `--ink`, and together they cover less than 35 % of the body's area
+(measured 31.3 %: windscreen 40 × 60 LU at radius 8, glyph `GLYPH_CAR` square, overlap counted
+once, against a body of 11,540 LU²).
 
 **AC-503 · Car fits the road**
 **Given** any band,
@@ -812,8 +863,25 @@ glyph are drawn over it and together cover less than 35 % of its area.
 
 **AC-504 · The blade shows the open branch**
 **Given** a junction with `open === k`,
-**Then** its blade is rotated to lie along `out[k]`, and the first 150 LU of that edge is drawn
-brighter than the closed branch.
+**Then** its blade is rotated to the **chord from the junction node to the far node of `out[k]`**
+— not to the edge's tangent near the junction — it is `BLADE_LEN = 40` LU long and
+`BLADE_W = 12` LU thick, and the first 150 LU of `out[k]` is drawn brighter than the closed
+branch with butt caps and a linear alpha ramp to zero over its final 36 LU;
+**And given** any junction of any generated level,
+**Then** the rendered blade angle **differs** between `open === 0` and `open === 1` by at least
+**30°**, at every junction of every level over 1,000 seeds per band.
+*Measured over all 27,243 junctions in 5,000 levels, the separation takes eight values —
+`36.87 / 39.09 / 40.91 / 44.27` ° for a straight branch against a diagonal and
+`73.74 / 78.19 / 81.83 / 88.55` ° for two diagonals — so the floor is 36.87° and 30° is a real
+threshold with room, not a restatement of the geometry. Under the tangent-derived blade every one
+of those 27,243 separations is 0°.*
+*The second clause is the regression guard for a real slice-2 defect and it is the whole point of
+this AC. Every edge leaves its node vertically
+([`generation.md` §2.3](generation.md#23-edges)), so a tangent-derived blade draws the identical
+vertical bar for both branches and the junction silently stops showing its state. It shipped, and
+it was caught by looking at a screenshot rather than by a test, because the first clause as
+previously worded — "rotated to lie along `out[k]`" — was satisfied by the broken implementation.
+[`ui.md` §7.3](ui.md#73-junction) is normative on the chord.*
 
 **AC-505 · In-canvas animation is replay-deterministic**
 **Given** a recorded run replayed at a fixed frame rate,
@@ -869,10 +937,17 @@ protrudes from the side of the apron.
 
 **AC-515 · A misroute is legible from under the depot**
 **Given** a `misrouted` event,
-**Then** the shatter fragments originate at the mouth line of the terminal edge the car came down
-— not at the depot node — are filled with the **car's** colour, and are drawn over the apron and
-the depot body; and the rejecting depot desaturates over the same 350 ms
+**Then** the shatter fragments originate at the mouth line of `level.edges[event.edgeId]` — the
+edge named on the event (AC-140), not the depot node and not an edge inferred from state the
+renderer kept from an earlier tick — are filled with the **car's** colour, and are drawn over the
+apron and the depot body; and the rejecting depot desaturates over the same 350 ms
 ([`ui.md` §8.4](ui.md#84-car-misrouted)).
+*The same applies to the delivery glow of [`ui.md` §8.3](ui.md#83-car-delivered), which is anchored
+to the same mouth line and reads `edgeId` from the `delivered` event. Slice 2 shipped this by
+reading the car's edge from a previous-tick snapshot, correctly and knowingly, and reported it; the
+event now carries the edge and the snapshot path is to be deleted rather than kept as a fallback —
+two routes to one fact is the bug shape this project keeps finding
+(`docs/development-process.md:173`).*
 
 **AC-516 · The apron does not stack alpha**
 **Given** a depot fed by two or three terminal edges,
@@ -896,6 +971,32 @@ falsify the design's own claim about the player — silently, and in the one pla
 detected from a clear rate. The 140 ms fade-in specified through slice 1b was also spending 40 of
 the entry edge's 160 LU making the colour unreadable inside the only window in which that car's
 colour can be read.*
+
+**AC-518 · The depot's colour geometry is the specified geometry**
+**Given** a rendered depot at either symbol size,
+**Then** the glyph disc is centred on the body with radius `0.75 × glyphSize` — 48 LU at
+`GLYPH_DEPOT = 64`, 66 LU at `GLYPH_DEPOT_LARGE = 88` — so it circumscribes the square glyph's
+`0.707 × s` corner radius with margin and still clears `DEPOT_W = 160` by at least 14 LU a side;
+**And** the sill is **three** rounded bars, each `DEPOT_HATCH_W = 6` LU tall on a 10 LU pitch,
+inset 16 LU from each side, the lowest bar's bottom edge 8 LU above the body's bottom edge, in the
+depot's colour at 18 %;
+**And** on a rejecting depot the face band, the glyph disc and the sill bars all desaturate
+together ([`ui.md` §7.4](ui.md#74-depot)).
+*All four numbers were undefined through slice 2 — §7.4 drew a disc without sizing it and called
+the sill "a 6 LU hatch in the colour at 18 %, bottom third", which named a texture and a region
+and specified neither. They are fixed here at the values slice 2 chose, with the disc ratio
+derived rather than picked.*
+
+**AC-519 · A delivery glows one mouth, not the depot's mouths**
+**Given** a `delivered` event at a depot fed by two or three terminal edges,
+**Then** the mouth glow of [`ui.md` §8.3](ui.md#83-car-delivered) is drawn on the apron core of
+`level.edges[event.edgeId]` alone, and the cores of that depot's other terminal edges are
+unchanged for the whole 220 ms.
+*Slice 2 unions every core of a depot into one path and glows all of them, so one arriving car
+lights two or three roads. Every level at every band has at least one such depot
+([`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)), so this fires
+constantly. It is the same event-payload gap as AC-515 seen from the delivery side, and AC-140
+closes both.*
 
 ---
 
@@ -929,8 +1030,15 @@ replaced by their static or 120 ms-fade equivalents, and every state in
 
 **AC-606 · Contrast floors**
 **Given** the theme,
-**Then** every text token is ≥ 4.5 : 1 against every surface it is used on, and every car colour
-is ≥ 3.0 : 1 against `--road` (measured minimum 4.21 : 1).
+**Then** every text token is ≥ 4.5 : 1 against every surface it is used on; every car colour is
+≥ 3.0 : 1 against `--road` (measured minimum 4.21 : 1); **and so is every car colour after the
+windscreen tint is composited over it** — `--text` at 22 % gives
+`6.13 / 8.74 / 4.99 / 6.71 / 5.24 : 1` in palette index order, minimum 4.99.
+*The third clause exists because the windscreen covers about a fifth of the body and slice 2 drew
+it in `--ink` at 22 %, which puts Rose at 2.79 : 1 and Iris at 2.81 : 1 — below even the 3.0 floor,
+on the element whose only job is to be identified by colour. The contrast check has to be run on
+the composited patch, not on the palette entry.
+[`ui.md` §4.3](ui.md#43-the-car) has the derivation.*
 
 **AC-607 · Screen-reader scope is what is claimed**
 **Given** VoiceOver enabled,

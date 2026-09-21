@@ -570,10 +570,25 @@ in force:
 | Band | Valid networks | Attempts: median / p95 / max | Distinct networks | `J` distribution | `Ja` distribution | `D` range |
 |---|---|---|---|---|---|---|
 | 1 | 3000 / 3000 | 5 / 19 / 50 | 190 | J=3: 100 % | 3: 100 % | 2 |
-| 2 | 3000 / 3000 | 3 / 11 / 27 | 1867 | J=3: 18 %, 4: 37 %, 5: 45 % | 3: 100 % | 2–3 |
-| 3 | 3000 / 3000 | 2 / 7 / 16 | 1802 | J=4: 13 %, 5: 40 %, 6: 48 % | 4: 26 %, 5: 74 % | 2–3 |
+| 2 | 3000 / 3000 | 3 / 11 / 27 | 1866 | J=3: 19 %, 4: 37 %, 5: 45 % | 3: 100 % | 2–3 |
+| 3 | 3000 / 3000 | 2 / 7 / 16 | 1801 | J=4: 13 %, 5: 40 %, 6: 48 % | 4: 26 %, 5: 74 % | 2–3 |
 | 4 | 3000 / 3000 | 3 / 10 / 22 | 2678 | J=5: 4 %, 6: 25 %, 7: 71 % | 5: 100 % | 2–4 |
-| 5 | 3000 / 3000 | 2 / 9 / 23 | 2236 | J=7: 3 %, 8: 97 % | 7: 100 % | 2–4 |
+| 5 | 3000 / 3000 | 2 / 9 / 23 | 2235 | J=7: 3 %, 8: 97 % | 7: 100 % | 2–4 |
+
+**The `max` in the attempts column is a sample maximum and it grows with the seed count. Read it
+that way, and never as a bound.** Median and p95 are stable statistics of the generator;
+`max` is the largest of `seeds` draws from a geometric-ish tail, so it rises as more seeds are
+drawn. At **5,000** seeds per band the same run reads median/p95/max
+`5/19/74`, `3/11/27`, `2/8/17`, `3/10/26`, `3/9/23` — band 1's max moves 50 → **74** while its
+median and p95 do not move at all. That is the tail being sampled further, not the generator
+getting worse. It matters because [AC-203](acceptance-criteria.md) is written partly against this
+column: its ceiling is **128** and its stated reason is `MAX_ATTEMPTS = 256`, so the honest reading
+of 74 is "the observed worst case is well inside a budget that is itself 3.5× the observed worst
+case", and the number to quote alongside it is always the seed count that produced it. **A future
+reading that exceeds 128 at some larger seed count is not automatically a regression** — it is a
+reason to re-read median and p95, which are what would actually have moved if the generator had.
+Band 1 is the band to watch, for the reason two paragraphs down: it has the smallest network space
+in the game, so it does the most rejecting.
 
 **What V13 cost.** The same generator without V13, at the same 3,000 seeds per band: attempts
 `5 / 3 / 2 / 2 / 2` median, `19 / 11 / 6 / 8 / 6` p95 and `50 / 27 / 14 / 17 / 20` max; distinct
@@ -756,11 +771,13 @@ BOT_SWITCH_TICKS  = 4    // 67 ms to re-focus a car already in the working set: 
                          //   what makes holding three cars different from holding one.
 
 BOT_MEMORY_TICKS  = 120  // 2.00 s. An entry not refreshed for this long is dropped and the car's
-                         //   colour must be re-observed at full price. Two seconds is shorter than
-                         //   band 1's spawn interval (2.60 s) and at most equal to every other
-                         //   band's (1.77 - 2.00 s after round 6), so memory spans at most one
-                         //   spawn interval anywhere in the game and can never carry the bot
-                         //   across the traffic stream.
+                         //   colour must be re-observed at full price. Against §6.1's spawn
+                         //   intervals it is 0.77 / 1.11 / 1.13 / 1.09 / 1.00 of one interval, so
+                         //   memory lasts ON THE ORDER OF one spawn interval at every band and
+                         //   never as much as TWO at any of them (the tightest case, band 3, is
+                         //   1.13). It cannot carry the bot across the traffic stream: no car's
+                         //   colour survives in memory long enough for two further cars to have
+                         //   entered behind it.
 
 BOT_URGENCY_TICKS = 90   // 1.50 s. A glance at a car whose next junction is further away than this
                          //   does not escalate to a focus. It covers acquire (15) + tap gap (11) +
@@ -775,13 +792,31 @@ BOT_LAPSE_PCT     = 3    // 3 % of glances land on nothing — roughly one lost 
 BOT_SALT          = 0x5BF03635
 ```
 
-**`BOT_MEMORY_TICKS`' rationale moved in round 6 and the constant did not.** Under §6.1's previous
-`interval` column the ratio of memory to spawn interval was `0.77 / 0.87 / 1.00 / 1.11 / 1.25`, and
-the note above used to end "and it carries less of it as the bands get harder". Under the new
-column it is `0.77 / 1.11 / 1.13 / 1.09 / 1.00`, which no longer falls. The bound that the note was
-*for* — memory never spans more than one spawn interval, so it cannot substitute for looking —
-still holds at every band, and that is what is written above. The band table moved; the instrument
-did not, and §7.4 forbids the reverse.
+**`BOT_MEMORY_TICKS`' rationale has now been rewritten twice and the constant has never moved;
+round 7 is the round in which the sentence finally matches the ratios underneath it.** Under
+§6.1's pre-round-6 `interval` column the ratio of memory to spawn interval was
+`0.77 / 0.87 / 1.00 / 1.11 / 1.25`, and the note above used to end "and it carries less of it as
+the bands get harder", which the round-6 column made false. Round 6 replaced that with "memory
+spans at most one spawn interval anywhere in the game" — and the round-6 ratios,
+`0.77 / 1.11 / 1.13 / 1.09 / 1.00`, printed two paragraphs below it, say 1.09 to 1.13 at bands 2, 3
+and 4. **The replacement sentence was falsified by the numbers on the same page, twice in a row,
+because both drafts claimed a clean bound that the arithmetic does not offer.**
+
+`120 / interval` is `0.77 / 1.11 / 1.13 / 1.09 / 1.00`. What that supports, stated as tightly as
+the numbers allow and no tighter:
+
+- Memory is **within 13 % of one spawn interval at every band**, and at bands 2–5 it is within
+  13 % on either side of exactly one. It is not a quantity that scales with the band.
+- It **never reaches two spawn intervals**: `2 × interval` is `312 / 216 / 212 / 220 / 240` ticks
+  against 120, so the worst case (band 3) is 57 % of two intervals. **No car's colour can survive
+  in memory long enough for two further cars to have entered behind it**, at any band.
+
+That second bullet is the property the constant is *for*, and it is the one to regress against:
+memory cannot substitute for looking, because the working set of 3 cannot be refilled from memory
+faster than the traffic replaces its contents. What is **not** claimed, and was claimed twice
+before: that memory fits inside one spawn interval. At bands 2, 3 and 4 it does not, by 9 to 13 %.
+Nothing in §7.1.5 or §7.1.9 rests on it doing so. The band table moved; the instrument did not, and
+§7.4 forbids the reverse.
 
 `BOT_LOOKAHEAD_CARS` from slice 0 is **deleted**. It was the constant that made the three
 readings possible: it described a window over a globally sorted list, and nothing said what the
@@ -1159,7 +1194,7 @@ its knee at `p* = 2/N`:
 |---|---|---|---|---|---|---|
 | 1 | 16 | 12.50 % | 0 % | 5.31 % | 5.31 pp | **0.92 %** |
 | 2 | 33 | 6.06 % | 2.06 % | 3.94 % | 1.89 pp | **2.53 %** |
-| 3 | 41 | 4.88 % | 2.47 % | 4.14 % | 1.67 pp | **2.88 %** |
+| 3 | 41 | 4.88 % | 2.47 % | 4.14 % | 1.67 pp | **3.38 %** |
 | 4 | 47 | 4.26 % | 2.85 % | 4.38 % | 1.53 pp | **3.38 %** |
 | 5 | 51 | 3.92 % | 3.18 % | 4.83 % | 1.66 pp | **3.80 %** |
 
@@ -1218,8 +1253,8 @@ five numbers it produced.
 **One limitation, stated because the rest of this subsection leans on the model.** The binomial
 treats a level's `quota` cars as independent trials, and they are not: level difficulty varies, so
 failures cluster and the measured clear rate sits *below* the model's for the same `p`. At the `p`
-column above, the model predicts `100.0 / 95.0 / 88.6 / 78.8 / 69.4 %` against a measured
-`99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`. The windows are therefore the right object for reasoning
+column above, the model predicts `100.0 / 95.0 / 83.9 / 78.8 / 69.3 %` against a measured
+`99.9 / 91.5 / 81.5 / 74.1 / 66.0 %` — below at every band, by `0.1 / 3.5 / 2.4 / 4.7 / 3.3` pp. The windows are therefore the right object for reasoning
 about **shape** — which direction a ladder's room runs, and how much of it there is — and the wrong
 object for predicting a clear rate. Every clear rate quoted anywhere in these documents is
 measured, never inverted from this table.
@@ -1365,7 +1400,7 @@ and are not going to**, for the reason §7.2 opens with; §6.1 moved.
 |---|---|---|---|---|---|---|---|---|
 | 1 | **99.9 %** | ≥ 95 % — **in band** | +4.9 | 0.92 % | 0.2 pp | −0.39 pp | 3.13 | 49.3 |
 | 2 | **91.5 %** | 86–97 % — **in band** | +5.5 | 2.53 % | 4.8 pp | −0.69 pp | 1.52 | 68.5 |
-| 3 | **81.5 %** | 76–92 % — **in band** | +5.5 | 2.88 % | 17.3 pp | −0.21 pp | 1.22 | 81.6 |
+| 3 | **81.5 %** | 76–92 % — **in band** | +5.5 | 3.38 % | 17.3 pp | −0.21 pp | 1.22 | 81.6 |
 | 4 | **74.1 %** | 66–85 % — **in band** | +8.1 | 3.38 % | 25.5 pp | +0.10 pp | 1.06 | 94.9 |
 | 5 | **66.0 %** | 55–78 % — **in band** | +11.0 | 3.80 % | 29.0 pp | +0.27 pp | 0.98 | 110.8 |
 
@@ -1383,15 +1418,52 @@ binomial standard error of the 1,000-seed reading, which is the check that the l
 of the design and not of a sample.
 
 **What the per-car column says, and why it is the one to read.** `p` runs
-`0.92 / 2.53 / 2.88 / 3.38 / 3.80 %`, rising at every step, and each value sits inside its own
-band's window from §7.1.10 — at least **0.41 pp above each floor and 1.00 pp below each cap**
-(band 3 is the tightest from below, band 4 from above). That is the ladder working the way the
-design says it works: an unamplified per-car quantity that rises monotonically, read through a
-threshold that turns it into the five clear rates above. It is also the number a regression should
-be stated in, for §7.1.10's reason. **The windows are not a predictor** — §7.1.10's closing
-paragraph says why the binomial sits above the measurement — so this is a statement that the
-ladder has room on both sides, not a derivation of the clear rates in the table above, which are
-measured.
+`0.92 / 2.53 / 3.38 / 3.38 / 3.80 %`. It is **non-decreasing, and it is flat across bands 3 and
+4** — 3.3801 % against 3.3807 %, a difference of 0.0006 pp, which is not a step in any sense a
+measurement can defend. Each value sits inside its own band's window from §7.1.10, at least
+**0.47 pp above each floor** (band 2 is the tightest from below) and at least **0.76 pp below each
+cap** (band 3 is the tightest from above); per band the margins are
+`+0.92 / +0.47 / +0.91 / +0.53 / +0.63` pp above the floor and
+`4.40 / 1.42 / 0.76 / 1.00 / 1.03` pp below the cap.
+
+*Round 7 corrected this column: band 3 was recorded as 2.88 % from slice 1b onward and the measured
+value is 3.38 %. The other four bands re-measured unchanged to two decimals, so the definition —
+misroutes over arrivals, summed across all 1,000 runs, not averaged per level — was right and one
+number was wrong. No verdict moves: 3.38 % is still inside band 3's `[2.47 %, 4.14 %]` window, and
+the clear rates in the table are measured rather than derived from `p`. What does move is the
+claim: the sentence here used to say `p` rose at every step, and it does not.*
+
+**That the ladder flattens between bands 3 and 4 is a finding with a measured mechanism, not a
+defect.** Decompose `p` one level further. Over the same 1,000 seeds per band, counting a
+*decision* as §7.1.6 `evaluate` does — a branch node the car actually crossed whose two branches
+differ in whether they reach that car's colour — the bot faces
+`1.77 / 2.01 / 2.31 / 2.51 / 2.78` decisions per arriving car and answers each one wrongly
+`0.53 / 1.32 / 1.53 / 1.39 / 1.41 %` of the time. **Decisions per car rise monotonically;
+per-decision error does not — it peaks at band 3 and falls 0.14 pp at band 4.** `1 - (1 - q)^d` on
+those two
+columns gives `0.93 / 2.63 / 3.50 / 3.44 / 3.87 %`, which reproduces the measured `p` to about a
+tenth of a point, so the flat step is precisely this: band 4 asks each car 0.20 more questions and
+makes each question 0.14 pp easier, and the two cancel.
+
+Why band 4's questions are easier is the same fact §7.4's round-6 record already carries under
+another name. From band 3 the spawn rate *falls* — `0.566 → 0.545 → 0.500 /s`, `interval`
+`106 → 110 → 120` — so each decision gets more time even as there are more of them per car. **The
+late bands buy depth with traffic, and that trade is visible as flatness in `p` at exactly the band
+where the trade begins.** R2 and R3 are stated in clear rate and both pass at 3→4 with 3.4 and
+7.6 pp to spare, so nothing in §7.2.1 requires a step in `p` at every pair. **What would be a
+defect is `p` falling**, and it does not.
+
+That is the ladder working the way the design says it works: an unamplified per-car quantity that
+does not fall, read through a threshold that turns it into the five clear rates above. It is the
+column a regression should be stated in, for §7.1.10's reason — **including its flat 3→4 step**,
+which is now part of what "unchanged" means here. **The windows are not a predictor** — §7.1.10's
+closing paragraph says why the binomial sits above the measurement — so this is a statement that
+the ladder has room on both sides, not a derivation of the clear rates in the table above, which
+are measured. Anyone tempted to buy a step at 3→4 by lowering band 3's `p` should price it
+first. Band 3 has 0.91 pp of room to its floor, so the `p` move is affordable; the clear-rate
+consequence is not free, because a higher band-3 clear rate **shrinks** the 2→3 drop (R2, +6.0 pp
+of margin today) and **grows** the 3→4 drop (R3, 7.6 pp to spare today). Both have room. Neither
+has so much that the trade can be made without measuring it, and §7.4 requires it to be.
 
 **AC-246 is looser everywhere and loosest where it used to be tightest.** Gaps
 `−0.39 / −0.69 / −0.21 / +0.10 / +0.27` pp against ceilings `3.13 / 1.52 / 1.22 / 1.06 / 0.98`.
@@ -1409,15 +1481,18 @@ still clears 100 % at every band with zero misroutes ([AC-220](acceptance-criter
 measured tap rate is `0.42 / 0.61 / 0.73 / 0.70 / 0.71 /s` against
 [AC-233](acceptance-criteria.md)'s 1.25 ceiling, and [AC-139](acceptance-criteria.md)'s spawn
 margin, re-derived and re-run over 2,000 seeds per band in both oracle variants, is **3 at every
-band** — better than the `3 / 3 / 3 / 3 / 3` it replaced only in that its worst case is now
-identical rather than merely adequate.
+band**, against the `3 / 2 / 3 / 3 / 3` it replaced — the derived `SPAWN_SLACK` moved
+`8 / 8 / 9 / 9 / 10` → `8 / 10 / 10 / 9 / 9` under the new `interval` column without anyone editing
+it, which is what [`gameplay.md` §8.4](gameplay.md#84-spawn-slack-is-derived-not-chosen--decided)
+exists to make happen.
 
 **What escalates, now that `interval` does not.** This is the design position the new table commits
 to and it should be argued with rather than absorbed. Through bands 1 to 3 the spawn rate rises,
 `0.385 → 0.556 → 0.566 /s`; from band 3 to band 5 it *falls*, to `0.545` and `0.500`. What rises
 across the whole ladder is the demand each car makes — decisions per car `2.0 / 2.5 / 2.7 / 3.2 /
 3.3`, measured focus events per second `1.80 / 2.36 / 2.65 / 3.09 / 3.30` (§7.1.9), per-car error
-`0.92 / 2.53 / 2.88 / 3.38 / 3.80 %` — and the number of cars that have to be got right in a row,
+`0.92 / 2.53 / 3.38 / 3.38 / 3.80 %` (non-decreasing, flat at 3→4) — and the number of cars that
+have to be got right in a row,
 `quota` at `16 / 33 / 41 / 47 / 51`. The late bands are not quieter; they are boards where each car
 is a longer job and the traffic has to thin to leave room for it. **Traffic was carrying the ladder
 and it could not carry it past band 3**, which §7.4's round-6 record proves rather than asserts.
