@@ -4,8 +4,8 @@
 what the next action is. `docs/development-process.md` says *how* work is done; this says *where
 it is*.
 
-Last updated: **design round 8** (`c62b84f`) — the owner played the game and redirected it.
-148 unit tests and 17 E2E green on `slice-2-play`, but against the *previous* design.
+Last updated: **round 8 implemented** (`5c03e4a`). 157 unit tests and 19 E2E green on
+`slice-2-play`. Design round 9 (difficulty levers) is in flight.
 
 ---
 
@@ -16,7 +16,7 @@ Last updated: **design round 8** (`c62b84f`) — the owner played the game and r
 | **0** | Squad, scaffold, toolchain, design | **Done**, merged to `main` |
 | **1** | Simulation engine, generator, headless harnesses | **Done**, merged to `main`. Every §7.2 target in band. |
 | **1b** | Attention model, entry geometry, difficulty levers | **Done**, merged with slice 1 |
-| **2** | React state layer + Skia play surface | **Built and playing** on `slice-2-play`; now being reworked to round 8 |
+| **2** | React state layer + Skia play surface | **Built, playing, reworked to round 8**, on `slice-2-play`. Not yet merged. |
 | **3** | Visual system, motion, accessibility | Not started |
 | **4** | Meta progression, persistence | Not started |
 | **5** | Polish — sound, haptics, juice | Not started |
@@ -64,68 +64,106 @@ Also outstanding from the playtest and slice 2:
   59–301 runs per 1,000, against 0–5 with curves. Two structural repairs were measured and
   rejected. AC-513 now reports a rate and **asks for a screenshot**.
 
+### Queued by the owner — the Train of Thought identity question
+
+**Deferred by the owner, not dropped.** To be taken up after the current lever round.
+
+The owner played round 8: *"better. But it feels so different with train of thought, in a worst
+way."* Three structural divergences from the game this reimplements:
+
+| | the reference game | Offramp today |
+|---|---|---|
+| entry points | several, spatially separated | **one** |
+| network | a dense web with merges | a merge-free tree |
+| things moving at once | many | **2.7–3.8, flat from band 2** |
+
+**Two of the three rejections were measured under a geometry that no longer exists:**
+
+- **`gameplay.md` §8.1 dropped two entries** because a merge-free tree needs `K−1` terminal
+  columns per entry, so two entries at four colours needed six columns, which broke the 44 pt tap
+  target at 320 pt width. Round 8 moved every number in that argument. This is the biggest
+  divergence: "divided attention" was meant to be **spatial**, and with one entry it is only
+  temporal — everything arrives down the same road, in sequence.
+- **§8.2 rejected merges** because preventing convergence required equal **Bézier arc length** on
+  every path, which rejected essentially every candidate. Path length is now `|Δx| + |Δy|` in
+  integers, and equalising integer lengths on a lattice is a different problem.
+
+Neither is to be reopened casually — both are recorded rejections with real measurements behind
+them. The point is that `development-process.md` §6.4 applies to our own conclusions too: *a
+snapshot is a snapshot, not the truth.*
+
+**The likely shared cause of the flat ladder and the sparse feel:** cars in flight measure
+2.72 / 3.70 / 3.74 / 3.77 / 3.66 — flat from band 2, never above four. Orthogonal jogs made
+journeys 20–30 % longer while `interval` falls only 8.6 % across bands 3–5. The two cancel.
+
 **After that:** rebuild the Android dev build so the owner can play again. That loop — build,
 play, redirect — is now the most valuable thing in the project (`development-process.md` §6.9).
 
 ---
 
-## Slice 0 — done
+## What each slice actually contains
+
+### Slice 0 — done, on `main`
 
 Scaffold (Expo SDK 56 / RN 0.85 / React 19 / Skia 2.6.2, JavaScript), the three-agent squad in
-`.claude/agents/`, the process document, and the full design.
+`.claude/agents/`, the process document, and the first full design.
 
 Two things worth knowing rather than rediscovering:
 
-- **Skia renders nothing on web without help**, and web is where tier-3 Playwright verification
-  runs. It needs `public/canvaskit.wasm` served *and* the app import deferred until `LoadSkiaWeb`
-  resolves — a static `import App` evaluates Skia's module graph too early and throws regardless
-  of the wasm being present. Both are in `index.js`.
+- **Skia renders nothing on web without help**, and web is where tier-3 verification runs. It
+  needs `public/canvaskit.wasm` served *and* the app import deferred until `LoadSkiaWeb` resolves
+  — a static `import App` evaluates Skia's module graph too early and throws regardless of the
+  wasm being present. Both are in `index.js`.
 - **`npm ci` once failed on a fresh clone** because `public/`'s only file is gitignored and git
   does not carry empty directories. `tools/sync-wasm.mjs` mkdirs. Do not inline it back.
 
-## Slice 1 — code done, green, difficulty open
+### Slice 1 + 1b — done, on `main`
 
-`src/engine/` (simulation + generator), `test/` (93 tests), `tools/` (replay, bot, pacing,
-generator-audit). CI runs all of it plus iOS/Android/web bundles.
+The pure simulation, the generator, and the headless harnesses. It took six design rounds, and
+what they bought was not the engine — it was an instrument that measures the right thing:
 
-**What is proven:** determinism in-process and cross-process; generator audit clean over 25,000
-levels; the unconstrained solver clears 100 % of levels; completion times inside every band with
-the slowest run anywhere at 113.5 s against a 130 s ceiling; every harness proven to fail before
-being trusted.
+1. The bot's specification was ambiguous; one band's clear rate swung 0.7 % → 30 % → 100 % across
+   three defensible readings of it.
+2. The rebuilt bot modelled **timing**, not attention. A sensitivity guard the designer wrote
+   against its own self-deception (**AC-240**) is what caught that.
+3. The entry road was too short to hold a decision, so most bands were measuring a generator coin
+   flip rather than difficulty.
+4. The remaining bimodality was one under-served decision amplified by a binomial threshold.
+5. The old `quota` ladder left 1.2 pp of per-car error for the whole five-band range — inside one
+   standard error of failing. Not impossible: **unmeasurable**.
 
-**What is not:** the constrained-bot clear rate. First trustworthy reading is
-**98.0 / 79.3 / 38.4 / 19.1 / 2.0 %** against targets of ≥95 / 86–97 / 76–92 / 66–85 / 55–78. R2
-(the ≥4 pp gradient) passes everywhere; R3 (≤15 pp) fails at all four pairs. **That gap is now a
-statement about the game, not about the gauge** — which took three rounds to be able to say.
+### Slice 2 — built and playing, on `slice-2-play`, not merged
 
-## Slice 1b — design committed, implementation pending
+React state layer, Skia play surface, tiers 3 and 4. Then reworked twice: design round 7 (two live
+defects found while ratifying six values the spec never defined) and **design round 8**, the
+owner's redirect.
 
-Three findings, each of which changed the design:
+`src/engine/serialise.js` feeds `window.__offramp`, which is how tier 3 sees state at all — a Skia
+canvas has no queryable elements. `src/engine/clock.js` is the sole ms→tick boundary.
 
-1. **The bot's spec was ambiguous** and the clear rate swung 0.7 % → 30 % → 100 % across three
-   readings of it. Rewritten as a labelled ladder where every branch returns.
-2. **The bot measured timing, not attention.** It now has a working set of 3, pays ticks to
-   glance/acquire/switch, forgets after 2 s, and only avoids breaking cars it currently holds.
-   **AC-240** guards this: strip attention, keep timing, and the clear rate must rise ≥ 20 pp.
-3. **The entry road was too short to hold a decision.** A junction on row 0 was unreachable —
-   450 ms of travel against 27 ticks of unavoidable latency — so bands 2–5 were measuring
-   `P(row 0 is a pass node)`, a coin flip. Fixed by translating the lattice down 60 LU.
-   AC-240 then passes at bands 2–5 **with no change to the bot**, which is what proved the
-   instrument had been right all along.
+### Slices 3–6 — not started
 
-## Slices 2–6 — not started
+3 is the visual system, motion and accessibility. 4 is progression and persistence. 5 is sound,
+haptics and juice. 6 is store readiness.
 
-Slice 2 is the React state layer and the Skia play surface, and it is done when **the game plays
-on a real phone**. Read `docs/device-testing.md` before starting it: Skia is a native module, so
-Expo Go cannot run this app and iteration goes through an EAS cloud dev build.
+**Carried into slice 3, and load-bearing for a measurement rather than for a look:** **AC-517**
+requires a car's arrival to be an abrupt onset, never a fade. A gradual luminance ramp abolishes
+onset capture, which is the mechanism the bot model and every §7.2 number rest on. If the renderer
+ships a fade-in, the drawing falsifies the player model and **nothing in the clear rate would
+show it.**
 
-Three things slice 2 will need that already exist: `src/engine/serialise.js` for the
-`window.__offramp` snapshot tier-3 asserts against, `src/engine/clock.js` for the ms→tick
-boundary (it already guards non-finite deltas), and `ui.md` §7.6's depot-mouth draw order, which
-changes the car and depot layer ordering.
+---
 
-`eas init` has **not** been run — `app.json` has no `extra.eas.projectId`, so no device build has
-ever been made.
+## Device builds
+
+`eas init` **has** been run; `app.json` carries the project id. **One Android dev build exists**
+and installs, which proved the native Skia path compiles — but it predates round 8 and is stale.
+
+`expo-dev-client` is installed. It was missing until the first real build attempt refused, after
+`docs/device-testing.md` had described the flow since slice 0 and three agents had relied on it. A
+documented procedure that has never been executed is a plan, not a path.
+
+iOS has never been built: it needs the owner's Apple credentials at an interactive prompt.
 
 ---
 
