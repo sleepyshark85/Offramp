@@ -1,11 +1,11 @@
 # Offramp
 
 A real-time attention game for iPhone and Android. Coloured cars enter a road network from
-the top, roll along fixed lanes, and must reach the depot matching their colour. The player
-taps junctions to flip which branch is open. Cars keep coming and overlap in time; the
-pressure is divided attention, not reflex. A level is bounded — deliver the quota and you
-win, run out of lives and you lose — and is tuned to finish inside roughly two minutes,
-because sustained attention past that is not a thing players have.
+the top, roll along horizontal and vertical lanes, and must reach the depot matching their
+colour. The player taps junctions to flip which branch is open. Cars keep coming and overlap
+in time; the pressure is divided attention, not reflex. **A level is exactly two minutes.**
+Your score is the cars you delivered; three misroutes ends the run early. Two minutes because
+sustained attention past that is not a thing players have.
 
 Road networks are **procedurally generated**, not authored.
 
@@ -18,9 +18,10 @@ JavaScript, not TypeScript. iPhone first; Android is a first-class target that c
 flight, and the exact next action. This file says what the project *is* and what its rules are;
 that one says where the work has got to.
 
-Current position, in one line: slices 0 and 1 are built and green on branch `slice-1-engine`
-(draft PR #1); four rounds of design changes are committed and **not yet implemented**; `main`
-carries slice 0 only.
+Current position, in one line: slices 0-2 are built, merged or on `slice-2-play`, and **the game
+plays** — but the owner has played it and redirected the design (fixed 2:00 clock, orthogonal
+roads, smaller cars, no junction in the first row), so the engine is mid-rewrite against
+`docs/design/` round 8.
 
 The squad in `.claude/agents/` is invoked by name — `game-designer`, `game-developer`,
 `game-tester`. They are registered at session start, so a session that created them cannot use

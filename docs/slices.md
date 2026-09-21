@@ -4,7 +4,8 @@
 what the next action is. `docs/development-process.md` says *how* work is done; this says *where
 it is*.
 
-Last updated: **slice 1 merged to `main`** (`23d3bc1`). 105 tests green on `main`.
+Last updated: **design round 8** (`c62b84f`) — the owner played the game and redirected it.
+148 unit tests and 17 E2E green on `slice-2-play`, but against the *previous* design.
 
 ---
 
@@ -15,7 +16,7 @@ Last updated: **slice 1 merged to `main`** (`23d3bc1`). 105 tests green on `main
 | **0** | Squad, scaffold, toolchain, design | **Done**, merged to `main` |
 | **1** | Simulation engine, generator, headless harnesses | **Done**, merged to `main`. Every §7.2 target in band. |
 | **1b** | Attention model, entry geometry, difficulty levers | **Done**, merged with slice 1 |
-| **2** | React state layer + Skia play surface | **In progress** on `slice-2-play` |
+| **2** | React state layer + Skia play surface | **Built and playing** on `slice-2-play`; now being reworked to round 8 |
 | **3** | Visual system, motion, accessibility | Not started |
 | **4** | Meta progression, persistence | Not started |
 | **5** | Polish — sound, haptics, juice | Not started |
@@ -27,35 +28,44 @@ Last updated: **slice 1 merged to `main`** (`23d3bc1`). 105 tests green on `main
 
 ## → The next action
 
-**Slice 2: the React state layer and the Skia play surface.** It is done when **the game plays
-on a real phone** — not when it bundles.
+**Implement design round 8.** The owner played the game for the first time and changed four
+things. This is tier-5 feedback and it is not up for debate; `docs/design/` is already revised
+and committed at `c62b84f`.
 
-Read `docs/device-testing.md` first. Skia is a native module, so **Expo Go cannot run this app**;
-iteration goes through an EAS cloud dev build, and `eas init` has never been run.
+1. **A level is exactly 2:00** (`LEVEL_TICKS = 7200`). `quota`, `phase === 'won'` and the entire
+   points system are deleted. Score is cars delivered; three misroutes still ends a run early.
+2. **Orthogonal roads only** — horizontal and vertical runs with rounded corners. No Béziers, no
+   arc-length tables, no `diagLen`. **Every float leaves `src/engine/`.** New rule **V15**: a pass
+   node's outgoing edge is vertical; only a branch changes column.
+3. **Smaller everything.** Car 104×66 LU (was 140×84), road 84 (was 104). Both AC floors are now
+   tight rather than comfortable: 44.16 pt junction target, 20.24 pt car body.
+4. **V14 — the row-0 node is always a pass**, enforced in construction. First decision goes from
+   the 717 ms the owner rejected to 2.00–2.65 s.
 
-What already exists that slice 2 needs:
+**22 sites in `generation.md` and 8 ACs are marked `(to be measured)`.** Round 6's numbers are
+quoted only as history and **none of them transfers.** The developer's sweep produces the real
+ones: all five clear rates, all five `p`, AC-246 gaps, AC-240 rises, tap rate, the attention
+report, the actionable-junction oracle, delivery medians, and AC-513's converging-car rate.
 
-- `src/engine/serialise.js` — for the `window.__offramp` snapshot tier-3 asserts against. The
-  canvas has no queryable elements, so this is how Playwright sees state at all.
-- `src/engine/clock.js` — the ms→tick boundary, already guarding non-finite deltas. The React
-  layer owns the timer; the engine never sees a millisecond.
-- `ui.md` §7.6 — the depot-mouth draw order, which puts cars **beneath** the depot layer.
-- `ui.md` §4.2 — draw order, renumbered in round 5 when the entry flare was added.
+Harness changes: `tools/spawn-schedule.mjs` replaces `tools/spawn-margin.mjs`,
+`tools/converge.mjs` is new, `tools/pacing.mjs` is **deleted** (the clock makes it trivially
+true), `generator-audit --geometry` is new.
 
-Two things in slice 2 are load-bearing for correctness, not just for looks:
+Also outstanding from the playtest and slice 2:
 
-1. **`AC-517` — a car's arrival must be an abrupt onset, never a fade.** A gradual luminance
-   ramp abolishes onset capture, which is the mechanism the entire bot model and every §7.2
-   number now rests on. If the renderer ships a fade-in, the drawing falsifies the player model
-   and **nothing in the clear rate would show it.** This is slice 3 work but it constrains slice 2's
-   draw order.
-2. **`tools/layout-sweep.mjs` does not exist** (`development-process.md` §9, AC-604), and
-   AC-411's device-matrix clause waits on it. Build it in slice 2.
+- **Backgrounding pauses too eagerly on web.** Correct on a phone — a phone call must not advance
+  the simulation — but web is only a dev harness and it interrupted the owner's play session.
+  Make it lenient on web only.
+- **The title screen's buttons are not centred.** Fixed 340 pt wide and left-aligned, so at any
+  width above ~372 they sit left of the title. Measured at three widths.
+- **`tools/layout-sweep.mjs` exists now**, but its numbers are stale — the design rect is
+  1000×1500 and every geometry constant moved.
+- The **depot is materially worse** under orthogonal routing: two cars come within a car length in
+  59–301 runs per 1,000, against 0–5 with curves. Two structural repairs were measured and
+  rejected. AC-513 now reports a rate and **asks for a screenshot**.
 
-**Also open:** designer round 7 is correcting stale numbers in `gameplay.md` and `generation.md`
-— band 3's measured per-car error is 3.38 %, not the 2.88 % recorded, which makes §7.2.4's
-"rising at every step" false (it is flat across bands 3 and 4). No verdict changes; the numbers
-are wrong. `ui.md` is untouched by that round, so slice 2 can proceed against it.
+**After that:** rebuild the Android dev build so the owner can play again. That loop — build,
+play, redirect — is now the most valuable thing in the project (`development-process.md` §6.9).
 
 ---
 
