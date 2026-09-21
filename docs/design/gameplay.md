@@ -115,9 +115,9 @@ A car's state is:
 { id: int, colour: int, edgeId: int, progress: int }   // progress in MLU, 0 <= progress < edge.lengthMlu
 ```
 
-Advancing is `progress += speedMluPerTick`, an integer addition. There is no float anywhere in
+Advancing is `progress += CAR_SPEED`, an integer addition. There is no float anywhere in
 the simulation. `distance += 0.0567` over 7,200 ticks is not the same number on an arm64 phone
-and an x86 CI box; `progress += 3350` is.
+and an x86 CI box; `progress += 2750` is.
 
 **Edge lengths are now computed, not tabled, and that is the whole of what orthogonal roads cost
 the simulation — a negative amount.** Every road segment runs horizontally or vertically
@@ -222,7 +222,7 @@ step(state, inputs):
         push { type:'spawn', carId, colour }
 
   4. ADVANCE — for each car in ascending id order:
-        car.progress += level.speedMluPerTick
+        car.progress += CAR_SPEED
         while car.progress >= edge(car.edgeId).lengthMlu:
            car.progress -= edge(car.edgeId).lengthMlu
            node = edge(car.edgeId).to
@@ -541,7 +541,19 @@ LIVES = 3
 ```
 
 Three is the smallest number that supports a distinct **last life** state (which the UI needs to
-communicate jeopardy, [`ui.md` §8.5](ui.md#85-last-life)) while still allowing two recoveries. A
+communicate jeopardy, [`ui.md` §8.5](ui.md#85-last-life)) while still allowing two recoveries. **It
+is the same three at every band, and round 9 measured that choice rather than inheriting it** — the
+reference game this reimplements tightens lives with level, so the axis was tried. One life is worth
+**16 to 26 percentage points** of clear rate at this ladder's per-car error, against a 15-point
+ceiling on any single band-to-band step, and a band given fewer lives has to be given a *sparser*
+board to stay in window — which is the opposite of what the ladder escalates.
+[`generation.md` §6.1.5](generation.md#615-lives-were-measured-as-a-lever-this-round-and-they-are-too-strong-to-be-one)
+has the measured misroute distribution and prices the one shape in which lives could still be used:
+**an extra rung past band 5, not a re-tune of it.** That is on the owner's list, not the designer's
+([`generation.md` §7.4.2](generation.md#742-the-tier-5-register--what-only-the-owner-can-settle)
+item L).
+
+ A
 level ends on the terminal check of the tick in which the third life is lost — that is, after
 every arrival on that tick has resolved (§2.6), not in the middle of them. `lives` is clamped at
 0, so two misroutes on the tick that takes the player from one life to none leave `lives === 0`,
@@ -741,9 +753,12 @@ is about the gap between **two cars** at one junction. It says nothing about the
 
 Two cars arrive at the same junction only if they took the same path to it, so their arrival
 separation equals their spawn separation. The minimum across all bands is band 5's
-`128 - 32 = 96` ticks = **1.60 s**. The full set is `2.53 / 1.90 / 1.73 / 1.67 / 1.60 s`, and it
-is monotone decreasing for the first time in this design's history, because
-[`generation.md` §6.1](generation.md#61-the-table)'s `interval` column now is.
+`128 - 26 = 102` ticks = **1.70 s**. The full set is `2.77 / 1.95 / 1.87 / 1.75 / 1.70 s`, monotone
+decreasing, because [`generation.md` §6.1](generation.md#61-the-table)'s `interval` column is.
+
+*Every one of those numbers rose in round 9, and none of them was bought with a lever pull. They
+rose because car speed stopped rising up the ladder: the window is `(interval - 2*jitter) / 60`, and
+holding the board's occupancy at a target while `speed` falls means `interval` goes up.*
 
 What this section claims is a floor, and the floor is **1.50 s**. One and a half seconds is four
 times the sum of a human's visual reaction (~250 ms) and tap (~100 ms). **No band asks the player
@@ -767,7 +782,7 @@ fit inside the time the car takes to travel from the entry node to that branch n
 
 ```
 L1                 = path length in LU from the entry node to the first branch node on the path
-firstDecisionTicks = ceil( L1 * MLU / speedMluPerTick )
+firstDecisionTicks = ceil( L1 * MLU / CAR_SPEED )
 ```
 
 **Row 0 is now always a pass node** ([`generation.md` §5](generation.md#5-validity-rules-what-rejects-a-candidate),
@@ -776,13 +791,20 @@ and under [`generation.md` §2.3](generation.md#23-edges)'s construction rule a 
 outgoing edge is vertical, so `rows[1]` holds exactly one node too and `L1` is at least
 `ENTRY_LEN + rowH`.
 
-| Band | speed | `ENTRY_LEN` alone (the old worst case) | `ENTRY_LEN + rowH` (the new one) | floor |
-|---|---|---|---|---|
-| 1 | 2750 | 80 ticks — 1.33 s | **159 ticks — 2.65 s** | 90 |
-| 2 | 2900 | 76 — 1.27 s | **151 ticks — 2.52 s** | 90 |
-| 3 | 3050 | 73 — 1.22 s | **132 ticks — 2.20 s** | 90 |
-| 4 | 3200 | 69 — 1.15 s | **125 ticks — 2.08 s** | 90 |
-| 5 | 3350 | 66 — 1.10 s | **120 ticks — 2.00 s** | 90 |
+| Band | speed | `ENTRY_LEN` alone (the old worst case) | `ENTRY_LEN + rowH` | round 8 | floor |
+|---|---|---|---|---|---|
+| 1 | 2750 | 80 ticks — 1.33 s | **159 ticks — 2.65 s** | 2.65 s | 90 |
+| 2 | 2750 | 80 — 1.33 s | **159 ticks — 2.65 s** | 2.52 s | 90 |
+| 3 | 2750 | 80 — 1.33 s | **146 ticks — 2.43 s** | 2.20 s | 90 |
+| 4 | 2750 | 80 — 1.33 s | **146 ticks — 2.43 s** | 2.08 s | 90 |
+| 5 | 2750 | 80 — 1.33 s | **146 ticks — 2.43 s** | 2.00 s | 90 |
+
+**The worst case moved from 2.00 s to 2.43 s in round 9, and nothing was traded for it.** Speed left
+the band table ([`generation.md` §6.1](generation.md#61-the-table)) because it was flattening the
+difficulty ladder, and this window is `(ENTRY_LEN + rowH) / speed`, so a ladder that stops
+accelerating stops shortening it. **No band is now given less time for its first decision than band 1
+was given in round 8** — which is the strongest form of the guarantee §6.9 asked for, because it does
+not depend on any number derived from the bot.
 
 > **The first-decision floor.** `firstDecisionTicks >= 90` (1.50 s) at every band, for every path,
 > in every generated level. ([AC-245](acceptance-criteria.md))
@@ -891,13 +913,19 @@ entry-to-first-junction transit, and that is §4.6b.
 
 Five bands. Level `N` maps to a band, and the band supplies every parameter.
 
-| Band | Levels | Colours `K` | Columns `C` | Rows `R` | Junctions `J` | Actionable `Ja` | Depth `D` | Speed (MLU/tick) | Speed (LU/s) | Interval (ticks) | Jitter | Arrivals `N` |
+| Band | Levels | Colours `K` | Columns `C` | Rows `R` | Junctions `J` | Actionable `Ja` | Depth `D` | `colW` | Interval (ticks) | Jitter | **Cars on screen** | Arrivals `N` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 1–4 | 3 | 3 | 5 | 3–4 | ≥3 | 2–3 | 2750 | 165 | **204 (3.40 s)** | ±26 | **32** |
-| 2 | 5–9 | 3 | 4 | 5 | 3–5 | ≥3 | 2–3 | 2900 | 174 | **150 (2.50 s)** | ±18 | **44** |
-| 3 | 10–15 | 4 | 4 | 6 | 4–6 | ≥4 | 2–4 | 3050 | 183 | **140 (2.33 s)** | ±18 | **47** |
-| 4 | 16–22 | 4 | 5 | 6 | 5–7 | ≥5 | 2–4 | 3200 | 192 | **132 (2.20 s)** | ±16 | **50** |
-| 5 | 23+ | 5 | 6 | 6 | 7–9 | ≥7 | 2–5 | 3350 | 201 | **128 (2.13 s)** | ±16 | **52** |
+| 1 | 1–4 | **3** | 3 | 5 | 3–4 | ≥3 | 2–3 | 300 | **208 (3.47 s)** | ±21 | **2.73** | **32** |
+| 2 | 5–9 | **4** | 4 | 5 | 3–5 | ≥3 | 2–3 | 264 | **147 (2.45 s)** | ±15 | **3.96** | **45** |
+| 3 | 10–15 | **4** | 4 | 6 | 4–6 | ≥4 | 2–4 | 264 | **140 (2.33 s)** | ±14 | **4.26** | **47** |
+| 4 | 16–22 | **5** | 5 | 6 | 5–7 | ≥5 | 2–4 | 198 | **131 (2.18 s)** | ±13 | **4.38** | **50** |
+| 5 | 23+ | **6** | 6 | 6 | 7–9 | ≥7 | 2–5 | 158 | **128 (2.13 s)** | ±13 | **4.40** | **51** |
+
+**Car speed has left this table.** It is `CAR_SPEED = 2750` MLU/tick = 165 LU/s at every band —
+the owner's instruction, and
+[`generation.md` §6.1.1](generation.md#611-cars-in-flight-is-the-ladder-and-it-has-exactly-two-inputs)
+is the measurement that says the per-band speed column was the thing flattening the difficulty
+ladder. **Lives are 3 at every band** and §4.1 records why that was measured rather than assumed.
 
 `quota` is gone. **`N` — the number of cars that arrive inside two minutes — has taken its place,
 and it is not a parameter.** It is `120 s / interval` less the cars still in transit at the bell,
@@ -922,13 +950,31 @@ the difficulty table may not be paid for it.
 
 | Step | What changes | Why that axis |
 |---|---|---|
-| 1 → 2 | Network widens (3→4 columns), **traffic rises sharply** (3.40 s → 2.50 s between cars), arrivals 32 → 44 | Level 5 is where the game stops being a tutorial. Band 1's sparseness is deliberate and is not a difficulty setting; this is the one step that spends most of the traffic budget at once |
-| 2 → 3 | **Fourth colour**, a sixth row, traffic rises again (2.50 s → 2.33 s) | A new colour is a new thing to hold, and the extra row is what actually pays for it — see below |
-| 3 → 4 | Network widens again (5 columns), more junctions, traffic rises (2.33 s → 2.20 s) | Width, now that four colours are habitual. More depots to keep apart, more roads between them |
-| 4 → 5 | **Fifth colour**, sixth column, the deepest paths, traffic rises (2.20 s → 2.13 s) | The ceiling. The longest jobs on the board, and the most of them to get right in a row |
+| 1 → 2 | Network widens (3→4 columns), **a fourth colour**, and the board **saturates**: 2.7 → 4.0 cars on screen at once, 3.47 s → 2.45 s between cars | Level 5 is where the game stops being a tutorial. Band 1 runs *below* the player's working set, so a car never has to be dropped; this is the step that takes it above, and that is the mechanical content of "the game starts" |
+| 2 → 3 | A **sixth row** — the deepest networks so far — and 4.0 → 4.3 cars | The one step where the colour count repeats. Depth is what it buys instead, and the extra row is what a fourth colour needed in order to mean anything |
+| 3 → 4 | Network widens again (5 columns), a **fifth colour**, more junctions, 4.3 → 4.4 cars | Width and colour together, now that four colours are habitual. More depots to keep apart, more roads between them |
+| 4 → 5 | **Sixth colour**, sixth column, the deepest paths, 4.4 cars | The ceiling, and it is a real one: six columns is the most `DESIGN_W = 1000` can carry at a 44 pt tap target, so six colours is the most this game can have ([`generation.md` §3.2.1](generation.md#321-colw-is-derived-not-chosen)) |
 
-**Every axis is monotone for the first time in this design's history, and the spawn interval is
-the reason.** Under the quota model
+**Four axes, and every one of them is visible to the player**: how many cars are on the screen, how
+many colours are in play, how wide and deep the network is, and how long the paths are. Round 8 had
+a fifth — **car speed** — which was invisible as escalation and was actively working against the
+others; it is now one constant at every band
+([`generation.md` §6.1](generation.md#61-the-table)). **Lives are deliberately not an axis**, and
+[`generation.md` §6.1.5](generation.md#615-lives-were-measured-as-a-lever-this-round-and-they-are-too-strong-to-be-one)
+is the measurement that decided it: one life is worth 16–26 percentage points of clear rate, against
+a 15-point ceiling on any single band-to-band step.
+
+**Cars on the screen is monotone for the first time in this design's history, and that is round 9's
+whole content.** Round 8's table read `2.72 / 3.70 / 3.74 / 3.77 / 3.66` — flat from band 2 and
+*falling* from band 4 to band 5 — because `interval` fell 37 % across the ladder while car speed
+rose 22 %, and the board's occupancy is `transit / interval`, so the two cancelled. The owner's
+instruction — *"the vehicle should keep their constant speed regardless of level, there should be
+more vehicles appears"* — is the fix, and
+[`generation.md` §6.1.1](generation.md#611-cars-in-flight-is-the-ladder-and-it-has-exactly-two-inputs)
+is the arithmetic for why it is the fix. The old paragraph below is kept because its *reasoning* about
+`interval` is still right; it was simply being cancelled by a column nobody was watching.
+
+ Under the quota model
 [`generation.md` §7.4.1](generation.md#741-the-lever-order-under-a-clock-and-what-round-6-proved-that-still-holds) proved that `interval`
 *could not* stay monotone past band 3: band 5 needed a long interval to clear its floor and band 4
 needed a short one to stay under its ceiling, so the ladder's traffic axis inverted. Under the
@@ -939,13 +985,13 @@ rise in `p` it used to cost, and the cliff that stopped band 4 → 5 disappears.
 [`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)
 has the arithmetic.
 
-What escalates alongside it is **decisions per car** (mean junction depth `2.35 / 2.54 / 2.87 /
-3.10 / 3.47`, measured over 3,000 seeds per band) and **cars that must be got right in a row**
-(`N` at `32 / 44 / 47 / 50 / 52`).
+What escalates alongside it is **decisions per car** (mean junction depth `2.36 / 2.57 / 2.87 /
+3.10 / 3.45`, measured over 3,000 seeds per band), **colours** (`K` at `3 / 4 / 4 / 5 / 6`) and
+**cars that must be got right in a row** (`N` at `32 / 45 / 47 / 50 / 51`).
 
-**One honest note on the 2 → 3 step.** The fourth colour on its own is worth very little: the bot
-pays per *car held*, not per colour in the world, so a colour costs attention mainly through the
-deeper networks it makes possible
+**One honest note on the colour axis, which is why the repeat sits at 2 → 3.** A colour on its own
+is worth very little *to the instrument*: the bot pays per *car held*, not per colour in the world,
+so a colour costs attention mainly through the deeper networks it makes possible
 ([`generation.md` §7.4.1](generation.md#741-the-lever-order-under-a-clock-and-what-round-6-proved-that-still-holds)). The step still reads
 as the game's biggest change to a player, because a fourth colour is a fourth thing to recognise
 and a fourth depot to remember, and that is why it stays where it is. But the difficulty it buys is
@@ -1065,7 +1111,7 @@ place so they are not re-argued in three:
   agree with the first.
 - **A level is cleared by surviving it** (§7). Not by delivering a number.
 
-### 8.1 One entry, not two — **decided**
+### 8.1 One entry, not two — **decided, and re-opened by the owner for a later round**
 An earlier draft gave bands 3–5 two entry points to create two independent attention fronts.
 It was dropped because the merge-free topology (§4.5) makes each entry's tree need
 `K - 1` terminal columns, so two entries with four colours need six columns, and at six columns
@@ -1078,7 +1124,16 @@ are preserved.
 reserve has been spent. A second entry is no longer available at any band without moving
 `DESIGN_W`.*
 
-### 8.2 Merge-free networks — **decided**
+> **Round 9, owner-directed: deferred, not settled.** The owner has read this rejection against
+> round 8's geometry and observed that every number in it moved — the design rectangle, `colW`, and
+> the tap-target margin — and that "divided attention" was meant to be *spatial*, which with one
+> entry it is not. **He has deferred the question to its own round and instructed that nothing be
+> changed or re-measured now, so round 9 changed nothing here.**
+> [`generation.md` §9.1](generation.md#91-two-entry-points-gameplaymd-81) is the brief for that
+> round: what has to be measured, with which harness, and the one number round 9 did settle — that
+> `C = 7` is impossible at `DESIGN_W = 1000` and why.
+
+### 8.2 Merge-free networks — **decided, and re-opened by the owner for a later round**
 Allowing two roads to merge above the depot row was prototyped and measured: to stop two cars
 converging and overlapping, the generator has to keep all paths to a node the same length, and that
 constraint rejects essentially every candidate network at bands 2–5 (measured: 0 valid networks in
@@ -1090,6 +1145,19 @@ that networks are trees rather than graphs, which is a smaller visual vocabulary
 *Round 8 measured the same constraint again in its narrowest possible form — equal path length to a
 shared **depot** only, which is the one place merging is allowed — and it is still unaffordable
 (§4.5b, V16). Two rounds, two constraint strengths, the same answer.*
+
+> **Round 9, owner-directed: deferred, not settled, and with one thing worth flagging.** Under
+> orthogonal routing a path's length is `ENTRY_LEN + r*rowH + jogs*colW`, and `r*rowH` is the same
+> for every path to row `r` — so "equal path length" has become **"equal jog count"**, an integer
+> condition on a small integer rather than an equality between two arc-length integrals. Both
+> previous measurements priced it as a **rejection filter** over a search that does not know about
+> it, and a rejection-sampling cost is evidence about the search, not about the space
+> ([`generation.md` §5.1](generation.md#51-why-v6-was-not-simply-strengthened) records the same
+> shape of mistake). **Nothing is changed here and nothing was re-measured**;
+> [`generation.md` §9.2](generation.md#92-merges-gameplaymd-82) is the brief for the round that
+> takes it up, including what it would retire — §4.5b, the depot terrace and
+> [AC-513](acceptance-criteria.md) all exist only because paths to a shared depot have different
+> lengths.
 
 ### 8.3 Always-on colour-blind glyphs — **decided**
 The glyph on car and depot is always drawn, not gated behind a setting. A mode that only some
@@ -1140,8 +1208,9 @@ is now what band 1 asks for. The ceiling stays at 1.25 /s because it was derived
 can do, not from how long it did it; what changes is that the *duration* at which it must hold is
 now uniform and maximal. [AC-233](acceptance-criteria.md) is re-measured under the new table and
 the estimate in [`generation.md` §6.3](generation.md#63-tap-load) is recomputed; the estimate is
-`0.49 / 0.69 / 0.76 / 0.87 / 0.94` taps/s, which is higher than the old estimate at bands 4 and 5
-because the networks are deeper, and still well inside the ceiling.
+`0.34 / 0.52 / 0.62 / 0.71 / 0.81` taps/s and the designer's 3,000-seed prototype measures
+`0.34 / 0.54 / 0.55 / 0.65 / 0.72`, every band well inside the 1.25 /s ceiling and the estimate
+overstating at four of five bands, in the direction §6.3 predicts.
 
 ### 8.7 The bot is a model of attention, not of timing — **decided**
 Slice 0's constrained bot constrained only *when* it could tap. Slice 1 measured the consequence:
@@ -1255,3 +1324,24 @@ Three things follow and they are not specific to this criterion:
 3. **The bot passing is not evidence that a human passes.** It is evidence that the design is
    consistent with the model. Where the two diverge, the model is what changes — §7.4's exception
    clause — and every target is then re-read, not just the failing one.
+
+### 8.8 Where the tier-5 questions live — **added round 9**
+
+Five decisions in this design turn on how the game *feels* rather than on what it measures, and
+`development-process.md` §6.9 is the rule that says a bot cannot settle any of them: **a threshold
+derived from the instrument's own constants is not evidence about a human.**
+
+They are gathered in one place —
+[`generation.md` §7.4.2](generation.md#742-the-tier-5-register--what-only-the-owner-can-settle) —
+with a measured price and a recommendation each, so that no tier-1 pass on one of them is read as
+settled. In short: **D** how busy the board should be, **L** whether lives should tighten at the
+top, **T** two-colour cars, **S** the one car speed, **R** whether the road recedes enough
+([`ui.md` §4.6](ui.md#46-the-ink-budget)), and **P** whether the palette is still bleak
+([`ui.md` §5](ui.md#5-colour)).
+
+**None is a blocker and the design is buildable on the recommendations.** The one that most deserves
+a play session is **D**: round 9 takes the board from 3.7 cars to 4.4 at band 5, and if the owner
+still reads that as sparse, the finding is about the *model of the player* rather than about the
+table — which is the one exception
+[`generation.md` §7.4](generation.md#74-when-a-target-is-missed) allows, and it re-reads every target
+rather than the failing one.

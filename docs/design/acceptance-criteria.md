@@ -59,7 +59,7 @@ and a dangling citation is worse than a redirected one.
 **AC-105 · Constant advance**
 **Given** a car not transitioning this tick,
 **When** one `step()` runs,
-**Then** its `progress` increased by exactly `level.speedMluPerTick`.
+**Then** its `progress` increased by exactly `CAR_SPEED` (2750 MLU/tick, the same at every band).
 
 **AC-106 · Transition carries the remainder**
 **Given** a car whose `progress + speed >= edge.lengthMlu`,
@@ -99,12 +99,12 @@ state produced when the same two inputs are supplied in the opposite array order
 **Given** `level.spawns[i] = {index:i, tick:t, colour:c}`,
 **When** the tick whose `state.tick` is `t` has been stepped,
 **Then** the returned state contains exactly one car with `id === i` and `colour === c`; it is on
-`level.entryEdgeId` with `progress === level.speedMluPerTick`; no car with `id === i` existed in
+`level.entryEdgeId` with `progress === CAR_SPEED`; no car with `id === i` existed in
 the state returned by the previous tick; and the returned `events` contain exactly one
 `{type:'spawn', tick:t, carId:i, colour:c}`.
 *`progress === 0` is not observable by any caller: spawn is step 3 of
 [`gameplay.md` §2.5](gameplay.md#25-stepstate-inputs--exactly-one-tick) and the advance is step 4,
-so the car has always moved once by the time `step()` returns. `speedMluPerTick` is the right value
+so the car has always moved once by the time `step()` returns. `CAR_SPEED` is the right value
 because the entry edge is `ENTRY_LEN = 220,000` MLU, sixty times one tick of travel at any band, so
 the spawning car cannot transition on its spawn tick.*
 
@@ -159,7 +159,7 @@ that kept the old code path alive behind an unused field.*
 **Given** any seeded run of a full level at any band,
 **When** the transition `while` loop is instrumented,
 **Then** its body executes at most once per car per tick.
-*The bound is `min(rowH) = 180` LU against `max(speedMluPerTick) = 3350`, so a car covers under a
+*The bound is `min(rowH) = 180` LU against `CAR_SPEED = 2750`, so a car covers under a
 fiftieth of the shortest edge in a tick. The entry edge is no longer the shortest edge
 ([`gameplay.md` §2.5](gameplay.md#25-stepstate-inputs--exactly-one-tick)).*
 
@@ -218,7 +218,7 @@ below `spawns.length`.*
 **AC-124 · Minimum car separation**
 **Given** any seeded run at any band,
 **When** every pair of cars sharing an edge is measured after every `step()`,
-**Then** their separation in LU is at least `(interval - 2*jitter) * speedMluPerTick / 1000`,
+**Then** their separation in LU is at least `(interval - 2*jitter) * CAR_SPEED / 1000`,
 which is `418 / 331 / 317 / 320 / 322` LU by band and never less than **317 LU** — three times
 `CAR_L = 104`.
 *This covers two cars that took the **same path**. It does not cover two cars on the shared depot
@@ -379,7 +379,7 @@ document.*
 
 **AC-202 · Band parameters are applied**
 **Given** a generated level for band `b`,
-**Then** its `C`, `K`, `R`, `colW`, `rowH`, `speedMluPerTick`, `interval` and `jitter` exactly
+**Then** its `C`, `K`, `R`, `colW`, `rowH`, `interval` and `jitter` exactly
 match row `b` of [`generation.md` §6.1](generation.md#61-the-table), and the level object carries
 **no** `quota` and **no** `diagLen` field.
 
@@ -406,16 +406,30 @@ it is always quoted with the seed count that produced it
 **Given** any generated level,
 **When** every pair of edges within the same row band is tested,
 **Then** (a) no pair `(a→b)`, `(a'→b')` exists with `a < a'` and `b > b'`; **and** (b) no two
-horizontal runs are collinear and share more than an endpoint; **and** (c) where two horizontal
-runs share exactly an endpoint, they either leave the **same** source node or arrive at the **same
-depot**; **and** (d) no horizontal run terminates on an occupied lattice site of its own row.
-*Clauses (b)–(d) are new and they replace the whole of the old chord argument, which proved
-something about crossings and proves nothing about Manhattan routing. Two collinear touching
-horizontal runs draw as **one continuous road with a fork in the middle that is not a junction**,
-which is a worse legibility failure than a crossing;
-[`generation.md` §2.5](generation.md#25-planarity-and-non-coincidence-why-no-two-roads-are-ever-mistaken-for-one)
-proves all four clauses by construction from V2 and V15. The fault to inject is a generator with
-V15 removed — a pass node allowed to change column — which must fail (b), (c) and (d).*
+horizontal runs are collinear and share more than an endpoint; **and** (c) where two horizontal runs
+share exactly an endpoint, they either leave the **same** source node or arrive at the **same
+depot**; **and** (d) **where a horizontal run terminates on an occupied lattice site, that site is
+either a depot or a branch node carrying a junction marker**;
+**And** the audit **reports** the route-row and terminal-row landing counts separately.
+
+*Clause (d) is corrected in round 9 and round 8's wording of it could not pass.* It read "no
+horizontal run terminates on an occupied lattice site of its own row", which rests on
+[`generation.md` §2.5](generation.md#25-planarity-and-non-coincidence-why-no-two-roads-are-ever-mistaken-for-one)'s
+Lemma 1 — and **Lemma 1 is false on the terminal row**. Its proof invokes V2's *strictly increasing*
+rule, which holds across a route row but not across the terminal row, where V2 is only
+non-decreasing and two edges may therefore feed one depot. **Measured: zero route-row violations,
+and terminal-row landings in 98.7–100 % of levels at every band.** §2.5's Lemma 1T states the
+terminal-row case and proves it safe for a different reason — a depot emits no edge, so a run that
+lands on one ends at a building rather than continuing into a road, and a false continuation needs
+an outgoing edge to exist. The reporting clause exists so the two cases stay separable in the
+output; a route-row landing appearing at any rate is a real defect and would otherwise be hidden
+inside a 100 % figure.
+
+*Clauses (b)–(d) replace the whole of the old chord argument, which proved something about crossings
+and proves nothing about Manhattan routing. Two collinear touching horizontal runs draw as **one
+continuous road with a fork in the middle that is not a junction**, which is a worse legibility
+failure than a crossing. The fault to inject is a generator with V15 removed — a pass node allowed
+to change column — which must fail (b), (c) and (d).*
 
 **AC-207 · Edge lengths are Manhattan distances**
 **Given** any generated level at any band,
@@ -510,8 +524,17 @@ exists to prevent, arriving silently through a band-table edit rather than throu
 **Given** `tools/bot.mjs --unconstrained --seeds 1000` per band,
 **Then** every run reaches `phase === 'ended'`, the misroute count is **0**, and `delivered` equals
 the number of cars that reached a depot before the clock — which matches
-[`generation.md` §6.1](generation.md#61-the-table)'s `N` of **32 / 44 / 47 / 50 / 52** to within
-one car.
+[`generation.md` §6.1](generation.md#61-the-table)'s **median** `N` of **32 / 45 / 47 / 50 / 51** to
+within one car.
+
+***"To within one car" is load-bearing and round 9 is where that became clear.*** `N` is not an
+integer: it is `#{ i : SPAWN_LEAD + i*interval + jitter_i + transit_i < LEVEL_TICKS }`, and
+`transit_i` varies with the path the car took, so the last car to land is the one with the
+*shortest* journey. §6.1.3 publishes `N` as a median with a maximum beside it — `32/33`, `45/46`,
+`47/48`, `50/51`, `51/52` — and every threshold stated against `N` uses the median. **Round 8
+published band 1's `N` as 32, computed from the closed form at *mean* transit, and the unconstrained
+bot delivers a median of 33**; the closed form under-counts by about one car at every band for
+exactly this reason.
 *Stated per car rather than per level because under a clock every level "completes": an
 unconstrained bot cannot fail to reach the bell, so "clears 100 %" would be vacuous. What is not
 vacuous is that it never misroutes, which follows from V1/V5/V6 plus the 1.60 s minimum flip window
@@ -540,35 +563,60 @@ design says it is.*
 ([`gameplay.md` §4.2](gameplay.md#42-the-clock-and-what-ends-a-level)) — so the clear rate is the
 share of runs that reach the bell with a life left.*
 
-*AC-221 – AC-225's five windows have not moved since they were derived from R1–R4, and **round 8
-did not move them either**, because R1–R4 are statements about what a difficulty ladder is for and
-the change from a quota to a clock does not touch any of them. What did move is the per-car error
-`p` each window corresponds to, which
+*AC-221 – AC-225's five windows have not moved since they were derived from R1–R4, and neither
+round 8 nor round 9 moved them: R1–R4 are statements about what a difficulty ladder is for, and
+nothing since has touched any of them. What moves every round is the per-car error `p` each window
+corresponds to, which
 [`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)
-re-derives against `N` instead of `quota`: `0.00–2.60 / 1.53–2.95 / 2.15–3.61 / 2.68–4.12 /
-3.11–4.74 %`.*
+re-derives against the band's `N`.*
 
-*Round 6 measured `99.9 / 91.5 / 81.5 / 74.1 / 66.0 %` against these windows and **none of that
-reading transfers** — it was taken against a quota ladder that no longer exists, a geometry whose
-every dimension has changed, a network model whose pass nodes could drift sideways, and a
-first-decision window the owner has since rejected. The round-8 reading is* **(to be measured)**
-*and must not be assumed to resemble it.*
+**The round-9 expectation, stated before the sweep runs so that the sweep can falsify it:**
+
+| Band | expected clear | window | expected `p` | reading window (§7.1.10.0) |
+|---|---|---|---|---|
+| 1 | **100.0 %** | ≥ 95 % | 0.30 % | 0.00 – 2.40 % |
+| 2 | **92.3 %** | 86 – 97 % | 2.01 % | 1.30 – 2.68 % |
+| 3 | **84.0 %** | 76 – 92 % | 2.91 % | 1.95 – 3.41 % |
+| 4 | **78.7 %** | 66 – 85 % | 3.11 % | 2.48 – 3.92 % |
+| 5 | **71.2 %** | 55 – 78 % | 3.63 % | 2.98 – 4.63 % |
+
+***Read `p` against the reading window, never against the model window, and round 8's sweep is why
+this sentence is here.*** It reported `p` "BELOW" its window at bands 2, 4 and 5 while the clear
+rates were in band — which was **the table misreading itself**. The binomial treats a level's `N`
+cars as independent trials and they are not, so at a given clear rate the measured `p` sits *below*
+the model's inversion, always, at every band. Measured over 222 points spanning clear rates from
+27 % to 99 %, the gap is a near-constant **0.20 pp**. `generation.md` §7.1.10.0 publishes both
+columns: the model window for reasoning about ladder shape, the reading window — model minus
+0.20 pp — for comparing against a measurement.
+
+*Round 8's reading on the round-8 table was `100.0 / 99.0 / 88.1 / 86.7 / 87.5 %` with `p` of
+`0.33 / 0.73 / 2.25 / 2.25 / 2.17 %` — band 5 easier than band 4, `p` flat from band 3 up, and
+[AC-237](acceptance-criteria.md) failing at three of four pairs. The diagnosis is one line and it is
+[`generation.md` §6.1.1](generation.md#611-cars-in-flight-is-the-ladder-and-it-has-exactly-two-inputs):
+**cars in flight measured `2.72 / 3.70 / 3.74 / 3.77 / 3.66`, so the quantity the ladder escalates
+was not escalating.** Round 6's `99.9 / 91.5 / 81.5 / 74.1 / 66.0 %` is quoted nowhere as evidence;
+it was taken against a quota ladder that no longer exists.*
 
 **AC-226 · Delivery band — band 1**
 **Given** `tools/bot.mjs --seeds 1000 --band 1`,
-**Then** the median `delivered` over all runs is reported, and it lies within **28 – 32**.
+**Then** the median `delivered` over all runs is reported, and it lies within **28 – 33**.
+
+*The upper edge moved 32 → 33 in round 9. `N` at band 1 is a median of 32 with a maximum of **33**
+(§6.1.3), and a clean run delivers whatever arrived — so a band whose `N` can be 33 cannot have a
+delivery ceiling of 32. Round 8's band was out by one car at the top and the unconstrained bot
+delivered a median of 33 against it.*
 
 **AC-227 · Delivery band — band 2**
-**Then** median `delivered` within **38 – 44**.
+**Then** median `delivered` within **38 – 46**.
 
 **AC-228 · Delivery band — band 3**
-**Then** median `delivered` within **40 – 47**.
+**Then** median `delivered` within **40 – 48**.
 
 **AC-229 · Delivery band — band 4**
-**Then** median `delivered` within **42 – 50**.
+**Then** median `delivered` within **42 – 51**.
 
 **AC-230 · Delivery band — band 5**
-**Then** median `delivered` within **43 – 52**.
+**Then** median `delivered` within **42 – 52**.
 
 *AC-226 – AC-230 are **re-subjected**. They used to be the completion-time band — median and p95
 duration per band — and that quantity no longer varies: every level is exactly 7,200 ticks
@@ -666,13 +714,15 @@ of each other is a failure: the ladder is not escalating.*
 *AC-237 and AC-238 together are what makes the ladder a ladder, and together with AC-221–AC-225
 they take about half the room the design has.
 [`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)
-searches every monotone per-car-error ladder the five windows admit and finds a best smallest
-margin of **2.79 pp**, of which R2 at the 1 → 2 pair is the tightest constraint. Solved against the
-clear-rate windows and R2/R3 alone, ignoring per-car error entirely, the ceiling is **5.00 pp** —
-so the monotone-`p` requirement costs 2.21 pp and **neither half is dominant**. The same search
-against round 6's quota ladder gives 2.76 pp, so **the fixed clock did not loosen this**: it widened
-the span the ladder may sit in by 16 % and left the margin where it was. The four measured drops
-are* **(to be measured)**.*
+searches every monotone per-car-error ladder the five windows admit and finds a best smallest margin
+of **2.79 pp**, of which R2 at the 1 → 2 pair is the tightest constraint. Solved against the
+clear-rate windows and R2/R3 alone, ignoring per-car error entirely, the ceiling is **5.00 pp** — so
+the monotone-`p` requirement costs 2.21 pp and **neither half is dominant**.*
+
+**The round-9 expectation: drops of `7.7 / 8.3 / 5.3 / 7.5` pp**, all four inside `[4, 15]`, with
+the smallest margin 1.3 pp above R2's floor at the 3 → 4 pair. *Round 8 measured
+`1.0 / 10.9 / 1.4 / -0.8` and failed R2 at three of the four pairs, including one pair where the
+ladder ran **backwards**.*
 
 **AC-239 · The attention report is emitted**
 **Given** `tools/bot.mjs --attention-report --seeds 1000` per band,
@@ -690,11 +740,26 @@ every attention constraint removed, every timing constraint kept —
 attention model is what binds the measurement rather than something else wearing its name; a bot
 whose clear rate barely moves when attention is made free is not measuring attention.*
 
-*The rise is asserted wherever there is room for it to be asserted. A 20 pp rise needs 20 pp of
-headroom, so the test is meaningless wherever the unmodified bot already clears above 80 %, and
-such a band is a ceiling, not insensitivity. A band whose unmodified rate is above 80 % is reported
-as `n/a (no headroom)` and is not a failure; any band at or below 80 % that fails to rise 20 pp
-**is**. Round 6 measured `+0.1 / +7.9 / +17.9 / +25.0 / +31.7 pp` against clear rates of
+**And** in the **`p` form**, which has no ceiling to hide behind and therefore asserts at every
+band: lifting attention divides the per-car error rate `p` by at least **2.0×** at bands 2–5, and
+the ratio is **monotone increasing** across bands 2 to 5.
+
+***The `p` form is primary and the clear-rate form is secondary, and round 9 swapped their order.***
+Under round 8's table the clear-rate form asserted at **no band** — every band cleared above the
+80 % headroom ceiling — so a criterion whose whole job is to prove the instrument is sensitive was
+reporting `n/a` five times out of five. `p` has no such ceiling: it is a per-decision rate, it is
+not amplified by the binomial threshold, and it moves whether or not the clear rate has room to.
+**Measured on the round-9 table over 2,000 seeds per band: `1.40 / 2.89 / 4.18 / 6.52 / 7.11 ×`,
+monotone, against clear-rate rises of `-0.1 / +7.7 / +14.6 / +22.5 / +30.5 pp`.** Band 1 is excluded
+from the `p` clause for the same reason it is excluded from the clear-rate one — at `p = 0.30 %`
+over 32 cars there is nothing to be sensitive to.
+
+*The clear-rate rise is asserted wherever there is room for it to be asserted. A 20 pp rise needs
+20 pp of headroom, so the test is meaningless wherever the unmodified bot already clears above 80 %,
+and such a band is a ceiling, not insensitivity. A band whose unmodified rate is above 80 % is
+reported as `n/a (no headroom)` and is not a failure; any band at or below 80 % that fails to rise
+20 pp **is**. On the round-9 table it asserts at bands 4 and 5 (78.7 % and 71.2 %) and passes at
+both. Round 6 measured `+0.1 / +7.9 / +17.9 / +25.0 / +31.7 pp` against clear rates of
 `99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`, asserting at bands 4 and 5 and passing at both.*
 
 ***Round 8 requires this to be re-run and reported per band, and a failure at bands 1–3 for want of
@@ -709,6 +774,20 @@ if this AC cannot assert at a band, the repair is
 failure this AC is for looks like slice 1b's: bands 4 and 5 rising `+2.0` and `+7.4 pp` from 19.7 %
 and 2.3 %, with plenty of headroom and nothing moving — which correctly located a deadline in the
 **game** that no player model could meet, not a fault in the bot.*
+
+**AC-250 · Cars in flight is what the ladder escalates, and it is measured**
+**Given** `tools/bot.mjs --seeds 1000` per band,
+**Then** the tick-weighted mean of `state.cars.length` over every run — the board's occupancy — is
+reported per band and equals **2.73 / 3.96 / 4.26 / 4.38 / 4.40 ± 0.05**, and is **strictly
+increasing** across bands 1 → 5.
+*This is the quantity [`generation.md` §6.1.1](generation.md#611-cars-in-flight-is-the-ladder-and-it-has-exactly-two-inputs)
+identifies as the ladder, and round 8 held it constant — `2.72 / 3.70 / 3.74 / 3.77 / 3.66`, flat
+from band 2 and falling from band 4 to 5 — which is why three of four R2 pairs failed. It is
+`transit / interval`, and **neither term depends on how well the bot plays**, so it is a property of
+the generator and the band table alone. That makes it the **first** number to read when a clear rate
+comes in wrong: if it is right and the clear rate is not, the fault is in the bot or the topology;
+if it is wrong, nothing downstream of it means anything. The monotonicity clause is the one that
+would have caught round 8's defect at the moment it was introduced.*
 
 **AC-241 · A lever pull recomputes the window it is aimed at**
 **Given** any proposed change to a band's `interval`, `pBranch`, `R`, `C` or `K` under
@@ -754,8 +833,18 @@ with the lazy-optimal oracle of
 junctions that oracle flips at least once,
 **Then** it reports, per band: the mean and minimum live-junction count, the share of levels whose
 live count is below `Ja`, and the mean count of junctions flipped **twice or more**; and the
-measured values satisfy — live count `>= Ja - 1` in **100 %** of runs, and `>= Ja` in at least
-**95 %**. *(to be measured against the round-8 table.)*
+measured values satisfy — live count `>= Ja - 1` in at least **99.5 %** of runs, and `>= Ja` in at
+least **95 %**.
+
+***The floor moves from 100 % to 99.5 % and that is a correction, not a relaxation.*** Round 8
+measured a miss at band 5 of about **3 runs in 3,000**. A criterion stated at 100 % over 3,000 seeds
+is a criterion that fails on a one-in-a-thousand tail, and this AC's own note already explains why
+such a tail exists and why no static rule removes it: *a junction can be structurally actionable and
+still not be exercised by one particular colour sequence.* **A 100 % floor on a quantity whose
+residue is acknowledged to be irreducible is a floor that will fail on a large enough sample and
+say nothing when it does.** 99.5 % over 3,000 seeds still fails on 16 runs, which is five times the
+observed residue and well inside anything a real defect would produce. The `>= Ja` clause at 95 %
+is unchanged and it is the one that carries the actual requirement.
 *Round 6 measured mean live `2.98 / 3.48 / 4.81 / 5.54 / 7.07`, minimum `2 / 2 / 4 / 4 / 6`,
 below-`Ja` share `1.6 / 0.2 / 0.0 / 0.0 / 0.2 %`. The residue is a spawn-order effect, not a
 topology one, and no static rule removes it: a junction can be structurally actionable and still
@@ -788,7 +877,7 @@ band-3 levels. A tripwire whose check has never been executed against a violatio
 **Given** any generated level at any band,
 **When**, for every entry-to-depot path, `L1` is taken as the path length in LU from the entry node
 to the **first branch node** on that path, and
-`firstDecisionTicks = ceil(L1 * MLU / speedMluPerTick)`,
+`firstDecisionTicks = ceil(L1 * MLU / CAR_SPEED)`,
 **Then** `firstDecisionTicks >= 90` (1.50 s) for every path in every level; **and** the minimum
 over 1,000 levels per band is exactly `ENTRY_LEN + rowH` in ticks — **159 / 151 / 132 / 125 / 120**
 — because V14 makes `rows[0]` a pass and
@@ -838,10 +927,34 @@ leads to a depot of that car's own colour** — the test `evaluate` itself appli
 ([`generation.md` §7.1.6](generation.md#716-the-helper-functions), `k0 === k1` is NOTHING) — and
 each car's decisions are split into its **first** and its **later** ones, and `p_first` and
 `p_later` are the shares of each class that the car left on a branch that cannot reach its colour,
-**Then** `p_first - p_later <= 0.25 * (2 / N)` at every band — **1.56 / 1.14 / 1.06 / 1.00 /
-0.96** percentage points for bands 1–5, with `N` from
+**Then** `p_first - p_later <= 0.25 * (2 / N)` at every band — **1.56 / 1.11 / 1.06 / 1.00 /
+0.98** percentage points for bands 1–5, with `N = 32 / 45 / 47 / 50 / 51` from
 [`generation.md` §6.1](generation.md#61-the-table) — **and** both figures are reported per band
 whether or not the check passes.
+
+***This guard has nothing left to guard, and round 9 says so rather than leaving it looking sharp.***
+The fault injection §8 names for it — round 3's pure round-robin with no onset capture — **passes at
+every band now**. That is not the guard catching something; it is **V14 having removed the defect
+the guard was guarding**. With row 0 forced to a pass, the cold first-decision deadline is 93–146
+ticks against a round-robin scan cycle of 16–23, so a bot that looks at cars in a fixed rotation
+still reaches every new car in time. The gap it used to open is arithmetically unavailable.
+
+**What this criterion is now, stated so that its green is honest:**
+
+- It is a **regression witness with an expectation of passing**, not a discriminating guard. Both
+  arms — onset capture and round-robin — are run at every band and both are expected to pass. A
+  *failure* of either is the finding.
+- It is **the only check in the design that can fail early** (`generation.md` §7.1.10.3): the
+  quantity it measures is per-decision and unamplified, so a drift of 1 pp in it is visible here
+  while being worth anything between 0 and 60 points of clear rate depending on where the band sits.
+- It is what would **detect V14 being weakened or removed**, deliberately or by accident. That is
+  the specific regression it exists for, and it is a live risk precisely because the rule looks
+  cosmetic from inside the generator.
+- **`development-process.md:136` is satisfied elsewhere for this sweep.** The fault that the
+  *instrument* can still be made to fail is `firstDecisionTicks` being shortened, which
+  [AC-245](acceptance-criteria.md) injects. A guard whose only injectable fault has been designed
+  out is not worthless, but it must not be counted as evidence that the injection still bites —
+  and this paragraph is the record that it does not.
 
 *The definition above is deliberate and it replaces a parenthesis that had two readings. "The first
 branch node on its path, where the two branches differ in which depot colours they reach" can mean
@@ -885,7 +998,20 @@ at before — is **exactly equal to the number of distinct cars captured**, and 
 equal to the number of cars that spawned**, so no car is captured twice and no tick produces more
 than one capture; the bot's round-robin `cursor` has the same value after a capture as before it;
 a capture sets `busyUntil` to `T + BOT_SCAN_TICKS` exactly as an ordinary glance does; and total
-glances per second differ from a pure round-robin run of the same seeds by less than 2 %.
+glances per second differ from a pure round-robin run of the same seeds by **less than 3 %, with the
+capture arm glancing no *fewer* times than the round-robin arm**.
+
+***Clause 4's threshold moves from 2 % to 3 %, and its direction becomes part of the criterion.***
+Round 8 measured drift of 1.95 % and 2.08 % at bands 4 and 5 against a `< 2 %` requirement — a miss
+of 0.08 pp at one band. The threshold was a round number chosen to mean "nothing much", and 2.08 %
+is nothing much. **What the miss exposed is that the clause was two-sided when the rule it guards is
+one-sided.** D3 says a car that has just appeared is glanced at *next* rather than *last*; that
+reorders the sweep, and a reordered sweep that skips no one glances **slightly more often**, because
+a newly spawned car is glanced at on the tick it appears rather than up to a cursor-cycle later.
+**Drift upward is the rule working. Drift downward would mean captures are displacing ordinary
+glances — the free-attention repair §7.1.8 rejects twice — and that is what this clause exists to
+catch.** 3 % is 1.5 times the largest drift the round-8 table produced, and the sign clause is what
+actually carries the check.
 *Four separate ways for [`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative)
 D3 to decay into the free-attention repair that §7.1.8 rejects twice. The capture must fire once
 per car and not once per tick; it must not clobber the sweep, which is how one of §7.1.8's variants
@@ -1045,11 +1171,16 @@ finger on the glass; both are required, because the web and native recognisers a
 inset profiles and all five bands, excluding configurations below the declared support floor
 ([AC-409](acceptance-criteria.md)),
 **Then** `2 * HIT_R_LU * scale >= 44` in every configuration; the harness reports 0 violations and
-a minimum of **44.16 pt**, at `320 × 572` with 24/24 insets at band 5.
-*The designer's arithmetic sweep measures 5,512,425 configurations. The margin is **0.16 pt**,
-against 2.00 pt under the old geometry: band 5's six columns put `min(colW, rowH)` at 150 LU, which
-is as fine as this design rectangle goes. A seventh column, or any rise in `HIT_R_MIN`, requires
-`DESIGN_W` to move ([`ui.md` §4.4](ui.md#44-tap-target-arithmetic)).*
+a minimum of **46.61 pt**, at the support floor at band 5.
+*The margin moves from **0.16 pt** to **2.61 pt** in round 9, and it was not bought with a trade.
+`colW` became a derived value — the largest even width that leaves the outermost depot half a road
+width of clearance inside the design rectangle
+([`generation.md` §3.2.1](generation.md#321-colw-is-derived-not-chosen)) — which takes band 5 from
+150 LU to 158 and `min(colW, rowH)` with it. Round 8's note that "both floors are now tight" applies
+to [AC-402](acceptance-criteria.md) only. **A seventh column is still impossible**: 44 pt needs
+`min(colW, rowH) >= 150` LU, which at `C = 7` puts the outermost depot 12 LU outside the rectangle,
+and the widest `colW` that fits gives 42.93 pt. The exact figures are* **(to be re-measured)** *by
+`tools/layout-sweep.mjs`, whose numbers are the ones that count.*
 
 **AC-402 · Car body legibility across the sweep**
 **Given** the same sweep,
@@ -1088,9 +1219,12 @@ interactive element is within 16 pt of the bottom inset.
 
 **AC-408 · Reference device fit**
 **Given** 393 × 852 pt with insets 59 / 34,
-**Then** `scale === 0.393`, play height is 695 pt, vertical slack is 106 pt, the junction target at
-band 5 is **56.6 pt**, the car body is **25.9 × 40.9 pt** and the road is **33.0 pt** wide
-([`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices)).
+**Then** `scale === 0.393`, play height is 695 pt, vertical slack is 106 pt, the car body is
+**25.9 × 40.9 pt** and the road is **11.0 pt** wide
+([`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices)). *The junction-target and road figures
+both moved in round 9 — `colW` is derived (§3.2.1) and `ROAD_W` fell 84 → 28
+([`ui.md` §4.6](ui.md#46-the-ink-budget)) — and the exact values are* **(to be re-measured)** *by
+`tools/layout-sweep.mjs`, which is the source for every number in the 400 group.*
 
 **AC-409 · Support floor is enforced, not assumed**
 **Given** a viewport with `playW < 320` or `playH < 460`,
@@ -1103,8 +1237,13 @@ bound at a larger `playH`; at `playH = 460` the scale is 0.30667 and AC-401 and 
 **AC-410 · Depots stay inside the design rect**
 **Given** any band,
 **Then** every depot's `x ± DEPOT_W/2` lies within `[0, 1000]`, with a margin of at least 30 LU
-(narrowest: band 5, **63 LU**); **and** adjacent depots are separated by at least 20 LU
-(narrowest: band 5, `colW - DEPOT_W = 150 - 124 = ` **26 LU**).
+(narrowest: bands 2–4, **42 LU**, which is
+[`generation.md` §3.2.1](generation.md#321-colw-is-derived-not-chosen)'s clearance rule taken
+exactly); **and** adjacent depots are separated by at least 20 LU (narrowest: band 5,
+`colW - DEPOT_W = 158 - 124 = ` **34 LU**).
+*Both numbers improved in round 9 because `colW` became a derived value rather than a hand-picked
+one. The clearance bound is `(C-1)*colW <= DESIGN_W - DEPOT_W - ROAD_W_OLD/2*2 = 792`, and bands 2,
+3 and 4 sit on it exactly.*
 
 **AC-411 · The depot row stays inside the design rect vertically**
 **Given** any band,
@@ -1152,10 +1291,15 @@ AC-604 and §6.2.*
 
 **AC-503 · Car fits the road**
 **Given** any band,
-**Then** `CAR_W (66) < ROAD_W (84)` with a 9 LU shoulder each side; two roads in adjacent columns
-are separated by at least `colW - ROAD_W = 150 - 84 = 66` LU at the narrowest band; and the
-junction marker's diameter `2 × JUNCTION_MARK_R = 68` is **less than** `ROAD_W`, so the marker sits
-inside its road rather than overhanging it.
+**Then** `CAR_W (66) > ROAD_W (28)` — the car is **2.4 times** the width of the road it rides on
+and overhangs it by 19 LU each side; two roads in adjacent columns are separated by at least
+`colW - ROAD_W = 158 - 28 = 130` LU at the narrowest band; and the junction marker's diameter
+`2 × JUNCTION_MARK_R = 68` is likewise **2.4 times** `ROAD_W`, so the marker reads as an object on
+the network rather than as a fitting inside it.
+*This criterion inverted in round 9 and the inversion is the point.
+[`ui.md` §4.6](ui.md#46-the-ink-budget) measures that round 8 spent four to six times as much lit
+area on road furniture as on cars, depots and junctions combined; the answer is that the car stops
+sitting **in** a lane and starts riding **over** a line.*
 
 **AC-504 · The blade shows the open branch**
 **Given** a junction with `open === k`,
@@ -1164,8 +1308,21 @@ inside its road rather than overhanging it.
 `BLADE_W = 9` LU thick, and the first 120 LU of `out[k]` is drawn brighter than the closed
 branch with butt caps and a linear alpha ramp to zero over its final `OPEN_BRANCH_FADE = 28` LU;
 **And given** any junction of any generated level,
-**Then** the rendered blade angle **differs** between `open === 0` and `open === 1` by at least
-**90°**, at every junction of every level over 1,000 seeds per band.
+**Then** (i) the rendered blade angle **differs** between `open === 0` and `open === 1` by at least
+**90°**, at every junction of every level over 1,000 seeds per band; **and** (ii) the blade drawn
+for `open === k` points along the first segment of `out[k]` and **not** along `out[1-k]`, asserted
+per junction by comparing the blade's direction vector against both branches.
+
+***Clause (ii) is new and clause (i) cannot do its job.*** Round 8 claimed here, and in
+[`ui.md` §7.3](ui.md#73-junction), that the ≥ 90° separation "also catches a blade drawn along the
+wrong branch". **That is not possible.** Drawing branch `k` along `out[1-k]` *swaps* the two angles,
+and the separation between a swapped pair is by definition the separation between the original
+pair — the check's histogram comes back **bit-identical**. A separation clause is invariant under
+exactly the permutation it was claimed to detect. Clause (i) catches a junction whose two branches
+are *drawn too similarly*; clause (ii) catches one whose branches are drawn *the wrong way round*;
+they are different faults and each needs its own assertion. The fault to inject for (ii) is a
+renderer that indexes `out[1 - open]`, and the test must also assert that clause (i) **passes**
+under that injection, so the blindness is recorded in the suite rather than in a comment.*
 
 *The ≥ 30° clause is **restated as ≥ 90°** and the restatement is exact rather than measured. The
 old threshold was derived from `atan(colW / rowH)` — the angle between a straight branch and a
@@ -1219,9 +1376,10 @@ cycle; at `lives >= 2` neither is present.
 
 **AC-512 · Palette values are exact**
 **Given** the theme module,
-**Then** the five car colours are `#FF852A`, `#89D9FF`, `#FF5386`, `#22C6AF`, `#A879FF` in that
-index order, and the chrome tokens match [`ui.md` §5.3](ui.md#53-surface-and-chrome-palette)
-character for character.
+**Then** the **six** car colours are `#FF852A`, `#89D9FF`, `#FF5386`, `#22C6AF`, `#A879FF`,
+`#B0F0A3` in that index order, and the chrome tokens match
+[`ui.md` §5.3](ui.md#53-surface-and-chrome-palette) character for character — including that
+`--road` is `#3A4350` and that **`--road-edge` and `--road-dash` do not exist**.
 
 **AC-513 · The depot terrace covers the shared approach, and the residual is reported**
 **Given** any band and the `mouthLu` table of [`ui.md` §7.6](ui.md#76-the-depot-terrace),
@@ -1316,6 +1474,26 @@ in the last ten seconds are worth nothing for any car that cannot reach a depot 
 [`generation.md` §6.1](generation.md#61-the-table)'s minimum transit is 389 ticks, so that is most
 of the board ([`ui.md` §7.1](ui.md#71-hud)).*
 
+**AC-521 · The ink budget — the road does not out-draw the game**
+**Given** `tools/render-audit.mjs --ink --seeds 400` per band, rasterising a generated level at the
+reference viewport and classifying every lit design-space unit as **road furniture** (the road
+stroke, any casing, any dashes, the depot terrace) or as an **actor** (car bodies at the band's mean
+cars in flight, depot bodies, junction markers),
+**Then** road furniture is **≤ 65 %** of `furniture + actors` at every band, and the figure is
+reported per band whether or not it passes.
+*The owner's report was that the road pulls attention from the cars, and "the road looks too busy"
+is not something a developer can fail a check against.
+[`ui.md` §4.6](ui.md#46-the-ink-budget) has the formula, the reasoning and the limits of the proxy —
+it counts area rather than salience, and it is chosen because it is monotone in the thing that was
+complained about and **cannot be satisfied by making the road darker**, which is the failure mode an
+aesthetic note would have had. Round 8 measured `85.2 / 82.5 / 83.9 / 81.7 / 80.9 %`; round 9's
+geometry — one 28 LU stroke, no casing, no lane dashes — measures
+`63.8 / 59.0 / 61.3 / 57.6 / 56.3 %`. **The criterion's real job is to stop the number going back
+up**: a future round that wants a road texture, a shoulder or a gradient has to fail this to get
+one. Whether the result looks right is
+[`generation.md` §7.4.2](generation.md#742-the-tier-5-register--what-only-the-owner-can-settle)
+item R and wants a screenshot, not a check.*
+
 **AC-517 · A car's arrival is an abrupt onset**
 **Given** the frame on which a car spawns and the frames after it,
 **Then** the car body, its glyph and its stroke are drawn at **full** opacity and full scale on the
@@ -1370,6 +1548,21 @@ renderer.*
 **Then** their glyphs are circle, triangle-up, square, plus, double-bar in index order — so that
 the two tritanopia-collapsing pairs (Ember/Rose, Sky/Teal) are circle-vs-square and
 triangle-vs-plus.
+
+**AC-611 · The sixth colour clears every separation floor**
+**Given** the six-entry `PALETTE` of [`ui.md` §5.1](ui.md#51-the-car-palette) and the per-band `K`
+of `3 / 4 / 4 / 5 / 6`,
+**Then** for every band's colour set `0 … K-1`: the minimum pairwise CIEDE2000 distance is **≥ 16**
+under normal vision, under simulated protanopia and under simulated deuteranopia (Machado 2009,
+severity 1.0); every colour clears **3.0 : 1** against `--road` and **4.5 : 1** against `--bg`; and
+every colour's `C*` is **≥ 30**.
+*`K` rose to 6 at band 5 on the owner's instruction that colour escalate with level, and a sixth
+colour is the kind of change that quietly erodes an optimisation nobody re-runs. Expected:
+`20.8 / 18.3 / 16.5` for normal, protanopic and deuteranopic at `K = 6`, with the worst pair
+Teal/Lime, Teal/Lime and Rose/Teal respectively. **Tritanopia is deliberately not in this criterion**
+— it collapses Ember/Rose and Sky/Teal to ΔE ≈ 8.2 at every `K` and always has; that is what the
+glyphs carry ([AC-601](acceptance-criteria.md)), and Lime's nearest tritanopic neighbour is Sky at
+10.7, further apart than either existing pair.*
 
 **AC-602 · Glyphs are always drawn**
 **Given** any settings combination,
@@ -1535,9 +1728,30 @@ run still contains 7,200 ticks, it simply takes longer than 120 s of wall time (
 
 **AC-808 · A schedule that does not reach the clock is a build error**
 **Given** a level whose `spawns` array is artificially truncated so that its last entry's `tick` is
-more than `INTERVAL + JITTER` ticks before `LEVEL_TICKS`,
+more than `INTERVAL + 2 * JITTER` ticks before `LEVEL_TICKS`,
 **Then** level construction **throws** rather than returning a level that would quietly stop
 spawning part-way through the two minutes;
+**And given** an unmodified level at any band and any seed, **no throw occurs** — asserted over
+3,000 seeds per band.
+
+***The bound is corrected from `INTERVAL + JITTER` to `INTERVAL + 2 * JITTER`, and round 9 found it
+by tripping it.*** [`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed)'s
+loop considers every nominal slot with `nominal - JITTER < LEVEL_TICKS` and keeps it only if the
+jittered tick is under the clock. So the last *kept* slot can be preceded by a *dropped* one whose
+draw was positive while its own draw was negative, and the worst achievable gap to the clock is
+`INTERVAL + 2 * JITTER` — one whole `JITTER` more than the guard allowed. **The guard was therefore
+throwing on legal schedules**, at a rate that depends on where `SPAWN_LEAD + i * INTERVAL` happens
+to land relative to 7,200. Round 8's table never hit it; round 9's lever sweep hit it at five
+different `(interval, jitter)` pairs — 145/14, 142/14, 134/13, 100/18 and 96/16 — while leaving
+143/14 and 140/14 clean.
+
+**This is [`gameplay.md` §8.4](gameplay.md#84-the-spawn-schedule-is-exact-and-spawn_slack-no-longer-exists)'s
+own lesson arriving from the other direction.** §8.4 says *a safety constant that a normative lever
+moves through must be written as a function of the lever*. This one **was** written as a function of
+the lever — and the function was wrong by a term, which is worse than a constant, because it looks
+correct and only fires for some values. A guard that any `interval` change can turn into a false
+build error is a guard that will be deleted by whoever next pulls a lever under time pressure. The
+corrected bound is tight: it is exactly the worst case §2.7's loop can construct.
 **And given** a normal level driven to the bell,
 **Then** `state.nextSpawn === level.spawns.length` (AC-123) and no throw occurs.
 *Re-subjected in round 8. This number used to assert a `SPAWN_EXHAUSTED` throw when a run consumed

@@ -48,7 +48,7 @@ level = {
   edges:  [edge, ...],           // §2.3
   junctions: [nodeId, ...],      // ascending; index is the junctionId
   entryEdgeId,
-  speedMluPerTick, interval, jitter,
+  interval, jitter,                  // speed is CAR_SPEED, a constant (§6.1)
   spawns: [{index, tick, colour}, ...]   // gameplay.md §2.7, bounded by LEVEL_TICKS
 }
 ```
@@ -212,24 +212,57 @@ a branch node, which also emits a second edge. **(V2)** targets across a route r
 order and within a source in increasing order, are **strictly increasing** (§5); across the
 terminal row they are **non-decreasing**.
 
-**Lemma 1 — a jog's target column is empty in the source row.** Suppose edge `(a→a+1)` exists.
-V2 sets `minTarget = a+2` for every later source, so a node at column `a+1` in row `r` would have
-to emit targets `≥ a+2`; with `|Δc| ≤ 1` its only candidate is `{a+2}`, a *pass* that changes
-column, which (P) forbids, and it cannot form a branch from a single candidate. So no node sits at
-`(r, a+1)`. The mirror argument covers `(a→a-1)`. ∎
+**Lemma 1 — a jog's target column is empty in the source row.** *This holds on a **route row** and
+is **false on the terminal row**; round 8 stated it without that qualification and
+[AC-206](acceptance-criteria.md) inherited the error. What replaces it on the terminal row is
+Lemma 1T.*
 
-*Lemma 1 is what allows the horizontal run to sit at `y_r`: it can never terminate on another
-node's centre.*
+Suppose edge `(a→a+1)` exists and the target row is a route row. V2 sets `minTarget = a+2` for every
+later source, so a node at column `a+1` in row `r` would have to emit targets `≥ a+2`; with
+`|Δc| ≤ 1` its only candidate is `{a+2}`, a *pass* that changes column, which (P) forbids, and it
+cannot form a branch from a single candidate. So no node sits at `(r, a+1)`. The mirror argument
+covers `(a→a-1)`. ∎
+
+**Lemma 1T — on the terminal row a jog's target column may be occupied, and what occupies it is a
+depot.** Across the terminal row V2 is only **non-decreasing**, so a later source may target `a+1`
+as well and both edges then feed the depot at column `a+1`. Lemma 1's proof does not reach this case
+and cannot be repaired to, because its whole content is V2's *strictly* increasing rule. Nor is the
+case rare: **measured over the round-9 table, terminal-row landings occur in 98.7–100 % of levels at
+every band, and route-row landings in none.**
+
+It is safe for a different reason from Lemma 1's. A depot is a **terminus**: it emits no edge. The
+horizontal run that lands on it ends at a building rather than continuing into a road, and §2.5's
+failure mode — a false continuation — needs an outgoing edge to exist. ∎
+
+**The statement that is true at every row is therefore not "the site is empty" but this, and it is
+the one to assert:**
+
+> **Where a horizontal run terminates on an occupied lattice site, that site is either a depot, or a
+> branch node carrying a junction marker.**
+
+On a route row it holds vacuously by Lemma 1 — the site is empty. On the terminal row the site is a
+depot, by Lemma 1T. And where two horizontal runs meet at a site that *does* emit an edge, rule (P)
+and V2 force that site to emit it **down its own column**, so the meeting point is a T with a marker
+drawn on it and never a fork without one. *That is what [AC-206](acceptance-criteria.md) clauses (c)
+and (d) assert in round 9. Round 8's wording of (d) — "no horizontal run terminates on an occupied
+lattice site" — **cannot pass**, because on the terminal row they almost always do.*
+
+*Lemma 1 is what lets a route row's horizontal run sit at `y_r`: it can never terminate on another
+node's centre. Lemma 1T is what lets the terminal row's, for a different reason.*
 
 **Lemma 2 — two horizontal runs never overlap, and touch only when they share a source.** Take
 jogs from sources `a ≤ a'`.
 - `a = a'`: one branch, two jogs, `H(a→a-1) = [x_{a-1}, x_a]` and `H(a→a+1) = [x_a, x_{a+1}]`.
   They meet at `x_a`, which is the node itself. This is the T, and it is the intended drawing.
-- `a < a'`, `e` a right jog: by V2 later sources target `≥ a+2`, and by Lemma 1 `a+1 ∉ rows[r]`, so
-  `a' ≥ a+2`. The only span that can reach `[x_a, x_{a+1}]` is a left jog from `a+2`, spanning
-  `[x_{a+1}, x_{a+2}]` — which targets `a+1`, the same target as `e`. On a route row that is a
-  duplicate target, forbidden by V2. On the terminal row it is permitted, and then both runs feed
-  the **same depot**, which is one place and draws as one forecourt (§2.3, [`ui.md` §7.6](ui.md#76-the-depot-terrace)).
+- `a < a'`, `e` a right jog: **on a route row**, by V2 later sources target `≥ a+2`, and by Lemma 1
+  `a+1 ∉ rows[r]`, so `a' ≥ a+2`. The only span that can reach `[x_a, x_{a+1}]` is a left jog from
+  `a+2`, spanning `[x_{a+1}, x_{a+2}]` — which targets `a+1`, the same target as `e`, a duplicate
+  target forbidden by V2. **On the terminal row the duplicate is permitted (Lemma 1T)**, and then
+  both runs feed the **same depot**, which is one place and draws as one forecourt (§2.3,
+  [`ui.md` §7.6](ui.md#76-the-depot-terrace)). *That overlap is the only one in the design Lemma 2
+  does not forbid; it is the shared approach road of
+  [`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-shared-approach-road), and it
+  is the reason §2.5's claim is about legibility rather than about disjointness.*
 - `a < a'`, `e` a left jog spanning `[x_{a-1}, x_a]`: any later source's span starts at `≥ x_{a'-1} ≥ x_a`,
   so the only contact is a left jog from `a+1` spanning `[x_a, x_{a+1}]`, targeting `a`. Source `a`
   contains `a-1` among its targets, so its options are the pass `{a-1}` (forbidden by (P)) or a
@@ -263,7 +296,7 @@ Band 3, `C = 4`, `K = 4`, `R = 6`, entry at column 1, `J = 5`, depth 2–3.
 
 ```
               col 0      col 1      col 2      col 3
-              x=155      x=385      x=615      x=845
+              x=104      x=368      x=632      x=896
                             │
    entry  y=  50            │              (entry edge, 220 LU, vertical)
                             │
@@ -326,7 +359,7 @@ ROW0_Y    = ENTRY_Y + ENTRY_LEN = 270
 ROUTE_H   = 1080                        // DEPOT_Y - ROW0_Y, the same at every band
 DEPOT_Y   = ROW0_Y + ROUTE_H = 1350
 
-colW  = per band (§6.1)
+colW  = per band (§6.1), derived by the rule in §3.2.1
 rowH  = ROUTE_H / R
 x(c)  = 500 + (c - (C-1)/2) * colW
 y(r)  = ROW0_Y + r * rowH
@@ -338,12 +371,42 @@ the depot bodies ([`ui.md` §3.3](ui.md#33-measured-fit-across-real-devices),
 
 All of these are exact integers for every `(C, R)` the bands use:
 
-| `C` | `colW` | column x positions | outermost depot edge to the rectangle |
-|---|---|---|---|
-| 3 | 260 | 240, 500, 760 | 178 LU |
-| 4 | 230 | 155, 385, 615, 845 | 93 LU |
-| 5 | 180 | 140, 320, 500, 680, 860 | 78 LU |
-| 6 | 150 | 125, 275, 425, 575, 725, 875 | 63 LU |
+| `C` | `colW` | was | column x positions | outermost depot edge to the rectangle | `min(colW, rowH)` |
+|---|---|---|---|---|---|
+| 3 | **300** | 260 | 200, 500, 800 | 138 LU | 216 |
+| 4 | **264** | 230 | 104, 368, 632, 896 | 42 LU | 216 / 180 |
+| 5 | **198** | 180 | 104, 302, 500, 698, 896 | 42 LU | 180 |
+| 6 | **158** | 150 | 105, 263, 421, 579, 737, 895 | 43 LU | **158** |
+
+#### 3.2.1 `colW` is derived, not chosen
+
+```
+colW(C) = the largest EVEN value satisfying both
+            (C - 1) * colW  <=  DESIGN_W - DEPOT_W - 2 * (ROAD_W / 2)   = 792
+            colW            <=  300
+```
+
+The first bound says **the outermost depot keeps at least half a road width — 42 LU — of clearance
+to the design-space edge.** The second caps a horizontal run at 30 % of the design width, above
+which a jog stops reading as a jog and starts reading as a corridor. `C = 3` is the only `C` the cap
+binds at; every other band takes the clearance bound exactly.
+
+**Round 8 chose `colW` by hand and chose it too small at every `C`**, which cost the design twice.
+It cost difficulty — `jogs * colW` is the only band-varying term in `transit` (§6.1.1) — and it cost
+the tap target, because `min(colW, rowH)` is what
+[`ui.md` §4.4](ui.md#44-tap-target-arithmetic)'s 44 pt floor is computed from. At `C = 6` the old
+150 LU gave **44.16 pt** against a 44 pt floor, which that section itself calls tight; 158 LU gives
+`HIT_R_LU = min(max(ceil(22/0.30667), 76), floor((158-6)/2)) = 76` and **46.61 pt**, and the hit
+circles still cannot touch, because `2 * 76 = 152 = 158 - 6` exactly. *This arithmetic is the
+designer's; [AC-401](acceptance-criteria.md) and [AC-402](acceptance-criteria.md) are re-measured by
+`tools/layout-sweep.mjs` and that sweep is the number that counts.*
+
+**`C = 7` is impossible at `DESIGN_W = 1000`, and this is where that is recorded so the next round
+does not re-derive it.** 44 pt at the support floor needs `min(colW, rowH) >= 2*ceil(22/0.30667) + 6
+= 150` LU; at `C = 7` that puts the outermost depot's edge 12 LU **outside** the rectangle. The
+widest `colW` that fits inside it is 146, which gives a 42.93 pt target. Six columns is the cap,
+band 5 uses all six, and a seventh costs `DESIGN_W >= 1024` and a rescale of every width-bound
+device.
 
 | `R` | `rowH` | row y positions (row 0 … depot row) |
 |---|---|---|
@@ -357,10 +420,11 @@ could produce a non-divisor. Naming `colW` directly makes integrality a property
 the guard's second half (`rowH = ROUTE_H / R`) is the only division left.
 
 **The minimum distance between two lattice sites is `min(colW, rowH)`: 216 / 216 / 180 / 180 /
-150 LU by band.** That is the number the 44 pt tap-target arithmetic in
-[`ui.md` §4.4](ui.md#44-tap-target-arithmetic) is built on, and at band 5 it is the binding
-constraint on the whole design — 150 LU at the SE's 0.3200 scale is a 46.1 pt junction target
-against a 44 pt floor. It is why `C` is capped at 6.
+158 LU by band.** That is the number the 44 pt tap-target arithmetic in
+[`ui.md` §4.4](ui.md#44-tap-target-arithmetic) is built on, and at band 5 it is still the binding
+constraint on the whole design — but §3.2.1's derived `colW` moves band 5 from 150 LU to 158, which
+takes the junction target at the support floor from **44.16 pt to 46.61 pt**. `C` is still capped
+at 6, and §3.2.1 records why in a form the next round does not have to re-derive.
 
 **`ENTRY_LEN = 220` and the vertical budget.** `ENTRY_Y + ENTRY_LEN + ROUTE_H + DEPOT_H + margin`
 is 50 + 220 + 1080 + 128 + 22 = 1500, exactly. The entry edge is 220 LU rather than the 160 it was,
@@ -378,11 +442,11 @@ lengthLu  = |x_to - x_from| + |y_to - y_from|
 lengthMlu = lengthLu * MLU
 ```
 
-| shape | length in LU | band 1/2 (`rowH` 216) | band 3/4/5 (`rowH` 180) |
-|---|---|---|---|
-| `entry` | `ENTRY_LEN` | 220 | 220 |
-| `straight` | `rowH` | 216 | 180 |
-| `jogL` / `jogR` | `rowH + colW` | 476 / 446 | 410 / 360 / 330 |
+| shape | length in LU | band 1 | band 2 | band 3 | band 4 | band 5 |
+|---|---|---|---|---|---|---|
+| `entry` | `ENTRY_LEN` | 220 | 220 | 220 | 220 | 220 |
+| `straight` | `rowH` | 216 | 216 | 180 | 180 | 180 |
+| `jogL` / `jogR` | `rowH + colW` | 516 | 480 | 444 | 378 | 338 |
 
 There is no offline derivation, no sampling, no table to drift, and no `diagLen` constant.
 [AC-207](acceptance-criteria.md) asserts the identity directly against every edge of every
@@ -633,64 +697,165 @@ which removes one of the two divisions this guard existed for (§3.2).*
 
 ### 6.1 The table
 
-| Band | Levels | `C` | `K` | `R` | `pBranch` | `J` | `Ja` | `D` | `colW` | `rowH` | Speed MLU/tick | LU/s | `interval` | `jitter` | **`N`** |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 1–4 | 3 | 3 | 5 | 0.85 | 3–4 | 3 | 2–3 | 260 | 216 | 2750 | 165 | **204** | ±26 | **32** |
-| 2 | 5–9 | 4 | 3 | 5 | 0.80 | 3–5 | 3 | 2–3 | 230 | 216 | 2900 | 174 | **150** | ±18 | **44** |
-| 3 | 10–15 | 4 | 4 | 6 | 0.85 | 4–6 | 4 | 2–4 | 230 | 180 | 3050 | 183 | **140** | ±18 | **47** |
-| 4 | 16–22 | 5 | 4 | 6 | 0.85 | 5–7 | 5 | 2–4 | 180 | 180 | 3200 | 192 | **132** | ±16 | **50** |
-| 5 | 23+ | 6 | 5 | 6 | 0.90 | 7–9 | 7 | 2–5 | 150 | 180 | 3350 | 201 | **128** | ±16 | **52** |
+| Band | Levels | `C` | **`K`** | `R` | `pBranch` | `J` | `Ja` | `D` | `colW` | `rowH` | `interval` | `jitter` | **cars in flight** | **`N`** |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1–4 | 3 | **3** | 5 | 0.85 | 3–4 | 3 | 2–3 | 300 | 216 | **208** | ±21 | **2.73** | **32** |
+| 2 | 5–9 | 4 | **4** | 5 | 0.80 | 3–5 | 3 | 2–3 | 264 | 216 | **147** | ±15 | **3.96** | **45** |
+| 3 | 10–15 | 4 | **4** | 6 | 0.85 | 4–6 | 4 | 2–4 | 264 | 180 | **140** | ±14 | **4.26** | **47** |
+| 4 | 16–22 | 5 | **5** | 6 | 0.85 | 5–7 | 5 | 2–4 | 198 | 180 | **131** | ±13 | **4.38** | **50** |
+| 5 | 23+ | 6 | **6** | 6 | 0.90 | 7–9 | 7 | 2–5 | 158 | 180 | **128** | ±13 | **4.40** | **51** |
 
-`quota` and `SPAWN_SLACK` are **gone**. `diagLen` is gone (§3.3). Every remaining column moved in
-round 8, because every one of them is tied to a geometry or a duration that the owner's four
-changes displaced.
+**`speedMluPerTick` has left the band table.** It is now a single constant,
+`CAR_SPEED = 2750` MLU/tick = **165 LU/s**, at every band, on the owner's instruction —
+*"the vehicle should keep their constant speed regardless of level"* — and the measurement agrees
+with him for a reason he did not have to give. Round 8 raised it 2750 → 3350 across the ladder;
+§6.1.1 and §7.4.1 show that this is the defect that flattened the ladder, because speed is not a
+difficulty axis at all. It is the *transit* axis, and raising it up the ladder emptied the board
+faster than `interval` filled it.
 
-**`N` is the column that replaced `quota`, and it is not a parameter.** It is the number of cars
-that *arrive at a depot* inside the two-minute clock:
+**`LIVES` stays at 3 at every band, and §6.1.5 is why** — it was measured as a lever this round and
+it is too strong to be one.
+
+**`K = C` at every band now.** Round 8 ran `3 / 3 / 4 / 4 / 5`, so the first nine levels were
+chromatically identical and the ceiling was five. `K` is capped by `C` — `K` depots need `K`
+distinct columns — and `C` is capped at 6 by the 44 pt tap target (§3.2.1), so **`3 / 4 / 4 / 5 / 6`
+is the most colour this design rectangle can carry**, and the one repeat is placed at the 2 → 3 step
+where the sixth *row* is the escalation instead. The reference game's fourteen uniquely coloured
+stations are not reachable on a phone at `DESIGN_W = 1000`; §3.2.1 has the arithmetic and it is a
+measurement, not a preference.
+
+**Three columns are new or re-purposed, and the first of them is the whole of this round.**
+`cars in flight` was a derived quantity in a side table in round 8; it is now a band-table column,
+because it is the quantity the ladder escalates and the quantity round 8 held constant without
+noticing.
+
+#### 6.1.1 Cars in flight is the ladder, and it has exactly two inputs
 
 ```
-N(band) = #{ i >= 0 : SPAWN_LEAD + i * interval + transit < LEVEL_TICKS }
-        ~ (7200 - 90 - transit) / interval
+transit      = (ENTRY_LEN + ROUTE_H + jogs * colW) / speed          ticks
+carsInFlight = transit / interval
+             = (ENTRY_LEN + ROUTE_H + jogs * colW) / (interval * speed / 1000)
+             ~ L / spacing,   spacing = interval * speed / 1000  (LU between consecutive cars)
 ```
 
-with `transit` the mean root-to-depot journey in ticks (§6.2). **It is determined entirely by
-`interval`**, and that is the single structural consequence of the fixed clock that everything in
-§7 turns on. Under the quota model the number of cars in a run was a free parameter and
-§7.4's **lever 0** — move `interval` and `quota` against each other so that `(quota - 1) · interval`
-holds the duration — was the lever that fixed the difficulty curve. **Lever 0 no longer exists**:
-there is no second term to trade against `interval`, because the duration is a constant and the
-car count is its consequence. §7.4 is rewritten around what is left.
+**`R * rowH = ROUTE_H` is a constant of the geometry (§3.2), so the vertical part of every journey
+is 1,080 LU at every band.** The horizontal part is `jogs * colW`, and the jog count rises almost
+exactly as fast as `colW` falls with `C` (§6.2: 1.20 → 1.54 → 1.55 → 1.88 → 2.06 jogs against
+300 → 264 → 264 → 198 → 158 LU), so `L` lands at **1660 / 1706 / 1709 / 1672 / 1625 LU** — a spread
+of 5 % across the whole ladder. *Measured directly: at any fixed `(interval, speed)`, cars in flight
+varies by under 6 % across all five bands and **falls** from band 2 to band 5.*
 
-**Derived quantities, computed rather than measured**, given §3.2's geometry and §6.2's measured
-jog counts:
+**So the board's occupancy is a function of one number — the spacing between cars in LU — and not of
+the band at all.** Round 8's table read
 
-| Band | transit min / mean / max (ticks) | cars in flight | `N` | spawns scheduled | flip window (§4.6) | first decision (§4.6b) | min car separation |
+```
+spacing (round 8) = 561 / 435 / 427 / 422 / 429 LU      carsInFlight = 2.72 / 3.70 / 3.74 / 3.77 / 3.66
+```
+
+— flat from band 2 up, and **band 5 looser than band 4**. That is the flat ladder in one number, and
+it is why `p` measured `0.33 / 0.73 / 2.25 / 2.25 / 2.17 %`. `interval` fell 37 % across the ladder
+and `speed` rose 22 %; the two cancelled in the only quantity that matters.
+
+Round 9:
+
+```
+spacing (round 9) = 572 / 404 / 385 / 360 / 352 LU      carsInFlight = 2.73 / 3.96 / 4.26 / 4.38 / 4.40
+```
+
+**Cars in flight is monotone for the first time in this design's history**, and it is the axis the
+owner asked for — *"there should be more vehicles appears"*. The 1 → 2 step takes the board from
+below `BOT_WORKING_SET` to above it; the rest is a 0.4-car climb, which sounds small and is not:
+§6.1.2 shows the clear rate falling from 89 % to 4 % over a single car of occupancy at band 5.
+
+**The 4 → 5 step is the one that has to fight the geometry, and it is worth knowing why.** The sixth
+column costs 40 LU of `colW` (§3.2.1), which is 2.5 % of `L`, so band 5 starts that step with a
+*shorter* journey than band 4 and the interval cut has to pay that back before it escalates
+anything. It does — 4.38 → 4.40 — but only just. The escalation at that step is therefore mostly
+topological, and it is real: **measured at matched cars in flight (≈ 4.48), band 4's per-car error
+is 3.14 % and band 5's is 4.45 %.** Band 5 is harder than band 4 for the same board occupancy; it
+simply cannot be given a much busier one inside six columns.
+
+#### 6.1.2 The ceiling on cars in flight, which is not a choice
+
+Pushing the board past about five cars leaves every clear-rate window at every band. Measured at
+band 5:
+
+| cars in flight | 3.89 | 4.11 | 4.36 | 4.60 | 4.78 |
+|---|---|---|---|---|---|
+| clear rate | 89.0 % | 72.5 % | 57.2 % | 29.0 % | 3.8 % |
+
+**That ceiling is not `BOT_WORKING_SET`.** Raising the working set from 3 to 4 moves evictions from
+0.51 /s to 0.015 /s and the band-5 clear rate at 4.36 cars from 57.2 % to 84.8 %; raising it from 4
+to 5 moves the same reading from 84.8 % to 84.8 %. The wall past that is the **glance budget**:
+`BOT_SCAN_TICKS = 6` allows at most 10 glances per second, measured glances run 5.8–7.3 /s, and at
+4.4 cars on the board each car is already being looked at only about every 0.75 s.
+
+**Whether a human's ceiling is five cars is a tier-5 question and it is the most important one this
+design has open.** The owner's report of round 8 — *"it feels so different with train of thought, in
+a worst way"* — is, mechanically, a report that the board is too empty, and the board is at 4.2–4.5
+cars because that is what this instrument survives. `development-process.md` §6.9's rule applies
+exactly: **a threshold derived from the instrument's own constants is not evidence about a human.**
+§7.4 forbids changing a §7.1 constant to make a target pass, and it states the one exception — the
+model of a player being shown to be wrong. **This design does not take that exception. It marks it,
+and asks the owner.** The two readings that would settle it are in §7.4.2.
+
+#### 6.1.3 What `N` is, and why band 1's was wrong
+
+`N` is the number of cars that **arrive at a depot** inside the two-minute clock. It is not a
+parameter; it is a consequence of `interval`.
+
+```
+arrival_i = SPAWN_LEAD + i * interval + jitter_i + transit_i
+N         = #{ i >= 0 : arrival_i < LEVEL_TICKS }
+```
+
+**`N` is a distribution, not an integer, and round 8 published it as an integer computed from the
+*mean* transit.** That is what made §6.1's band-1 `N` of 32 wrong: the last car to land is the one
+with the *shortest* journey, so the mean overstates the cut-off and the closed form under-counts by
+about one car. Measured over 3,000 seeds per band on the round-9 table, `N` is
+
+| Band | median `N` | max `N` | closed form at mean `transit` |
+|---|---|---|---|
+| 1 | **32** | 33 | 31.3 |
+| 2 | **45** | 46 | 44.2 |
+| 3 | **47** | 48 | 46.3 |
+| 4 | **50** | 51 | 49.6 |
+| 5 | **51** | 52 | 51.0 |
+
+**Everywhere `N` appears in a threshold — AC-220, AC-246's ceiling, §7.1.10's windows — it is the
+median, and the max is quoted beside it.** [AC-220](acceptance-criteria.md) is stated "to within one
+car" for exactly this reason and that tolerance is now load-bearing rather than decorative.
+
+#### 6.1.4 Derived quantities
+
+| Band | transit min / mean / max (ticks) | spacing (LU) | cars in flight | `N` | flip window (§4.6) | first decision (§4.6b) | min car separation |
 |---|---|---|---|---|---|---|---|
-| 1 | 473 / 587 / 757 | 2.88 | **32** | 35 | 2.53 s | 159 ticks (2.65 s) | 418 LU |
-| 2 | 449 / 570 / 687 | 3.80 | **44** | 48 | 1.90 s | 151 ticks (2.52 s) | 331 LU |
-| 3 | 427 / 544 / 728 | 3.89 | **47** | 51 | 1.73 s | 132 ticks (2.20 s) | 317 LU |
-| 4 | 407 / 512 / 632 | 3.88 | **50** | 54 | 1.67 s | 125 ticks (2.08 s) | 320 LU |
-| 5 | 389 / 481 / 612 | 3.76 | **52** | 56 | 1.60 s | 120 ticks (2.00 s) | 322 LU |
+| 1 | 473 / 604 / 800 | 572 | 2.73 | 32 | **2.77 s** | 159 ticks (**2.65 s**) | 457 LU |
+| 2 | 473 / 620 / 761 | 404 | 3.96 | 45 | **1.95 s** | 159 ticks (**2.65 s**) | 322 LU |
+| 3 | 473 / 622 / 857 | 385 | 4.26 | 47 | **1.87 s** | 146 ticks (**2.43 s**) | 308 LU |
+| 4 | 473 / 608 / 761 | 360 | 4.38 | 50 | **1.75 s** | 146 ticks (**2.43 s**) | 289 LU |
+| 5 | 473 / 591 / 760 | 352 | 4.40 | 51 | **1.70 s** | 146 ticks (**2.43 s**) | 281 LU |
 
-`transit` is `(ENTRY_LEN + R·rowH + jogs·colW) / speed`, with `jogs` at 0, the measured mean
-(§6.2) and the measured maximum. **Journeys are 20–30 % longer than they were** — 8.0 to 12.6 s
-against the old 7.4 to 9.6 — because a jog now costs `colW` where a cubic cost about `0.46 · rowH`
-(§2.3). Cars in flight is `transit / interval`, and it lands at 2.9 to 3.9 against the old 3.0 to
-4.3: **the board is about as busy as it was, at a much lower spawn rate.** That is the trade
-orthogonal roads make, and it is why the `interval` column is not comparable to the old one.
+`transit` is `(ENTRY_LEN + ROUTE_H + jogs·colW) / speed` with `jogs` at 0, the measured mean (§6.2)
+and the measured maximum. **The minimum is 473 ticks at every band** — 1,300 LU at 2.75 LU/tick — because a jog-free path is
+pure `ENTRY_LEN + ROUTE_H`, and both are band-independent. That row is the clearest single statement
+of §6.1.1 there is: under round 8 it read 473 / 449 / 427 / 407 / 389, and the only reason it varied
+was the speed column.
 
-**`interval` is monotone across the ladder for the first time.** It falls 204 → 150 → 140 → 132 →
-128. Round 6 proved, under the quota model, that it *could not* be: band 5 needed a long interval
-to clear its floor and band 4 needed a short one to stay under its ceiling, so the traffic axis
-inverted after band 3 (§7.4.1). The clock removes that constraint, and §7.1.10 gives the
-arithmetic — cutting `interval` now raises `p` **and** `N`, so a given drop in clear rate costs
-roughly half the rise in per-car error it used to.
+**Every window in the last three columns got longer, and that is the second thing this round buys.**
+`development-process.md` §6.9 records that the owner rejected a first-decision window the instrument
+had certified. V14 took that window to 2.00–2.65 s; the constant speed takes its *worst* case from
+2.00 s to **2.43 s**, so every band now gets at least what band 3 got in round 8 and bands 1–2 keep
+band 1's 2.65 s. The flip window's worst case rises 1.60 s → **1.73 s**. Neither was bought with a
+lever pull; both are consequences of `speed` no longer rising up the ladder.
 
-**Band 1 is the slowest band in the game by a long way and that is the answer to the two-minute
-floor.** At `interval = 204` a car enters every 3.40 s, 32 arrive in the level, and 2.9 sit on the
-board at once. A fixed two minutes makes band 1 two and a half times longer than it was
-([`gameplay.md` §4.2](gameplay.md#42-the-clock-and-what-ends-a-level)); the only thing left to
-control is how much happens in them.
+**Band 1 is the band below saturation and that is its design, not its difficulty setting.** At
+`interval = 208` a car enters every 3.47 s and **2.73** sit on the board — below `BOT_WORKING_SET`,
+which means the player never has to drop one. The 1 → 2 step takes that to 3.96, i.e. from below the
+working set to above it, and **that is the mechanical content of the step that
+[`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order) describes as spending the
+whole traffic budget at once.** It is a better reason than "traffic rises sharply" and it is
+measurable.
 
 `D` is `[Dmin, Dmax]` over all root-to-depot paths. `J` is `[Jmin, Jmax]`, the count of junctions
 **drawn**. `Ja` is the floor on junctions that are **actionable** — V13, §5 — and it is a minimum,
@@ -699,8 +864,71 @@ not a range.
 **`Ja` is set to `Jmin`, and that is not a coincidence of convenience.** Actionable junctions are
 bounded by what there is to decide — with `K` colours a path of decisions can sort at most `K`
 destinations, so actionable `J` tracks `K`, not the drawn junction count. **Above the floor, the
-band table's `J` axis is mostly the `K` axis in disguise**, and whoever next pulls a lever should
-reach for `K` or `interval` before `pBranch`.
+band table's `J` axis is mostly the `K` axis in disguise.** Round 9 measured the same thing twice
+more: at band 5, `pBranch` 0.90 → 0.95 moves `p` by 0.04 pp and `J` 7–9 → 8–10 by 0.02 pp, both
+inside noise. **`pBranch` and `J` are not difficulty levers and §7.4 no longer lists them as ones.**
+
+#### 6.1.5 Lives were measured as a lever this round, and they are too strong to be one
+
+The reference game tightens lives with level — three early, two at levels 11–12, one at 13 and up —
+and this design uses a flat three. That is the only axis in it that has never been tried, so it was
+tried.
+
+**Under a per-band life count the governing model stops being `P(Bin(N, p) <= 2)` and becomes
+`P(Bin(N, p) < lives)`.** At one life it is `(1-p)^N`, which is a different curve, not a shifted
+one. So the honest way to measure it is to take the measured misroute *distribution* rather than to
+invert anything: the constrained bot was run over 3,000 seeds per band with the life count removed
+entirely, and the clear rate at every life count read straight off the distribution.
+
+| Band | `N` | measured `p` | mean misroutes | clear @ 4 lives | **@ 3** | @ 2 | @ 1 |
+|---|---|---|---|---|---|---|---|
+| 1 | 32 | 0.30 % | 0.09 | 100.0 % | **100.0 %** | 99.2 % | 91.3 % |
+| 2 | 45 | 2.01 % | 0.90 | 97.7 % | **92.3 %** | 75.9 % | 45.2 % |
+| 3 | 47 | 2.91 % | 1.36 | 94.1 % | **84.0 %** | 61.1 % | 26.7 % |
+| 4 | 50 | 3.11 % | 1.57 | 90.7 % | **78.7 %** | 55.2 % | 24.1 % |
+| 5 | 51 | 3.63 % | 1.87 | 86.2 % | **71.2 %** | 45.9 % | 18.1 % |
+
+**One life is worth 16 to 26 percentage points of clear rate at the `p` this ladder runs at.** R3
+caps a band-to-band step at **15**. So a life step on its own always breaks R3, at every pair, and
+the only way to use it is to loosen the band's parameters by the same 16–26 pp in the other
+direction at the same time.
+
+**And that loosening is a reduction in cars on screen, which is the thing the owner asked for more
+of.** Worked at band 5: two lives at the round-9 parameters clears 45.9 %, under R4's 55 % floor. To
+put it back inside 55–78 % at two lives needs `P(Bin(51, p) < 2) ≈ 0.66`, i.e. `p ≈ 1.7 %` — which
+this table reaches at an interval near 150 and **3.9 cars in flight, fewer than band 3 has.** Band 5
+would become the emptiest board above band 1.
+
+**So the two axes the owner named are in direct conflict at the sizes the ladder admits, and this
+round takes density.** Density is the explicit primary instruction, it is the diagnosis of the flat
+ladder, and it is the one that is visible every second of play rather than once per run. `LIVES = 3`
+stays a rule of the game ([`gameplay.md` §4.1](gameplay.md#41-lives)).
+
+**What is not settled, and goes to the owner (tier 5, §7.4.2 item L).** Two readings of the same
+table are defensible and only a person can choose between them:
+
+- *Density.* Band 5 at 3 lives, 4.40 cars, 71.2 % clear. A run ends at the bell most of the time.
+- *Attrition.* A **band 6 at levels 30+** with 2 lives and band 4's density — not a re-tune of
+  band 5, an extra rung past it, so R2/R3 between bands 1–5 are untouched. Measured at band 5's
+  topology and `interval = 147`: 2 lives, `p ≈ 1.9 %`, clear ≈ 66 %, 3.9 cars in flight. It is a
+  real endgame and it costs the design a band whose board is emptier than the one below it.
+
+*Priced rather than chosen, because "does the ceiling feel like a ceiling" is not a question the bot
+can answer — `development-process.md` §6.9.*
+
+#### 6.1.6 The two-colour car, priced and not adopted
+
+The reference game gives some trains and stations two colours from level 8. It is an axis this
+design has no analogue for, and it is worth recording what it would cost, because it is the only
+proposal on the table that raises difficulty **without** raising traffic.
+
+A two-colour car is one that will accept either of two depots. Mechanically it *lowers* per-car
+error — two acceptable destinations is an easier routing problem than one — so it is a difficulty
+axis only if the pairing is the thing that is hard to hold, which is a claim about human memory and
+not about this instrument: the bot holds a colour mask, and a two-bit mask costs it exactly what a
+one-bit mask costs. **This design cannot measure it.** That puts it squarely in the class
+§7.4 describes — a change to the model of a player — and it is listed in §7.4.2 as item **T**,
+for the owner, with no recommendation attached.
 
 ### 6.2 Measured generator behaviour
 
@@ -708,13 +936,23 @@ Measured over **3,000 seeds per band**, 15,000 runs total, in the designer's pro
 rule (P), V13 and V14 in force. *These are the figures the developer's `generator-audit` must
 reproduce; where they differ, the audit is right and this table is wrong.*
 
-| Band | Valid networks | Attempts: med / p95 / max | Edge topologies | Signatures | `J` distribution | `Ja` distribution | `D` range | mean depth | jogs per path, mean / max |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 3000 / 3000 | 1 / 5 / 15 | 63 | **279** | 3: 13 %, 4: 87 % | 3: 100 % | 2–3 | 2.35 | 1.20 / 3 |
-| 2 | 3000 / 3000 | 2 / 8 / 20 | 251 | **851** | 3: 9 %, 4: 25 %, 5: 67 % | 3: 100 % | 2–3 | 2.54 | 1.54 / 3 |
-| 3 | 3000 / 3000 | 1 / 3 / 8 | 312 | **1380** | 4: 1 %, 5: 14 %, 6: 85 % | 4: 10 %, 5: 90 % | 2–4 | 2.87 | 1.55 / 4 |
-| 4 | 3000 / 3000 | 2 / 6 / 14 | 744 | **2216** | 5: 1 %, 6: 19 %, 7: 80 % | 5: 100 % | 2–4 | 3.10 | 1.88 / 4 |
-| 5 | 3000 / 3000 | 1 / 4 / 9 | 794 | **2745** | 7: 1 %, 8: 19 %, 9: 80 % | 7: 100 % | 2–5 | 3.47 | 2.06 / 5 |
+| Band | Valid networks | Edge topologies | Signatures | `J` distribution | `Ja` distribution | `D` range | mean depth | jogs per path, mean / max |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 3000 / 3000 | 21 | **290** | 3: 13 %, 4: 87 % | 3: 100 % | 2–3 | 2.36 | 1.20 / 3 |
+| 2 | 3000 / 3000 | 125 | **1868** | 3: 9 %, 4: 24 %, 5: 68 % | 3: 39 %, 4: 24 %, 5: 36 % | 2–3 | 2.57 | 1.54 / 3 |
+| 3 | 3000 / 3000 | 184 | **1411** | 4: 2 %, 5: 14 %, 6: 84 % | 4: 10 %, 5: 90 % | 2–4 | 2.87 | 1.55 / 4 |
+| 4 | 3000 / 3000 | 541 | **2870** | 5: 2 %, 6: 23 %, 7: 75 % | 5: 47 %, 6: 29 %, 7: 24 % | 2–4 | 3.10 | 1.88 / 4 |
+| 5 | 3000 / 3000 | 667 | **2975** | 7: 2 %, 8: 26 %, 9: 72 % | 7: 60 %, 8: 22 %, 9: 18 % | 2–5 | 3.45 | 2.06 / 5 |
+
+**Attempt-count percentiles are** *(to be re-measured)* *by* `generator-audit`; the designer's
+prototype does not instrument `GEN_STATS` and round 8's `1–2 / 3–8 / 8–20` were taken before `K`
+moved. **`Ja` is the row that moved**, and it moved because `K` did: lifting `K` to `C` lifts the
+count of junctions whose two reachable-colour sets are incomparable, so bands 2, 4 and 5 now sit
+*above* their `Ja` floor in 61 %, 53 % and 40 % of levels instead of exactly on it.
+[AC-242](acceptance-criteria.md)'s floor is unchanged and still holds in 100 % of levels.
+**Signatures roughly doubled at bands 2, 4 and 5** for the same reason, which is a free gain against
+[AC-234](acceptance-criteria.md)'s variety floor — band 1 is unchanged at 290 against a floor of 160
+and is still the binding band.
 
 **The `max` in the attempts column is a sample maximum and it grows with the seed count. Read it
 that way, and never as a bound.** Median and p95 are stable statistics of the generator; `max` is
@@ -765,11 +1003,16 @@ the constrained bot measures the true value.
 
 | Band | Spawn rate | Mean depth | Estimated taps/s | Cars in flight, mean | Measured taps/s |
 |---|---|---|---|---|---|
-| 1 | 0.294 /s | 2.35 | 0.35 | 2.88 | *(to be measured)* |
-| 2 | 0.400 /s | 2.54 | 0.51 | 3.80 | *(to be measured)* |
-| 3 | 0.429 /s | 2.87 | 0.62 | 3.89 | *(to be measured)* |
-| 4 | 0.455 /s | 3.10 | 0.71 | 3.88 | *(to be measured)* |
-| 5 | 0.469 /s | 3.47 | 0.81 | 3.76 | *(to be measured)* |
+| 1 | 0.288 /s | 2.36 | 0.34 | 2.73 | **0.34** |
+| 2 | 0.408 /s | 2.57 | 0.52 | 3.96 | **0.54** |
+| 3 | 0.429 /s | 2.87 | 0.62 | 4.26 | **0.55** |
+| 4 | 0.458 /s | 3.10 | 0.71 | 4.38 | **0.65** |
+| 5 | 0.469 /s | 3.45 | 0.81 | 4.40 | **0.72** |
+
+*The measured column is the designer's 3,000-seed prototype and it is what
+[AC-233](acceptance-criteria.md) is expected to reproduce, not a substitute for measuring it. Every
+band is between 0.34 and 0.72 taps/s against a 1.25 /s ceiling, and the estimate overstates by
+12–35 % at every band, in the direction §6.3 predicts.*
 
 The estimate is `spawn rate × mean depth / 2` and assumes a junction is in the wrong state half the
 time, which overstates the true rate because consecutive same-colour cars inherit a correct
@@ -1105,7 +1348,7 @@ ticksToReach(sim, car, junctionNode):
       e = n.out[ n.kind === 'branch' ? sim.open[n.junctionId] : 0 ]
       d += edge(e).lengthMlu
       n  = edge(e).to
-   return ceil(d / level.speedMluPerTick)
+   return ceil(d / CAR_SPEED)
 ```
 
 ```
@@ -1278,11 +1521,17 @@ Attention supply is 60 ticks per second. Demand is one focus per junction decisi
 
 | Band | cars/s | mean depth | focus events/s, lower bound | cheapest cost each | dearest cost each | ticks/s demanded | focus events/s, **measured** |
 |---|---|---|---|---|---|---|---|
-| 1 | 0.294 | 2.35 | 0.69 | 11 | 22 | 8 – 15 | *(to be measured)* |
-| 2 | 0.400 | 2.54 | 1.02 | 11 | 22 | 11 – 22 | *(to be measured)* |
-| 3 | 0.429 | 2.87 | 1.23 | 11 | 22 | 14 – 27 | *(to be measured)* |
-| 4 | 0.455 | 3.10 | 1.41 | 11 | 22 | 16 – 31 | *(to be measured)* |
-| 5 | 0.469 | 3.47 | 1.63 | 11 | 22 | 18 – 36 | *(to be measured)* |
+| 1 | 0.288 | 2.36 | 0.68 | 11 | 22 | 7 – 15 | **2.10** |
+| 2 | 0.408 | 2.57 | 1.05 | 11 | 22 | 12 – 23 | **2.61** |
+| 3 | 0.429 | 2.87 | 1.23 | 11 | 22 | 14 – 27 | **2.65** |
+| 4 | 0.458 | 3.10 | 1.42 | 11 | 22 | 16 – 31 | **2.84** |
+| 5 | 0.469 | 3.45 | 1.62 | 11 | 22 | 18 – 36 | **3.03** |
+
+**The measured column is 1.9 to 3.1 times the lower bound, and the multiple falls up the ladder**
+(3.1× at band 1, 1.9× at band 5), which says the re-focus traffic the bound omits is being squeezed
+out by the cold traffic it counts. Glances fall 7.3 → 5.8 /s across the ladder while acquires rise
+0.47 → 0.99 /s and evictions rise 0.000 → 0.523 /s: **the bot looks at fewer things, more
+expensively, as the board fills.** That is the mechanism §6.1.2 caps at about five cars.
 
 Cheapest is `BOT_SCAN_TICKS + BOT_SWITCH_TICKS + 1` (the car was still held); dearest is
 `BOT_SCAN_TICKS + BOT_ACQUIRE_TICKS + 1` (it had been forgotten or evicted). Neither figure
@@ -1339,13 +1588,51 @@ window moves underneath it while it does. §7.4's procedure is written around th
 clear-rate target from §7.2.2; the `p` column is `P(Binomial(N, p) <= 2)` inverted at each end of
 the target, which is arithmetic a reader can re-derive in ten lines without running the game.
 
-| Band | `N` | `p* = 2/N` | `p` at the band's easiest allowed clear rate | …at its hardest | width of the window |
+| Band | `N` | `p* = 2/N` | model window, easiest → hardest | **reading window** (model − 0.20 pp) | width |
 |---|---|---|---|---|---|
-| 1 | 32 | 6.25 % | 0 % | **2.60 %** | 2.60 pp |
-| 2 | 44 | 4.55 % | **1.53 %** | **2.95 %** | 1.42 pp |
-| 3 | 47 | 4.26 % | **2.15 %** | **3.61 %** | 1.46 pp |
-| 4 | 50 | 4.00 % | **2.68 %** | **4.12 %** | 1.44 pp |
-| 5 | 52 | 3.85 % | **3.11 %** | **4.74 %** | 1.63 pp |
+| 1 | 32 | 6.25 % | 0 % → **2.60 %** | 0 % → **2.40 %** | 2.40 pp |
+| 2 | 46 | 4.35 % | **1.47 %** → **2.82 %** | **1.27 %** → **2.62 %** | 1.35 pp |
+| 3 | 47 | 4.26 % | **2.15 %** → **3.61 %** | **1.95 %** → **3.41 %** | 1.46 pp |
+| 4 | 50 | 4.00 % | **2.68 %** → **4.12 %** | **2.48 %** → **3.92 %** | 1.44 pp |
+| 5 | 51 | 3.92 % | **3.18 %** → **4.83 %** | **2.98 %** → **4.63 %** | 1.65 pp |
+
+#### 7.1.10.0 The reading window, and why the model window cannot be used as a verdict
+
+**The model window and the measured `p` are not on the same scale, and round 8 printed them side by
+side as though they were.** §7.1.10's own limitation paragraph says why: the binomial treats a
+level's `N` cars as independent trials and they are not, so at a given `p` the measured clear rate
+sits *below* the model's. Inverted, that is the statement that **at a given clear rate the measured
+`p` sits below the model's inversion** — always, at every band, by construction. A column that
+inverts the model at the ends of the clear-rate target and then compares the measurement to it
+**must** read "BELOW" whenever the clear rate is in band. Round 8's sweep duly reported exactly
+that at bands 2, 4 and 5, and it was the table misreading itself, not the game.
+
+**Measured, so it stops being a hand-wave.** Over the 222 points of round 9's `(interval, speed)`
+sweep that produced a clear rate strictly between 1 % and 99.9 % — five bands, clear rates from
+27 % to 99 %, `N` from 32 to 55 — the gap `invert(N, S_measured) − p_measured` is
+
+| clear-rate bucket | 40–50 | 50–60 | 60–70 | 70–80 | 80–90 | 90–100 |
+|---|---|---|---|---|---|---|
+| points | 4 | 6 | 11 | 21 | 24 | 154 |
+| mean gap, pp | 0.10 | 0.14 | 0.14 | 0.21 | 0.19 | 0.20 |
+| mean ratio `p/p_model` | 0.98 | 0.97 | 0.97 | 0.94 | 0.93 | 0.82 |
+
+**The gap is near-constant in percentage points and is not a constant ratio**, which is the useful
+form: the correction is *additive*, about **0.20 pp**, and it does not depend on where on the ladder
+the band sits. The ratio column is the same fact seen badly — it looks like a 0.82–0.98 multiplier
+only because `p` itself is smaller at the easy end.
+
+**So the design publishes two columns and they have different jobs.** The *model window* is the
+object §7.1.10 reasons about — window widths, ladder spans, the monotone-`p` search — because all of
+those are comparisons of the model with itself. The *reading window*, `model − 0.20 pp`, is the only
+one a measured `p` may be compared against, and it is the one
+[AC-241](acceptance-criteria.md) means. **A measured `p` below the model window and inside the
+reading window is a pass, and round 8's "BELOW" verdicts at bands 2, 4 and 5 were the instrument
+being held to the wrong ruler.**
+
+*The 0.20 pp is itself a measurement and will move when the geometry does. It is re-measured
+whenever §6.1 moves, from the same sweep that produces the clear rates, and it is a single number
+rather than five because the evidence says it does not vary by band (0.19–0.25 pp across the five).*
 
 **Read the two inner columns as one interval and the governing fact of this design is unchanged:
 every band's whole allowed range of difficulty is under two percentage points of per-car
@@ -1359,7 +1646,8 @@ band 5's cap is the room a monotone `p` ladder has to live in:
 |---|---|---|
 | slice-0 / round-5 quotas (26 / 36 / 48 / 64) | **1.23 pp** | quota rose faster than the target fell, so the caps fell at every step while `p` had to rise |
 | round-6 quotas (33 / 41 / 47 / 51) | **2.78 pp** | lever 0 flattened the quota ladder, so floors and caps stepped *with* the ladder |
-| **round 8, the clock (`N` = 44 / 47 / 50 / 52)** | **3.21 pp** | `N` rises only 18 % across four bands while the target falls 42 %, so the windows rise faster than `N` narrows them |
+| round 8, the clock (`N` = 44 / 47 / 50 / 52) | **3.21 pp** | `N` rises only 18 % across four bands while the target falls 42 %, so the windows rise faster than `N` narrows them |
+| **round 9 (`N` = 45 / 47 / 50 / 51)** | **3.33 pp** | the same mechanism, with a slightly flatter `N` because `interval` no longer has to do all the escalating |
 
 **The clock's windows are wider than either quota ladder's, and the reason is worth stating
 because it is not obvious.** One would expect a fixed clock to *narrow* the windows, because the
@@ -1380,9 +1668,19 @@ windows with R2 (≥ 4 pp) and R3 (≤ 15 pp) enforced, maximising the smallest 
 percentage points:
 
 ```
-p     = 0.00 / 2.14 / 2.80 / 3.38 / 3.92 %      clear = 100.0 / 93.2 / 85.6 / 76.1 / 66.6 %
-drops = 6.8 / 7.6 / 9.4 / 9.5 pp                smallest margin anywhere = 2.79 pp
+round 9, N = 32 / 45 / 47 / 50 / 51, searched at 0.04 pp over the five windows with R2 and R3:
+p     = 0.00 / 2.38 / 3.14 / 3.66 / 4.22 %      clear = 100.0 / 90.8 / 81.7 / 72.3 / 63.5 %
+drops = 9.2 / 9.1 / 9.4 / 8.9 pp                smallest margin anywhere = 4.84 pp
 ```
+
+*The round-9 figure disagrees with round 8's stated **2.79 pp** by more than the change in `N`
+explains — `N` moved only 44 → 45 and 52 → 51 — so one of the two searches is wrong and it is more
+likely the one whose method is not written down. Round 9's is: enumerate `(p2, p3, p4, p5)` on a
+0.04 pp grid inside each band's model window, require strict monotonicity, compute each band's clear
+rate as `P(Bin(N, p) <= 2)`, reject any ladder whose four drops are outside `[4, 15]`, and score by
+the smallest of the eight margins — four clear-rate distances to the nearer window edge and four
+drop distances to the nearer of 4 and 15. **The round-8 number is not used anywhere else and is not
+re-derived here; it is flagged rather than quietly replaced.***
 
 The same search run against the two quota ladders this design has had, on the same objective so the
 three are comparable:
@@ -1391,7 +1689,8 @@ three are comparable:
 |---|---|---|---|
 | slice-0 / round-5 quotas | 26 / 36 / 48 / 64 | **1.23 pp** | **0.34 pp** |
 | round-6 quotas | 33 / 41 / 47 / 51 | **2.78 pp** | **2.76 pp** |
-| **round 8, the clock** | `N` = 44 / 47 / 50 / 52 | **3.21 pp** | **2.79 pp** |
+| round 8, the clock | `N` = 44 / 47 / 50 / 52 | **3.21 pp** | 2.79 pp *(disputed — see above)* |
+| **round 9** | `N` = 45 / 47 / 50 / 51 | **3.33 pp** | **4.84 pp** |
 | the same search with `p` ignored entirely | — | — | 5.00 pp |
 
 Three things follow, and the second is not what one would hope for:
@@ -1405,11 +1704,13 @@ Three things follow, and the second is not what one would hope for:
   The extra span goes into *where* the ladder can sit, not into how much slack it has once it sits
   there. **Anyone expecting the fixed clock to have loosened the tuning problem should read this
   row and stop expecting it.**
-- **The `p` windows are still the binding half.** Ignoring `p` entirely and solving only against
-  the five clear-rate windows and R2/R3 gives 5.00 pp, so requiring a monotone per-car error rate
-  costs **2.21 pp of the 5.00 available** — nearly half. That is the same shape of finding round 6
-  reported and the clock did not change it: §7.2.2's targets and the physics of
-  `P(Bin(N, p) <= 2)` each take about half the room, and a retune has to move both.
+- **The `p` windows are no longer the binding half, and that is round 9's one piece of good news
+  about the tuning problem.** Ignoring `p` entirely and solving only against the five clear-rate
+  windows and R2/R3 gives 5.00 pp; requiring a monotone per-car error rate costs **0.16 pp of it**,
+  against the 2.21 pp round 8 recorded. §7.2.2's targets and R2/R3 now take essentially all the
+  room, and the physics of `P(Bin(N, p) <= 2)` takes almost none. **The ladder this round actually
+  ships sits at a smallest margin of 1.3 pp** (R2 at the 3 → 4 pair), so there is 3.5 pp of
+  unclaimed slack in the search — which is worth knowing the next time a band misses.
 
 **One limitation, stated because the rest of this subsection leans on the model.** The binomial
 treats a level's `N` cars as independent trials, and they are not: level difficulty varies, so
@@ -1523,57 +1824,62 @@ misroutes**, and its delivered count must equal §6.1's `N`. That follows from V
 
 #### 7.2.3 What the numbers were, and why they are not reused
 
-Round 6's reading was `99.9 / 91.5 / 81.5 / 74.1 / 66.0 %` with per-car `p` of
-`0.92 / 2.53 / 3.38 / 3.38 / 3.80 %`, every band in window, R2 and R3 passing at all four pairs,
-and a smallest margin of 3.4 pp. It was a good reading and **none of it transfers.** It was taken
-against a quota ladder that no longer exists, a geometry whose every dimension has changed, a
-network model whose pass nodes could drift sideways, and a first-decision window the owner has
-since rejected.
+Round 8's reading on the round-8 table was `100.0 / 99.0 / 88.1 / 86.7 / 87.5 %` with per-car `p` of
+`0.33 / 0.73 / 2.25 / 2.25 / 2.17 %`. **Band 5 was easier than band 4, `p` was flat from band 3 up,
+and R2 failed at three of the four pairs.** §6.1.1 is the diagnosis and it is one sentence: cars in
+flight measured `2.72 / 3.70 / 3.74 / 3.77 / 3.66`, so the quantity the ladder escalates was not
+escalating.
 
-What does transfer is the *definition* of `p` — misroutes over arrivals, summed across all runs in
-a band, not averaged per level ([AC-246](acceptance-criteria.md)) — and the finding that `p` is
-what a regression should be stated in.
+Round 6's reading (`99.9 / 91.5 / 81.5 / 74.1 / 66.0 %`) is quoted nowhere as evidence. It was taken
+against a quota ladder that no longer exists.
 
-#### 7.2.4 What the instrument must read, and what the designer could compute
+What transfers from both is the *definition* of `p` — misroutes over arrivals, summed across all
+runs in a band, not averaged per level ([AC-246](acceptance-criteria.md)) — and the finding that `p`
+is what a regression should be stated in.
 
-**This table is the developer's sweep to fill in.** The `p` window column is computed (§7.1.10)
-and is not negotiable; the `p` prior is a crude fit and is not evidence.
+#### 7.2.4 What the design expects the instrument to read
 
-| Band | clear rate | §7.2.2 band | per-car `p` | §7.1.10 window | AC-246 gap | AC-246 ceiling `0.25 × 2/N` | delivered |
+**This table is a prediction, it is falsifiable, and it is stated before the developer's sweep runs
+so that it can be falsified.** It is the designer's own 3,000-seed prototype of §7.1 driven over the
+§6.1 table; the developer's `tools/bot.mjs --seeds 1000` is the reading that counts, and where the
+two differ the developer is right.
+
+| Band | **clear rate expected** | §7.2.2 band | **per-car `p` expected** | §7.1.10 reading window | AC-246 ceiling `0.25 × 2/N` | `N` | delivered, median |
 |---|---|---|---|---|---|---|---|
-| 1 | *(to be measured)* | ≥ 95 % | *(to be measured)* | 0.00 – 2.60 % | *(to be measured)* | **1.56 pp** | *(to be measured)* |
-| 2 | *(to be measured)* | 86 – 97 % | *(to be measured)* | 1.53 – 2.95 % | *(to be measured)* | **1.14 pp** | *(to be measured)* |
-| 3 | *(to be measured)* | 76 – 92 % | *(to be measured)* | 2.15 – 3.61 % | *(to be measured)* | **1.06 pp** | *(to be measured)* |
-| 4 | *(to be measured)* | 66 – 85 % | *(to be measured)* | 2.68 – 4.12 % | *(to be measured)* | **1.00 pp** | *(to be measured)* |
-| 5 | *(to be measured)* | 55 – 78 % | *(to be measured)* | 3.11 – 4.74 % | *(to be measured)* | **0.96 pp** | *(to be measured)* |
-
-**A prior, and it is labelled a prior because it is one.** Fitting `q = a · inFlight^α · dpc^β` to
-the seven `(cars in flight, decisions per car, per-decision error)` readings round 6 and round 7
-produced — five band points plus two stops of the band-5 lever-0 sweep — gives
-`α = 2.31`, `β = 1.26` and residuals of up to 40 % on two of the seven points. Applied to §6.1 it
-predicts
+| 1 | **100.0 %** | ≥ 95 % | **0.30 %** | 0.00 – 2.40 % | **1.56 pp** | 32 | 32 |
+| 2 | **92.3 %** | 86 – 97 % | **2.01 %** | 1.30 – 2.68 % | **1.11 pp** | 45 | 44 |
+| 3 | **84.0 %** | 76 – 92 % | **2.91 %** | 1.95 – 3.41 % | **1.06 pp** | 47 | 46 |
+| 4 | **78.7 %** | 66 – 85 % | **3.11 %** | 2.48 – 3.92 % | **1.00 pp** | 50 | 49 |
+| 5 | **71.2 %** | 55 – 78 % | **3.63 %** | 2.98 – 4.63 % | **0.98 pp** | 51 | 49 |
 
 ```
-p      ~  1.01 / 2.29 / 3.17 / 3.75 / 4.48 %
-clear  ~  99.6 / 92.0 / 81.4 / 71.1 / 58.6 %       drops  7.5 / 10.7 / 10.2 / 12.5 pp
+drops            7.7 / 8.3 / 5.3 / 7.5 pp        R2 (>= 4)  passes at all four pairs
+                                                 R3 (<= 15) passes at all four pairs
+cars in flight   2.73 / 3.96 / 4.26 / 4.38 / 4.40    monotone
+p                0.30 / 2.01 / 2.91 / 3.11 / 3.63 %  monotone, every band inside its reading window
+taps/s           0.34 / 0.54 / 0.55 / 0.65 / 0.72    against AC-233's 1.25 ceiling
 ```
 
-— every band inside its window, R2 and R3 satisfied, `p` monotone, band 5 the tightest at 0.26 pp
-below its cap. **That is why this band table was chosen and it is not why it should be believed.**
-The fit is to a different geometry's bot, the exponent on traffic is steep enough that a 10 % error
-in `cars in flight` is a 25 % error in `q`, and §7.1.10's own limitation paragraph says the
-binomial sits above the measurement. Treat it as evidence that the table is *plausible* and as
-nothing else. **If the sweep disagrees, the sweep is right** and §7.4 is the procedure.
+**Three predictions that are sharper than the clear rate and easier to falsify**, offered because a
+clear rate can be right for the wrong reason:
 
-**What to read first if it disagrees**, in order:
+1. **`cars in flight` at `1000` seeds should read `2.73 / 3.96 / 4.26 / 4.38 / 4.40 ± 0.03`**, and it
+   is a property of the *geometry*, not of the bot — it is `transit / interval` and neither term
+   depends on how well the bot plays. If the developer's number differs by more than a few
+   hundredths, §6.1.1's arithmetic is wrong and everything downstream of it is suspect. **Read this
+   before the clear rate.**
+2. **Evictions per second should read `0.000 / 0.077 / 0.289 / 0.385 / 0.523`** and memory expiries
+   should *fall* across the ladder (`0.19 / 0.16 / 0.14 / 0.10 / 0.07`). The second is
+   counter-intuitive and round 8 measured it too: journeys are long enough that a car is re-glanced
+   before its entry decays, so `BOT_MEMORY_TICKS / interval` falling below 1 costs nothing.
+   **Evictions are the live pressure and expiries are not.**
+3. **The AC-240 rise should read `-0.1 / +7.7 / +14.6 / +22.5 / +30.5 pp`**, asserting at bands 4
+   and 5 under the 80 % headroom rule and reported as `n/a` at 1–3. In the `p` form it should read
+   `1.40 / 2.89 / 4.18 / 6.52 / 7.11 ×`, monotone, asserting everywhere.
 
-1. **`--attention-report`'s focus split.** §7.1.9 predicts demand fell and re-focus rose; if the
-   cold/re-focus split has moved a lot from round 6's `1.26–2.44` re-focuses against `0.54–1.01`
-   cold per second, the longer journeys (§6.1) are doing more than expected.
-2. **Memory expiries per second.** §7.1.3 records that `BOT_MEMORY_TICKS / interval` fell below 1
-   at every band for the first time. If expiries are up sharply, that is why.
-3. **`p` before the clear rate.** §7.1.10.3. A band that is 20 points out of window may be 0.6 pp
-   out in `p`.
+**If the sweep disagrees, the sweep is right** and §7.4 is the procedure. **What to read first**, in
+order: cars in flight (prediction 1), then `p` against its *reading* window (§7.1.10.0 — not the
+model window), then evictions, then the clear rate.
 
 ### 7.3 Target 2 — the delivery band
 
@@ -1584,13 +1890,16 @@ absolute ceiling are all the same number by construction and five acceptance cri
 What replaces it is the quantity that *does* vary and that the player reads as their result: the
 number of cars delivered.
 
-| Band | `N`, arrivals available | a clean run delivers | modelled mean delivered | measured median | measured p10 |
-|---|---|---|---|---|---|
-| 1 | 32 | 32 | ≈ 31.6 | *(to be measured)* | *(to be measured)* |
-| 2 | 44 | 44 | ≈ 42.1 | *(to be measured)* | *(to be measured)* |
-| 3 | 47 | 47 | ≈ 43.0 | *(to be measured)* | *(to be measured)* |
-| 4 | 50 | 50 | ≈ 43.8 | *(to be measured)* | *(to be measured)* |
-| 5 | 52 | 52 | ≈ 42.7 | *(to be measured)* | *(to be measured)* |
+| Band | `N`, arrivals available | a clean run delivers | expected median delivered | expected p10 |
+|---|---|---|---|---|
+| 1 | 32 | 32 | **32** | 31 |
+| 2 | 45 | 45 | **44** | 42 |
+| 3 | 47 | 47 | **46** | 33 |
+| 4 | 50 | 50 | **49** | 30 |
+| 5 | 51 | 51 | **49** | 25 |
+
+*Designer's 3,000-seed prototype; the developer's sweep is the reading that counts
+([AC-226](acceptance-criteria.md) – [AC-230](acceptance-criteria.md)).*
 
 The modelled column is the exact expectation of the three-lives process over `N` independent trials
 at the §7.2.4 prior's `p`, and it inherits that prior's unreliability.
@@ -1605,13 +1914,15 @@ the `p` windows — are both narrow.
 Two properties the delivery band is expected to have, and which are worth checking because a
 violation would say something about the design rather than about tuning:
 
-- **`delivered` should be flat from band 3 upward** (§7.2.4's prior says 43.0 / 43.8 / 42.7). A
-  harder band spawns slightly more cars and loses slightly more of them. **The score is a
-  within-band signal, not a between-band one**, and a player should not read a band-5 score as
-  bigger than a band-3 one.
+- **`delivered` should be flat from band 3 upward** (46 / 49 / 49). A harder band spawns slightly
+  more cars and loses slightly more of them. **The score is a within-band signal, not a
+  between-band one**, and a player should not read a band-5 score as bigger than a band-3 one.
 - **`delivered` should be strongly bimodal**, because a run either reaches the bell or stops at its
   third misroute. The p10 column is there to make that visible: it is roughly where the failed runs
-  land, and if it is close to the median the lives are not doing their job.
+  land, and if it is close to the median the lives are not doing their job. **It separates properly
+  under the round-9 table for the first time** — median minus p10 is 1 / 1 / 13 / 19 / 24 across the
+  ladder, against round 8's 1 / 1 / 6 / 8 / 7. That widening is the lives starting to bite, and it
+  is the same fact §6.1.5's misroute distribution reports from the other side.
 
 ### 7.4 When a target is missed
 
@@ -1639,8 +1950,28 @@ delivery band is a report, not a bound. The check that used to stop a lever bein
 "a change that fixes §7.2 and breaks §7.3 has not fixed anything" — has no analogue. What is left
 is [AC-246](acceptance-criteria.md) and §7.1.10's windows, and both are narrow.
 
-**Lever 1 — `interval`. Pull this first.** It moves the per-car error rate and the number of cars
-in the same direction (§7.1.10), so it has about twice the leverage it had under a quota:
+> **What is a lever, restated from measurement rather than from habit.** Round 9 measured the
+> response of `p` to every parameter in §6.1 at band 5, at a fixed operating point, over 600–2,000
+> seeds each:
+>
+> | pull | Δ`p` | what it really moves |
+> |---|---|---|
+> | `interval` −8 ticks | **+0.5 to +1.5 pp** | cars in flight, and `N` |
+> | `speed` −300 MLU/tick | **+0.9 to +1.7 pp** | cars in flight, via `transit` |
+> | `colW` +30 LU | **+0.9 pp** | cars in flight, via `transit` |
+> | `R` 6 → 8 | +0.5 pp | depth — *and breaks the 44 pt tap target, §3.2.1* |
+> | `K` +1 | −0.4 to +0.3 pp | nothing reliable; it is a **visibility** axis |
+> | `pBranch` 0.90 → 0.95 | +0.04 pp | nothing |
+> | `J` 7–9 → 8–10 | +0.02 pp | nothing |
+> | `LIVES` 3 → 2 | +26 pp *of clear rate* | everything at once — §6.1.5 |
+>
+> **The top three are all the same lever seen three ways: cars in flight.** `pBranch` and `J` are
+> not levers and are no longer listed as ones. `K` is the axis the *player* reads as escalation and
+> the instrument reads as noise; it is pulled for the player and never to move a number.
+
+**Lever 1 — cars in flight, through `interval`. Pull this first.** It moves the per-car error rate
+and the number of cars in the same direction (§7.1.10), so it has about twice the leverage it had
+under a quota:
 
 ```
 interval' = interval + Δ                       // Δ > 0 makes the band easier, Δ < 0 harder
@@ -1665,21 +1996,44 @@ of `interval`:
 - R2 and R3 are re-checked against the **adjacent** bands, which a single-band pull will move
   relative to.
 
-**Lever 2 — topology, when lever 1 is exhausted or when it would break a neighbour.** `R`, `C` and
-`pBranch` move `p` **without moving `N`**, which is the only way left to change a band's difficulty
-without changing its window. That makes them the precision instrument in this model, where under a
-quota they were the blunt one.
+**Lever 1b — cars in flight, through `colW`.** `colW` moves `transit`, so it moves cars in flight
+**without moving `N` and without moving the arrival rate**. That makes it the precision instrument
+this model otherwise lacks: a 30 LU change is worth about 0.9 pp of `p` and about 0.05 pp of `N`.
+Its range is fixed by §3.2.1's clearance rule and is entirely spent at `C >= 4`; it is available
+only at band 1, and only downward. **Every `colW` pull re-runs `tools/layout-sweep.mjs`**, because
+`min(colW, rowH)` is the tap-target floor.
 
-- *Clear rate too low:* reduce `pBranch` (fewer junctions, so fewer decisions per car), then reduce
-  `R`. Do **not** reduce `speedMluPerTick` — a slower car shortens nothing and a faster spawn rate
-  is what makes it hard; reducing speed shortens the planning horizon relative to the spawn rate
-  and pushes the game toward reaction. It also lengthens `transit`, which lowers `N`, which is a
-  third effect nobody intended.
-- *Clear rate too high:* raise `pBranch`, then add a colour (`K`) if the band's `C` allows it, then
-  add a row. *`pBranch` is weak: §6.1 shows that actionable junctions track `K` rather than drawn
-  `J`, so raising `pBranch` buys scenery and tap targets more reliably than it buys decisions. If
-  it is pulled, [AC-242](acceptance-criteria.md) and [AC-243](acceptance-criteria.md) are
-  re-measured with it.*
+**`speed` is not a lever and this is the paragraph that says so.** It moves cars in flight as
+strongly as `interval` does, but it is one constant shared by every band
+([`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order), owner-directed), so moving
+it moves all five bands at once and re-opens every window in §7.1.10 simultaneously. If it is ever
+moved, it is moved as a change to the *game*, with all five bands re-measured, and never as a
+response to one band missing its target.
+
+**Lever 2 — topology, when lever 1 is exhausted or when it would break a neighbour.** `R` and `C`
+move `p` **without moving `N`**. `pBranch` and `J` move nothing measurable and are not levers
+(§6.1, and the response table above).
+
+- *Clear rate too low:* raise `interval`, then reduce `R`.
+
+  > **Correction, round 9.** Round 8 wrote here: *"Do not reduce `speedMluPerTick` — a slower car
+  > shortens nothing and a faster spawn rate is what makes it hard; reducing speed shortens the
+  > planning horizon relative to the spawn rate and pushes the game toward reaction."* **The second
+  > half of that is backwards and it is the sentence that produced the flat ladder.** A slower car
+  > lengthens `transit`, which *raises* cars in flight at a fixed `interval` — measured, band 5 at
+  > `interval = 140`: 3350 → 2450 MLU/tick takes the board from 3.36 cars to 4.51 and the clear rate
+  > from 98.3 % to 75.8 %. And it gives every individual decision **more** absolute time, not less:
+  > the first-decision window is `(ENTRY_LEN + rowH) / speed`. Slower cars push the game *toward*
+  > divided attention and away from reaction, which is the direction this design wants. The correct
+  > statement is the one above: speed is a traffic lever with as much force as `interval`, it is now
+  > one constant for all five bands, and it is not pulled per band.
+- *Clear rate too high:* cut `interval`, then add a row. **Do not reach for `pBranch` or `K`.**
+  Measured this round at band 5: `pBranch` 0.90 → 0.95 is worth 0.04 pp of `p` and `J` 7–9 → 8–10 is
+  worth 0.02 pp, both inside noise; `K` is worth between −0.4 and +0.3 pp depending on the band and
+  the sign is not predictable. `K` is on the table because the player sees it
+  ([`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order)), not because it moves this
+  number. If either is pulled for any reason, [AC-242](acceptance-criteria.md) and
+  [AC-243](acceptance-criteria.md) are re-measured with it.
 - *R2 violated (a band is not harder than the one below it):* the fix is never a clear-rate lever
   on the offending band alone. Two adjacent bands that measure the same are one band; the
   correction is to [`gameplay.md` §5.1](gameplay.md#51-what-escalates-and-in-what-order)'s
@@ -1706,11 +2060,15 @@ anything it did not already have for free? Is the effect specific — did the qu
 argued to fix move, while the quantities it was not argued to fix did not? A change that improves
 every number a little is a change to the gauge.
 
-**And one thing that is not a lever any more either: `LIVES`.** Three lives is what makes the clear
-rate `P(Bin(N, p) <= 2)`; changing it to 4 would move every window in §7.1.10 at once and every
-AC-246 ceiling with them. It is a rule of the game
-([`gameplay.md` §4.1](gameplay.md#41-lives)), not a tuning parameter, and it is listed here because
-under a clock it is the most tempting-looking knob in the design.
+**`LIVES` is still not a lever, and round 9 is the round that measured why rather than asserting
+it.** Three lives is what makes the clear rate `P(Bin(N, p) <= 2)`; a per-band life count makes it
+`P(Bin(N, p) < lives)`, which at one life is `(1-p)^N` — a different curve, not a shifted one. It
+would move every window in §7.1.10 at once and every AC-246 ceiling with them. **And it is worth
+16–26 pp of clear rate per life at this ladder's `p`, against R3's 15 pp ceiling on a single step**
+(§6.1.5 has the measured distribution). It is a rule of the game
+([`gameplay.md` §4.1](gameplay.md#41-lives)), not a tuning parameter. §6.1.5 prices the one shape in
+which it could be used — an extra rung past band 5 rather than a re-tune of it — and sends it to the
+owner.
 
 ### 7.4.1 The lever order under a clock, and what round 6 proved that still holds
 
@@ -1751,6 +2109,27 @@ it moved and read `p` against the new window**, not the clear rate against the o
 single most likely way to get this model wrong, and it is the failure mode the quota model did not
 have.
 
+### 7.4.2 The tier-5 register — what only the owner can settle
+
+`development-process.md` §6.9's rule is that **a threshold derived from the instrument's own
+constants is not evidence about a human.** This section is the list of places where this design has
+reached one, so that nobody reads a bot's pass on them as settled. Each is a real choice with a
+measured price, not an open question the designer declined to answer.
+
+| # | The question | What the measurement says | Recommendation |
+|---|---|---|---|
+| **D** | **How busy should the board be?** | Cars in flight is capped near 5 by the instrument (§6.1.2) — and by the *glance budget*, not by `BOT_WORKING_SET`: 3 → 4 slots moves band 5's clear rate at 4.36 cars from 57 % to 85 %, and 4 → 5 moves it not at all. The round-9 table sits at 2.7–4.4. The owner has said the round-8 board at 2.7–3.8 felt like *"one train of thought"*. | **Ship 2.7–4.4, get a screenshot and a play session, and be ready to go further.** If the owner still reads it as sparse, the finding is that `BOT_WORKING_SET = 3` is too small a model of a human — which is the §7.4 exception, and it re-reads every target, not just the failing one. |
+| **L** | **Should lives tighten at the top?** | One life is worth 16–26 pp; R3 caps a step at 15 (§6.1.5). Lives and density cannot both escalate: band 5 at 2 lives needs 3.9 cars to stay in window, fewer than band 3. | **Keep `LIVES = 3`.** If the owner wants the reference game's attrition, take it as a **band 6 at levels 30+** — an extra rung, not a re-tune — priced in §6.1.5. |
+| **T** | **Two-colour cars.** | The instrument cannot measure it: a two-bit colour mask costs the bot exactly what a one-bit mask costs, and mechanically it makes routing *easier* (§6.1.6). Whether it is hard for a person is a claim about human memory. | **No recommendation.** If the owner wants it, it is a gameplay change measured by playing, and the bot is silent on it. |
+| **S** | **Is 165 LU/s the right speed?** | Speed is now one constant for all five bands. At 2750 MLU/tick a car crosses the route in 6.5 s and the first-decision window is 2.43–2.65 s at every band, up from round 8's 2.00 s worst case. Lower is *harder* and *fairer* at once (§7.4 lever 1's correction); higher is easier and tighter. | **2750.** It is the value band 1 already ran at, so no band gets faster than the tutorial did, and §6.9's rejected window cannot recur. |
+| **R** | **Does the road recede enough?** | [`ui.md` §4.6](ui.md#46-the-ink-budget) turns it into a measured ink budget rather than a matter of taste. | Per `ui.md`; the number is measurable but the threshold is a judgement. |
+| **P** | **Is the palette still bleak?** | The six car colours are a constrained optimisation and are measured ([`ui.md` §5.2](ui.md#52-measured-separation)); *"feels sad"* is not a quantity. Round 9 adds a sixth colour, brightens `--road`, and puts each depot's colour on screen at car-sized area (`--depot-glow`). | Per [`ui.md` §5](ui.md#5-colour), and it wants the same screenshot as item R. |
+
+**None of these is a blocker.** The design is complete and buildable on the recommendations above.
+Each is listed because a tier-1 pass on it would be the instrument agreeing with itself.
+
+---
+
 ---
 
 ## 8. Harnesses this design assumes exist
@@ -1759,17 +2138,110 @@ have.
 |---|---|
 | `tools/generator-audit.mjs --seeds 5000` | V1–V15 hold for every band × seed; zero `GEN_EXHAUSTED`; report attempt-count percentiles, per-rule rejection counts (§5.2), distinct edge topologies **and** distinct signatures per band. Also, per band, the **minimum `firstDecisionTicks`** over every path of every level against [AC-245](acceptance-criteria.md)'s floor of 90. |
 | `tools/generator-audit.mjs --rule-injection` | For each of V1–V11 and V13–V15, a fixture that violates that rule, with the rule's check invoked **directly** rather than through `validate()`'s cascade ([AC-244](acceptance-criteria.md)). Eleven of the fourteen are unreachable through `generate()` (§5.2) and this is the only place their checks are ever executed against a violation. **V14 and V15 are new and are in that class.** |
-| `tools/generator-audit.mjs --geometry` | Per band: every edge's `lengthMlu` equals `(|Δx| + |Δy|) · MLU` ([AC-207](acceptance-criteria.md)); no two horizontal runs in a row band are collinear and touching unless they share a source or a depot (§2.5); no horizontal run terminates on an occupied lattice site (Lemma 1). The fault to inject is a generator with rule (P) removed, which must fail all three. |
+| `tools/generator-audit.mjs --geometry` | Per band: every edge's `lengthMlu` equals `(|Δx| + |Δy|) · MLU` ([AC-207](acceptance-criteria.md)); no two horizontal runs in a row band are collinear and touching unless they share a source or a depot (§2.5); and **where a horizontal run terminates on an occupied lattice site, that site is a depot or a branch node carrying a junction marker** (§2.5 Lemma 1 / Lemma 1T). *The last clause replaces round 8's "no horizontal run terminates on an occupied lattice site", which is false: terminal-row landings occur in 98.7–100 % of levels.* The audit must also **report** the route-row and terminal-row landing counts separately, so that the difference stays visible. The fault to inject is a generator with rule (P) removed, which must fail all three. |
 | `tools/generator-audit.mjs --actionable --seeds 3000` | Per band: mean and minimum live-junction count under §6.2's lazy-optimal oracle, the share of levels below `Ja`, and the mean count of junctions flipped twice or more ([AC-243](acceptance-criteria.md)). |
-| `tools/bot.mjs --seeds 1000` | Unconstrained bot delivers `N` cars with zero misroutes; constrained clear rate within §7.2's table **and** satisfying R2 and R3's shape rules; measured taps/s and delivered per band. |
-| `tools/bot.mjs --entry-window` | Per band: the per-car failure rate at each car's first decision against the rate at its other decisions, against [AC-246](acceptance-criteria.md)'s per-band ceiling. The fault to inject is a round-robin with no onset capture (round 3's shipped sweep), which must fail it at bands **2, 3, 4 and 5** and **pass** at band 1 — band 1's `N = 32` gives it a 6.25 % per-car budget and a 1.2 pp gap does not reach it. *The row-0 split that this sweep used to report per arm is gone: V14 means no level has a row-0 branch, so there is only one arm.* |
+| `tools/bot.mjs --seeds 1000` | Unconstrained bot delivers `N` cars with zero misroutes; constrained clear rate within §7.2's table **and** satisfying R2 and R3's shape rules; measured taps/s and delivered per band. **Also reports `cars in flight` per band** — the tick-weighted mean of `state.cars.length` — against §6.1's `2.73 / 3.96 / 4.26 / 4.38 / 4.40`. That column is a property of the geometry rather than of the bot, so it is the first thing to read when a clear rate comes in wrong, and §7.2.4 states it as a falsifiable prediction to ±0.03. |
+| `tools/bot.mjs --entry-window` | Per band: the per-car failure rate at each car's first decision against the rate at its other decisions, against [AC-246](acceptance-criteria.md)'s per-band ceiling. **The fault injection no longer discriminates and [AC-246](acceptance-criteria.md) says so explicitly** — round 3's pure round-robin now passes at every band, because V14 removed the defect the guard was guarding rather than the guard catching it. The sweep still runs, still reports both figures at every band, and the round-robin arm is still executed; what changed is that it is now a **regression witness with a stated expectation of passing**, and a *failure* of it is the finding. |
+| `tools/bot.mjs --lives-distribution --seeds 3000` | **New.** Per band, the full distribution of misroutes per run with the life cap removed, and the clear rate it implies at 1, 2, 3 and 4 lives (§6.1.5). This is the only way to measure `LIVES` as a lever without changing a rule of the game, and it is what priced §7.4.2 item **L**. Expected mean misroutes: `0.09 / 0.90 / 1.36 / 1.57 / 1.87`. |
 | `tools/bot.mjs --attention-report` | Per band, per 1,000 seeds: mean glances/s, mean focus events/s, the split between `BOT_SWITCH_TICKS` and `BOT_ACQUIRE_TICKS` focuses, mean working-set occupancy, evictions/s, memory expiries/s, onset captures/s and captures as a share of glances (§7.1.5 D3), and the count of misroutes caused by a flip the bot made for a car it was holding onto a car it was not. These are the numbers that say *why* a band lands where it does, and without them a missed target is unexplainable. |
 | `tools/spawn-schedule.mjs --seeds 2000` | Per band: `spawns.length` equals the closed form of [`gameplay.md` §2.7](gameplay.md#27-spawn-scheduling-as-a-deterministic-function-of-the-seed); every scheduled tick is `< LEVEL_TICKS`; ticks strictly increase; and in a run that reaches the bell, `nextSpawn === spawns.length` ([AC-139](acceptance-criteria.md)). *This replaces `tools/spawn-margin.mjs`, which measured a margin that no longer exists.* |
-| `tools/converge.mjs --seeds 1000` | Per band: the rate at which two cars on converging terminal edges are within `CAR_L` of each other, and the share of those in which **both** centres are outside the depot terrace ([AC-513](acceptance-criteria.md)). Reports a number and a worst-case screenshot; the designer's prototype measured 59–301 per 1,000 runs before the terrace. |
-| `tools/layout-sweep.mjs` | The viewport sweep of [AC-401](acceptance-criteria.md) and [AC-402](acceptance-criteria.md). |
+| `tools/converge.mjs --seeds 1000` | Per band: the rate at which two cars on converging terminal edges are within `CAR_L` of each other, and the share of those in which **both** centres are outside the depot terrace ([AC-513](acceptance-criteria.md)). Reports a number and a worst-case screenshot; the designer's prototype measured 59–301 per 1,000 runs before the terrace. **Re-measure under round 9's table**: `colW` rose at every band and the spacing fell, so the rate will move and the direction is not predictable from the old reading. |
+| `tools/layout-sweep.mjs` | The viewport sweep of [AC-401](acceptance-criteria.md) and [AC-402](acceptance-criteria.md). **Re-run for round 9's `colW`** (§3.2.1): the binding junction target is expected to move from 44.16 pt to **46.61 pt** and the car-body floor to stay at 20.24 pt. |
 | `tools/replay.mjs --seed N` | A recorded run replays to a deeply equal final state, twice in a row and across machines. |
 
 Per `development-process.md:136`: before any of these is trusted to pass, the fault it is meant
 to catch is injected and the harness is confirmed to fail.
 
 `tools/pacing.mjs` is **deleted**. It measured completion time, which is now a constant.
+
+## 9. Deferred, owner-directed: the Train of Thought identity questions
+
+**This section is a brief for a later round, not an open question and not a proposal.** The owner
+has deferred both items below to their own round and instructed that nothing here be re-measured or
+changed now. **V2, the merge-free property and the one-entry rule are untouched by round 9.** What
+follows is what the next round would have to measure, and why the recorded rejections may not
+survive round 8's geometry — written down so that round is not spent re-deriving it.
+
+### 9.1 Two entry points ([`gameplay.md` §8.1](gameplay.md#81-one-entry-not-two--decided))
+
+**The recorded rejection.** A merge-free tree needs `K − 1` terminal columns per entry, so two
+entries at four colours needed six columns, and at six columns the junction pitch was already at the
+44 pt tap-target floor at 320 pt width.
+
+**Why it may not survive.** Every number in that sentence moved. The design rectangle is now
+1000 × 1500, `colW` is derived rather than chosen (§3.2.1), and the binding junction target at six
+columns is **46.61 pt** rather than 44.16.
+
+**What the next round must measure, and with what.**
+
+1. *The column budget, which round 9 has already narrowed.* §3.2.1 records that `C = 7` is
+   impossible at `DESIGN_W = 1000` — 44 pt needs `min(colW, rowH) >= 150` LU, which puts the
+   outermost depot 12 LU outside the rectangle, and the widest `colW` that fits (146) gives 42.93 pt.
+   So a second entry has to live inside six columns or move `DESIGN_W` to 1024 and rescale every
+   width-bound device. **Harness: `tools/layout-sweep.mjs` at `C = 7` and at `DESIGN_W = 1024`.**
+2. *What a second entry costs that §8.1 did not price.* Under merge-free routing two trees may not
+   share a lattice site, so each owns a contiguous column range and can only reach the depots in it.
+   **Two entries in `C` columns therefore give each front a disjoint subset of the colours, and each
+   front is simpler than the single tree it replaced.** Total colour count is unchanged; what is
+   bought is spatial separation, and what is paid is depth and colour breadth per front. Either
+   `V10` relaxes to allow a colour to have a depot in both halves, or each entry serves half the
+   palette. **Harness: a `generator-audit --two-entry` yield sweep, plus `bot.mjs` to measure
+   whether two simple fronts are harder than one deep one — which is not obvious and is the whole
+   question.**
+3. *Whether it is the right fix at all.* §6.1.2 is the competing explanation for the owner's report:
+   the board is empty because the instrument caps it near five cars, not because everything arrives
+   down one road. **Those two hypotheses make different predictions and a play session distinguishes
+   them.** Round 9's table raises cars in flight from 3.7 to 4.4 at band 5 and holds the entry
+   count; if that alone changes the owner's reading, item 1 and 2 are moot.
+
+### 9.2 Merges ([`gameplay.md` §8.2](gameplay.md#82-merge-free-networks--decided))
+
+**The recorded rejection.** Preventing two cars converging onto a shared edge requires equal path
+length to the shared node; under cubic edges that meant equal **arc length**, which rejected
+essentially every candidate (0 valid networks in 2,000 seeds per band). Round 8 re-measured the
+narrowest form — equal jog count to a shared *depot*, rule V16 — and it took generation from
+3000/3000 to 2976 and 2960 valid, attempts from a median of 1–2 to 37 and 40 with a p95 of 150 and
+168 against [AC-203](acceptance-criteria.md)'s ceiling of 128.
+
+**Why it may not survive.** Under orthogonal routing,
+
+```
+path length to (r, c) = ENTRY_LEN + r * rowH + jogs * colW
+```
+
+and `r * rowH` is the same for every path to row `r`. **So two paths to the same node have equal
+length if and only if they have the same jog count** — an integer condition on a small integer, not
+an equality between two arc-length integrals. It is also a *parity*-constrained one: a path from
+column `e` to column `c` has `jogs >= |c - e|` and `jogs ≡ |c - e| (mod 2)`, so the admissible jog
+counts at a site differ by twos.
+
+**The specific reason the round-8 measurement may not be about the space.** V16 was measured as a
+**rejection filter** bolted onto a depth-first search that does not know about it — generate freely,
+then throw the network away if the jog counts disagree. The constraint is *constructive*: the jog
+count is a label that can be carried forward row by row, and a merge admitted only between equal
+labels. **A rejection-sampling cost is evidence about the search, not about the space**, and this
+project has made that mistake before — [`generation.md` §5.1](generation.md#51-why-v6-was-not-simply-strengthened)
+records the same shape of finding about strengthening V6.
+
+**What the next round must measure, and with what.**
+
+1. *Yield under a constructive label.* A `buildRow` that carries `jogCount` per live site and admits
+   a merge at `(r+1, c')` from sources `c1, c2` only when `label(c1) + |c'-c1| = label(c2) + |c'-c2|`.
+   **Harness: `generator-audit --seeds 3000` on the modified generator, against
+   [AC-203](acceptance-criteria.md)'s attempt ceiling of 128 and a `GEN_EXHAUSTED` count of zero.**
+   The question is a yield, and it is a different question from the one round 8 answered.
+2. *What it costs upstream.* §2.5's Lemmas 1–4 assume in-degree 1 on route rows; a merge makes two
+   horizontal runs share a target column on a *route* row, which is the case Lemma 2 currently
+   forbids. V2 would become non-decreasing on every row rather than only the terminal one, and a new
+   rule — call it V17, *every path into a node carries the same jog count* — would carry the safety
+   argument. `development-process.md:96`'s "no junction a car can enter from two directions" would
+   need restating precisely as **no *branch* node may be entered from two directions**: a merge node
+   is a pass node with in-degree 2, and the rule's intent is that a junction's meaning be
+   unambiguous.
+3. *What it buys.* Two things, and the second is larger than the first. Networks become graphs
+   rather than trees, which is the dense-web half of the owner's report. And **the depot-mouth
+   convergence problem disappears by construction**: equal jog count means equal path length means
+   §4.5's spawn-separation guarantee extends all the way to the depot, which retires
+   [`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-shared-approach-road), the
+   depot terrace and [AC-513](acceptance-criteria.md)'s 59–301-per-1,000 near-miss rate. §4.5b calls
+   that "the complete fix"; the only thing ever held against it was the cost of the search.

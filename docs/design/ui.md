@@ -33,7 +33,7 @@ Four rules carry the identity, and the fourth is new:
 1. **The road network is the screen.** Chrome is a thin bar at the top; everything else is road.
 2. **Nothing decorative moves.** Every animation in the play surface reports a state change. If
    it moves, it means something.
-3. **Colour is reserved.** The five car colours belong to cars and depots and appear nowhere
+3. **Colour is reserved.** The six car colours belong to cars and depots and appear nowhere
    else. Chrome is greyscale plus one alert red.
 4. **Every road runs north–south or east–west, and every corner is a junction.** Nothing curves
    except a 28 LU fillet at a corner. This is the owner's direction and it is also, as it turns
@@ -141,19 +141,27 @@ on the one device every floor in §4.4 is measured against.
 
 | Device | W × H | insets | `scale` | play H | vertical slack | junction target (worst band) | car body | road width |
 |---|---|---|---|---|---|---|---|---|
-| iPhone SE (1st) | 320 × 568 | 20 / 0 | 0.3200 | 484 | 4 | **46.1 pt** | 21.1 × 33.3 | 26.9 |
-| iPhone SE (2nd/3rd) | 375 × 667 | 20 / 0 | 0.3750 | 583 | 21 | **54.0 pt** | 24.8 × 39.0 | 31.5 |
-| iPhone 13 mini | 375 × 812 | 50 / 34 | 0.3750 | 664 | 102 | **54.0 pt** | 24.8 × 39.0 | 31.5 |
-| iPhone 13/14 | 390 × 844 | 47 / 34 | 0.3900 | 699 | 114 | **56.2 pt** | 25.7 × 40.6 | 32.8 |
-| **iPhone 15/16** | 393 × 852 | 59 / 34 | 0.3930 | 695 | 106 | **56.6 pt** | 25.9 × 40.9 | 33.0 |
-| iPhone 16 Pro Max | 440 × 956 | 62 / 34 | 0.4400 | 796 | 136 | **63.4 pt** | 29.0 × 45.8 | 37.0 |
-| Galaxy S23 | 360 × 780 | 24 / 24 | 0.3600 | 668 | 128 | **51.8 pt** | 23.8 × 37.4 | 30.2 |
-| Pixel 7 | 412 × 915 | 24 / 24 | 0.4120 | 803 | 185 | **59.3 pt** | 27.2 × 42.8 | 34.6 |
-| Tall Android 21:9 | 412 × 1024 | 32 / 24 | 0.4120 | 904 | 286 | **59.3 pt** | 27.2 × 42.8 | 34.6 |
+| iPhone SE (1st) | 320 × 568 | 20 / 0 | 0.3200 | 484 | 4 | **48.6 pt** | 21.1 × 33.3 | 9.0 |
+| iPhone SE (2nd/3rd) | 375 × 667 | 20 / 0 | 0.3750 | 583 | 21 | **57.0 pt** | 24.8 × 39.0 | 10.5 |
+| iPhone 13 mini | 375 × 812 | 50 / 34 | 0.3750 | 664 | 102 | **57.0 pt** | 24.8 × 39.0 | 10.5 |
+| iPhone 13/14 | 390 × 844 | 47 / 34 | 0.3900 | 699 | 114 | **59.3 pt** | 25.7 × 40.6 | 10.9 |
+| **iPhone 15/16** | 393 × 852 | 59 / 34 | 0.3930 | 695 | 106 | **59.7 pt** | 25.9 × 40.9 | 11.0 |
+| iPhone 16 Pro Max | 440 × 956 | 62 / 34 | 0.4400 | 796 | 136 | **66.9 pt** | 29.0 × 45.8 | 12.3 |
+| Galaxy S23 | 360 × 780 | 24 / 24 | 0.3600 | 668 | 128 | **54.7 pt** | 23.8 × 37.4 | 10.1 |
+| Pixel 7 | 412 × 915 | 24 / 24 | 0.4120 | 803 | 185 | **62.6 pt** | 27.2 × 42.8 | 11.5 |
+| Tall Android 21:9 | 412 × 1024 | 32 / 24 | 0.4120 | 904 | 286 | **62.6 pt** | 27.2 × 42.8 | 11.5 |
+
+*Junction-target and road-width columns are the designer's arithmetic on round 9's
+`colW` (§3.2.1) and `ROAD_W = 28`; they are* **(to be confirmed)** *by `tools/layout-sweep.mjs`,
+which is the source of record for every number in this section.*
 
 The binding device is the **iPhone SE 1st generation at 320 × 568**. Everything in §4 is sized so
 that device passes. The junction-target column is the worst band on that device, which is always
-band 5 (`min(colW, rowH) = 150` LU, the finest grid in the game).
+band 5 — and round 9 moves it from `min(colW, rowH) = 150` LU to **158**, because `colW` is now
+derived from the depot-clearance rule rather than chosen
+([`generation.md` §3.2.1](generation.md#321-colw-is-derived-not-chosen)). **That is the finest grid
+in the game and it is 5 % coarser than it was**, which is the first time a round of this design has
+made a tap target bigger rather than smaller.
 
 **What the size change actually did**, on the reference device: the car goes from 33.0 × 55.0 pt to
 **25.9 × 40.9 pt** — 21 % narrower, 26 % shorter, **42 % less area** — and the road from 40.9 pt to
@@ -177,8 +185,8 @@ over the whole viewport sweep the minimum is **14.75 pt** against [AC-411](accep
 
 | Constant | Value | was | At SE scale 0.3200 | At iPhone 16 scale 0.393 |
 |---|---|---|---|---|
-| `ROAD_W` | **84** | 104 | 26.9 pt | 33.0 pt |
-| `ROAD_EDGE_W` | 4 | 4 | 1.3 pt | 1.6 pt |
+| `ROAD_W` | **28** | 84 | 8.6 pt | 11.0 pt |
+| ~~`ROAD_EDGE_W`~~ | **deleted** | 4 | — | — |
 | `CORNER_R` | **28** | — | 9.0 pt | 11.0 pt |
 | `CAR_L` | **104** | 140 | 33.3 pt | 40.9 pt |
 | `CAR_W` | **66** | 84 | 21.1 pt | 25.9 pt |
@@ -197,14 +205,16 @@ over the whole viewport sweep the minimum is **14.75 pt** against [AC-411](accep
 | `TERRACE_FADE` | **28** | 36 | — | — |
 | `mouthLu` | per band, §7.6 | — | — | — |
 
-**Everything shrank by roughly a fifth and the ratios that matter were preserved.** `CAR_W` (66) is
-narrower than `ROAD_W` (84), leaving a 9 LU shoulder on each side — the old pair left 10. The
-junction marker's diameter (68) is now **smaller than the road** (84), where the old 92 LU marker
-overhung a 104 LU road by nothing at all; a marker that sits inside its road reads as a fitting on
-the road rather than a sticker over it. `DEPOT_W` (124) is a constant rather than a fraction of
-`colW`, so the depot never collides with its neighbour (narrowest case `colW = 150` leaves a 26 LU
-gap) and never overhangs the design-space edge (narrowest margin 63 LU,
-[`generation.md` §3.2](generation.md#32-site-coordinates)).
+**Round 9 inverts the car-to-road relationship and that is the whole of the road change.** `CAR_W`
+(66) is now **2.4 times** `ROAD_W` (28), where round 8 had the car 21 % narrower than the road. The
+car no longer sits *in* a lane; it rides *over* a line. The junction marker's diameter (68) is
+likewise 2.4 times the road, so a junction now reads as an object on the network rather than as a
+fitting inside it. §4.6 is the measurement that decided this and
+[AC-521](acceptance-criteria.md) is the check that keeps it.
+
+`DEPOT_W` (124) is a constant rather than a fraction of `colW`, so the depot never collides with its
+neighbour (narrowest case `colW = 158` leaves a 34 LU gap) and never overhangs the design-space edge
+(narrowest margin 42 LU, [`generation.md` §3.2.1](generation.md#321-colw-is-derived-not-chosen)).
 
 **`CAR_W = 66` is the binding number in this table and it is set by an acceptance criterion, not by
 taste.** [AC-402](acceptance-criteria.md) requires ≥ 20 pt of car body on the smallest supported
@@ -223,9 +233,10 @@ never leaves the tarmac on a turn.
 ### 4.2 Draw order
 
 1. Background fill
-2. Road casing — every edge stroked at `ROAD_W + 2*ROAD_EDGE_W` in `--road-edge`, round joins
-3. Road surface — every edge stroked at `ROAD_W` in `--road`, round joins
-4. Lane dashes — every edge stroked at 3 LU, dash 16/22, in `--road-dash`
+2. **Road** — every edge stroked at `ROAD_W = 28` in `--road`, round joins and round caps. *One
+   stroke. The casing and the lane dashes are deleted; §4.6 is why.*
+3. *(was road surface — folded into 2)*
+4. *(was lane dashes — deleted)*
 5. Junction markers, and the lead-highlight bar when armed (§7.3)
 6. Entry flares (§7.5) — beneath the cars, so a flare never dims the car whose arrival it marks
 7. **Car shadows** — every car's shadow, ascending by id, as one layer
@@ -235,12 +246,12 @@ never leaves the tarmac on a turn.
 10. Depot bodies and depot glyphs
 11. Transient effects sourced from `state.events` (§9)
 
-**Steps 2, 3 and 4 stroke a polyline with round joins, and that is what draws the fillet.** A
-Skia stroke with `StrokeJoin.Round` on a right-angled polyline produces exactly the rounded outer
-corner the identity asks for; the join radius is half the stroke width, so the road casing's outer
-corner radius is `(84 + 8) / 2 = 46` LU and the surface's is 42. `CORNER_R = 28` is the *centreline*
-fillet the car follows, drawn separately only in the lane dashes, which are generated along the
-filleted centreline so the dashes turn the corner instead of meeting it at a point.
+**Step 2 strokes a polyline with round joins and round caps, and that is what draws the fillet.** A
+Skia stroke with `StrokeJoin.Round` on a right-angled polyline produces the rounded outer corner the
+identity asks for; the join radius is half the stroke width, so the road's outer corner radius is
+now **14 LU**. `CORNER_R = 28` is the *centreline* fillet the car follows and it is unchanged — the
+car now turns a wider corner than the road it is on, which is correct, because the car is wider than
+the road (§4.6).
 
 **Steps 7 and 8 are two passes over the cars, not one**, which is what makes
 [AC-501](acceptance-criteria.md) satisfiable: one pass draws car *n+1*'s shadow on top of car *n*'s
@@ -338,61 +349,154 @@ column at band 5 and a 66 LU car are as far as this design rectangle goes. **Any
 adds a column, shrinks a car, or raises `HIT_R_MIN` has to move `DESIGN_W`, and that rescales every
 width-bound device** — which is most of them.
 
+### 4.6 The ink budget
+
+**The owner's report was that the road takes attention that belongs to the cars, and "the road looks
+too busy" is not a thing a developer can fail a check against.** This section turns it into a number.
+
+**The proxy.** Over generated levels at the reference viewport, measure the lit design-space area
+belonging to **road furniture** — the road stroke, any casing, any dashes, the depot terrace —
+against the area belonging to **actors**: car bodies at the band's mean cars in flight, depot
+bodies, and junction markers. Report `furniture / (furniture + actors)`.
+
+```
+furniture = SUM(edge length) * ROAD_W  +  SUM(edge length) * 2 * ROAD_EDGE_W
+            +  SUM(edge length) * dashDuty * dashWidth  +  terraceArea
+actors    = carsInFlight * CAR_L * CAR_W  +  K * DEPOT_W * DEPOT_H
+            +  J * pi * JUNCTION_MARK_R^2
+```
+
+*It is a proxy and it is stated as one: it counts area rather than salience, ignores overlap where
+two edges meet at a junction, and treats every lit pixel as equal. It is chosen because it is
+**monotone in the thing that was complained about**, and because it cannot be satisfied by making
+the road darker — which is the failure mode an aesthetic note would have had.* `--road` at `#2B323C`
+was already only 1.49 : 1 against `--bg`; the problem was never the contrast ratio.
+
+**Measured, over 400 seeds per band on the round-9 table:**
+
+| Band | round 8 furniture share | **round 9** | round 8 furniture : actors | **round 9** |
+|---|---|---|---|---|
+| 1 | 85.2 % | **63.8 %** | 5.76 : 1 | **1.76 : 1** |
+| 2 | 82.5 % | **59.0 %** | 4.70 : 1 | **1.44 : 1** |
+| 3 | 83.9 % | **61.3 %** | 5.20 : 1 | **1.59 : 1** |
+| 4 | 81.7 % | **57.6 %** | 4.46 : 1 | **1.36 : 1** |
+| 5 | 80.9 % | **56.3 %** | 4.23 : 1 | **1.29 : 1** |
+
+**Round 8 spent four to six times as much ink on the road as on everything the player was actually
+looking at.** Round 9 spends 1.3 to 1.8 times as much, and what is left is the network's topology,
+which is the plan and cannot be deleted.
+
+> **The budget.** Road furniture is **≤ 65 %** of lit design-space area at every band.
+> ([AC-521](acceptance-criteria.md))
+
+**Why 65 % and not lower.** The road is a connected graph spanning 1,080 LU of height at every band,
+so its *length* is fixed by the topology and only its width is free; below about 20 LU of stroke the
+network stops reading as a road and the corner fillets stop being visible at the reference scale
+(28 LU is 8.6 pt on the iPhone SE — about a hairline and a half). 65 % is the round-9 measurement
+with a band's worth of headroom, and its job is to stop the number **going back up**: a future round
+that wants a road texture, a shoulder or a gradient has to fail this check to get one.
+
+*Whether the result looks right is not something this number can settle. It is
+[`generation.md` §7.4.2](generation.md#742-the-tier-5-register--what-only-the-owner-can-settle)
+item **R**, and it wants a screenshot in front of the owner before slice 3 polishes anything.*
+
 ---
 ## 5. Colour
 
 ### 5.1 The car palette
 
-Five colours. They are the match key. They are used for nothing else.
+**Six colours.** They are the match key. They are used for nothing else.
 
 | # | Name | Hex | L\* | C\* | Glyph | Bands |
 |---|---|---|---|---|---|---|
 | 0 | **Ember** | `#FF852A` | 68.2 | 77 | ● circle | 1–5 |
 | 1 | **Sky** | `#89D9FF` | 83.0 | 30 | ▲ triangle, apex up | 1–5 |
 | 2 | **Rose** | `#FF5386` | 60.9 | 69 | ■ square | 1–5 |
-| 3 | **Teal** | `#22C6AF` | 72.1 | 45 | ✚ plus | 3–5 |
-| 4 | **Iris** | `#A879FF` | 61.0 | 76 | ═ double bar | 5 |
+| 3 | **Teal** | `#22C6AF` | 72.1 | 45 | ✚ plus | 2–5 |
+| 4 | **Iris** | `#A879FF` | 61.0 | 76 | ═ double bar | 4–5 |
+| 5 | **Lime** | `#B0F0A3` | 89.0 | 46 | ◆ diamond | 5 |
 
-A band with `K` colours uses entries `0 … K-1`. `K` is 3 at bands 1–2, 4 at bands 3–4, 5 at
-band 5 ([`generation.md` §6.1](generation.md#61-the-table)).
+A band with `K` colours uses entries `0 … K-1`. **`K` is now `3 / 4 / 4 / 5 / 6`** — the owner's
+instruction was *"the higher level, the more color"* — and `K` is capped by `C`, which is capped at
+six by the 44 pt tap target ([`generation.md` §3.2.1](generation.md#321-colw-is-derived-not-chosen)).
+**Six is the most colour this game can have on a phone at `DESIGN_W = 1000`**, and that is a
+measurement rather than a preference. It is also the reason the reference game's fourteen uniquely
+coloured stations are not a target to aim at.
 
-**Why these five.** They were selected by constrained optimisation, not by eye: hue windows fixed
-to keep the set aesthetically coherent, chroma floors to keep them reading as colours rather than
-pastels, and the objective was to maximise the minimum CIEDE2000 distance across the set under
-normal vision *and* under simulated protanopia and deuteranopia, with tritanopia and
-road-contrast as constraints. The starting point was an Okabe-Ito-style hand-picked set; the
-optimiser improved the worst deuteranopic pair from ΔE 10.1 to **17.0**.
+**Lime was optimised, not picked.** It came from the same constrained search that produced the other
+five: a sweep of CIELCh at 1 unit of `L*`, 2 of `C*` and 2° of hue, keeping only candidates with
+`C* >= 45` — so it reads as a colour rather than a pastel — at ≥ 3.0 : 1 against `--road`,
+≥ 4.5 : 1 against `--bg`, and ΔE2000 ≥ 15 from `--alert`. The objective was to maximise the minimum
+CIEDE2000 distance across the whole six-set under normal vision **and** under simulated protanopia
+and deuteranopia (Machado 2009, severity 1.0).
+
+**The price of the sixth colour, stated plainly.** Deuteranopic separation does **not** move — 16.5
+at `K = 5` and 16.5 at `K = 6` — because the worst deuteranopic pair is still Rose/Teal and Lime
+does not join it. What moves is normal-vision separation, 24.1 → **20.8**, and protanopic,
+22.0 → **18.3**. Both stay far above the ΔE ≈ 10 at which a pair starts being confusable, and 18.3
+is better than the 17.0 this design shipped through slices 0–1.
+
+*A full six-colour re-optimisation, letting all six move, reaches 17.5 under deuteranopia against
+16.5 — worth 1.0 ΔE, and costing every screenshot, every colour name and five glyph assignments.
+**Declined**, and recorded so it is not re-derived: the gain is inside the 0.5 ΔE by which this
+round's Machado implementation disagrees with the one that produced §5.2's shipped numbers, which
+is itself worth knowing and is stated in §5.2.*
 
 ### 5.2 Measured separation
 
-Contrast ratios against the road surface `#2B323C` and the background `#0B0E13`:
+Contrast ratios against the road stroke `--road = #3A4350` and the background `#0B0E13`:
 
 | Colour | vs road | vs background | `--ink` glyph on it |
 |---|---|---|---|
-| Ember | 5.32 : 1 | 7.95 : 1 | 7.95 : 1 |
-| Sky | 8.27 : 1 | 12.36 : 1 | 12.36 : 1 |
-| Rose | 4.21 : 1 | 6.29 : 1 | 6.29 : 1 |
-| Teal | 6.01 : 1 | 8.99 : 1 | 8.99 : 1 |
-| Iris | 4.21 : 1 | 6.30 : 1 | 6.30 : 1 |
+| Ember | 4.12 : 1 | 7.95 : 1 | 7.95 : 1 |
+| Sky | 6.40 : 1 | 12.36 : 1 | 12.36 : 1 |
+| Rose | 3.26 : 1 | 6.29 : 1 | 6.29 : 1 |
+| Teal | 4.65 : 1 | 8.99 : 1 | 8.99 : 1 |
+| Iris | 3.26 : 1 | 6.30 : 1 | 6.30 : 1 |
+| Lime | 7.55 : 1 | 14.58 : 1 | 14.58 : 1 |
 
-Every car colour clears **4.2 : 1 against the road**, well above the 3.0 : 1 floor for graphical
-objects, and `--ink` clears 4.5 : 1 on every car colour so the glyph is always legible.
+Every car colour clears **3.26 : 1 against the road** — above the 3.0 : 1 floor for graphical
+objects ([AC-606](acceptance-criteria.md)) — and `--ink` clears 4.5 : 1 on every car colour so the
+glyph is always legible. *The road numbers fell from round 8's 4.21–8.27 because `--road` got
+brighter (§5.3). **The number that matters more now is the background column**, because at
+`ROAD_W = 28` a 66 LU car is 2.4 times the width of the road it rides on and most of what surrounds
+it is `--bg`, against which the worst case is 6.29 : 1.*
 
 Minimum pairwise CIEDE2000 within the colour set actually used, by band and by vision type
 (Machado 2009 severity-1.0 simulation):
 
-| Set | Normal | Protanopia | Deuteranopia | Tritanopia |
-|---|---|---|---|---|
-| K = 3 (Ember, Sky, Rose) | 34.1 | 27.8 | 18.2 | 8.2 |
-| K = 4 (+ Teal) | 24.1 | 22.3 | 17.0 | 8.2 |
-| K = 5 (+ Iris) | 24.1 | 22.2 | 17.0 | 8.2 |
+| Set | Bands | Normal | Protanopia | Deuteranopia | Tritanopia |
+|---|---|---|---|---|---|
+| K = 3 (Ember, Sky, Rose) | 1 | 34.1 | 27.8 | 18.2 | 8.2 |
+| K = 4 (+ Teal) | 2, 3 | 24.1 | 22.0 | 16.5 | 8.2 |
+| K = 5 (+ Iris) | 4 | 24.1 | 22.0 | 16.5 | 8.2 |
+| **K = 6 (+ Lime)** | **5** | **20.8** | **18.3** | **16.5** | **8.2** |
 
-**Honest reading of that table.** Protanopia and deuteranopia — which together account for
-roughly 8 % of men — are handled by colour alone at ΔE ≥ 17, which is a clear distinction.
-Tritanopia (roughly 1 in 30,000) collapses two pairs: Ember/Rose and Sky/Teal both fall to
-ΔE 8.2. Those two pairs are exactly what the glyph carries, and the glyphs assigned to them are
-the most shape-distinct in the set: **circle vs square**, and **triangle vs plus**. That pairing
-is deliberate, not incidental ([AC-601](acceptance-criteria.md)).
+The worst pair, by vision type, in the full six-set:
+
+| | worst | second | third |
+|---|---|---|---|
+| Normal | Teal/Lime 20.8 | Sky/Teal 24.1 | Rose/Iris 28.9 |
+| Protanopia | Teal/Lime 18.3 | Rose/Teal 22.0 | Ember/Lime 22.2 |
+| Deuteranopia | Rose/Teal 16.5 | Ember/Lime 16.6 | Sky/Teal 16.8 |
+| Tritanopia | Ember/Rose 8.2 | Sky/Teal 8.3 | **Sky/Lime 10.7** |
+
+**Honest reading of that table.** Protanopia and deuteranopia — which together account for roughly
+8 % of men — are handled by colour alone at ΔE ≥ 16.5, which is a clear distinction. Tritanopia
+(roughly 1 in 30,000) collapses two pairs: Ember/Rose and Sky/Teal both fall near ΔE 8.2. Those two
+pairs are exactly what the glyph carries, and the glyphs assigned to them are the most
+shape-distinct in the set: **circle vs square**, and **triangle vs plus**
+([AC-601](acceptance-criteria.md)). **Lime does not join either collapse** — its nearest tritanopic
+neighbour is Sky at 10.7, and diamond vs triangle separates them anyway.
+
+**A discrepancy worth recording rather than hiding.** This round re-implemented the CIEDE2000 and
+Machado maths in order to optimise the sixth colour, and it reproduces the `K = 3` row and every
+contrast ratio in this section **exactly**, but reads the `K = 4` and `K = 5` CVD figures as
+22.0 / 16.5 where slice 0 recorded 22.3 / 17.0 — a difference of 0.3 and 0.5 ΔE, from a different
+variant of the Machado matrices. **The shipped numbers are now this round's**, because they were
+produced by an implementation that is written down and re-runnable. The gap is smaller than any
+decision in this section turns on, and it is the reason §5.1 declines a full re-optimisation whose
+whole gain was 1.0 ΔE.
 
 ### 5.3 Surface and chrome palette
 
@@ -401,9 +505,9 @@ is deliberate, not incidental ([AC-601](acceptance-criteria.md)).
 | `--bg` | `#0B0E13` | Screen background, behind and around the road network |
 | `--surface` | `#151A22` | Overlay panels, HUD pills |
 | `--surface-raised` | `#1F2630` | Buttons, level-select tiles |
-| `--road` | `#2B323C` | Road surface fill |
-| `--road-edge` | `#434C59` | Road casing stroke |
-| `--road-dash` | `#5A6472` | Lane dashes, drawn at 40 % opacity |
+| `--road` | **`#3A4350`** | The road stroke — the only road token there is |
+| ~~`--road-edge`~~ | **deleted** | was the road casing (§7.2) |
+| ~~`--road-dash`~~ | **deleted** | was lane dashes (§7.2) |
 | `--depot` | `#1B222C` | Depot body fill (the colour lives in its face band and glyph) |
 | `--ink` | `#0B0E13` | Glyphs drawn on car bodies and depot faces |
 | `--text` | `#E8ECF2` | Primary text — 14.73 : 1 on `--surface` |
@@ -416,9 +520,41 @@ is deliberate, not incidental ([AC-601](acceptance-criteria.md)).
 in lightness and hue to never be mistaken for a car, particularly because it is only ever drawn
 as a screen-edge flash or a border, never as a filled body.
 
-**Light mode is out of scope.** The game is a night road; a light variant would need a different
-car palette re-validated for contrast against a pale road, and that is a second palette to keep
-correct. The app declares `userInterfaceStyle: "dark"`.
+**`--road` got brighter, not darker, and that is not a contradiction.** Round 8's `#2B323C` was
+1.49 : 1 against `--bg`; `#3A4350` is 1.93 : 1. The road recedes by occupying **67 % less area**
+(§4.6), not by being harder to see — and at 28 LU it has to be slightly brighter to read as a
+connected network at all, which is the one job it still has. A road that is both thin *and* dim
+stops communicating the topology, which is the plan the whole game is played from.
+
+**Light mode stays out of scope, and round 9 confirms it rather than revisiting it.** The owner's
+note was that the game *"feels sad"*, and the answer taken here is **more colour on a dark ground**
+— a sixth car colour (§5.1), a road that is no longer a grey slab covering four-fifths of the
+screen (§4.6), and the chrome additions below. Going pale instead would mean a second car palette
+re-validated for contrast against a pale road, re-running §5.1's optimisation under a different set
+of constraints, and re-measuring every contrast ratio in §5.2 and every AC in the 600 group.
+**Priced at roughly one full design round and declined**; if the owner wants it after seeing the
+screenshot, that is the price. The app declares `userInterfaceStyle: "dark"`.
+
+**What answers "sad" without touching the rules.** The five — now six — car colours were carrying
+the entire chromatic load while every other pixel was grey. Three additions, all of which report
+state and none of which is decoration:
+
+| Token | Hex | Use | What it reports |
+|---|---|---|---|
+| `--accent` | `#4ADE9B` | HUD delivery counter, level-complete panel, primary buttons | Progress — the number the player is playing for |
+| `--accent-dim` | `#2E8B66` | The same, at rest | — |
+| `--depot-glow` | *per depot colour, 18 % alpha* | A soft fill behind each depot body in **its own colour** | Which depot is which, read from across the board |
+
+**`--depot-glow` is the one that does the most work**, and it is a state carrier rather than a
+flourish: it puts each depot's colour on screen at an area comparable to a car's, which is what
+makes a board with six depots read as six colours rather than as six grey buildings with coloured
+stripes. It is drawn *under* the depot body, so it never competes with the face band that
+[AC-502](acceptance-criteria.md) measures, and it is inside §4.6's ink budget because it belongs to
+`actors` rather than to furniture.
+
+*All three are [`generation.md` §7.4.2](generation.md#742-the-tier-5-register--what-only-the-owner-can-settle)
+item **P**: the palette is measured, but whether the result stops feeling bleak is a judgement and
+it wants the same screenshot as §4.6.*
 
 ---
 
@@ -508,13 +644,24 @@ and would show 0:00 while cars were still moving.
 
 ### 7.2 Road
 
-Casing, surface and dashes as in §4.2. The road is uniform everywhere; a branch is marked by the
-junction marker, not by a change in road treatment, so the player's eye is not pulled to
-decoration.
+**One stroke, 28 LU wide, in `--road`, with round joins and round caps. That is the entire road.**
+No casing, no lane dashes, no per-edge treatment. A branch is marked by the junction marker, not by
+a change in road treatment.
 
-**Lane dashes follow the filleted centreline**, so a dash never lands on a corner as a wedge. The
-dash pattern restarts at the start of every edge, which means the phase is a property of the edge
-and not of the whole path — a car's position is never inferable from where the dashes happen to be.
+**What was deleted, and the test each element failed.** §4.6's question is *what state does this
+report?*
+
+| element | reported | verdict |
+|---|---|---|
+| road casing (`--road-edge`, 4 LU each side) | nothing | **deleted** |
+| lane dashes (`--road-dash`, 3 LU, 16/22) | nothing — the phase restarts per edge precisely so that a car's position is *not* inferable from it | **deleted** |
+| road width above `CAR_W` | nothing | **cut 84 → 28** |
+| the road line itself | the network's topology, which is the whole plan | **kept** |
+| the open branch's brighter first 120 LU (§7.3) | which way the junction is set | **kept** |
+
+*The lane dashes are the clearest case. `ui.md` had already argued that their phase must carry no
+information; an element explicitly designed to be uninformative is decoration by its own
+specification.*
 
 ### 7.3 Junction
 
@@ -532,7 +679,7 @@ and not of the whole path — a car's position is never inferable from where the
    separation 90°           separation 90°            separation 180°
 ```
 
-- **Marker.** A `JUNCTION_MARK_R = 34` LU disc in `--surface-raised` with a 4 LU `--road-edge`
+- **Marker.** A `JUNCTION_MARK_R = 34` LU disc in `--surface-raised` with a 4 LU `--road`
   ring, and a **blade**: a rounded bar `BLADE_LEN = 30` LU long and `BLADE_W = 9` LU thick,
   radius `BLADE_W / 2`, drawn from the node centre outward along the open branch, in `--text` at
   92 %. The blade is the state: where it points is where the next car goes. *Both numbers are
@@ -664,6 +811,20 @@ approach in **59 to 301 runs per 1,000**, with a minimum centre-to-centre distan
 a complete overlap. Under the cubic model the same measurement read 0–5 per 1,000. **The owner's
 orthogonal-roads direction bought this, and it is the one place in round 8 where the drawing got
 harder rather than easier.** The rules are fine; the picture is not, and the fix belongs here.
+
+> **Round 9 shrinks the terrace and says why it is still here.** The terrace is the largest single
+> piece of road furniture in the design and its only job is to hide an overlap — which is exactly
+> the test §4.6 applies to everything else on the road, and it fails it: **it reports no state.**
+> It is kept, at **one third of its round-8 area**, for one reason: deleting it makes the overlap
+> visible in 59–301 runs per 1,000, and a visible car-through-car overlap is a worse legibility
+> failure than a dark forecourt. It is a patch, it is drawn as small as it can be while still
+> covering the mouth, and **it is counted as furniture in §4.6's budget** so that it cannot grow
+> quietly. The real fix retires it entirely:
+> [`generation.md` §9.2](generation.md#92-merges-gameplaymd-82) — equal jog counts to a shared depot
+> make the two approaches the same length, which extends
+> [`gameplay.md` §4.5](gameplay.md#45-every-car-is-always-separated-from-every-other)'s separation
+> guarantee all the way to the depot and deletes this section, §4.5b and
+> [AC-513](acceptance-criteria.md) with it. *That is deferred to its own round by the owner.*
 
 **The treatment: the road runs under the terrace.** The depot row is given a continuous forecourt —
 one rounded rectangle in `--depot` laid over the bottom of every terminal edge — and the car layer
