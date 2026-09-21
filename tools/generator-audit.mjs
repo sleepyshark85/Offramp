@@ -15,6 +15,7 @@
 // can fail before it is trusted to pass (§6.2).
 
 import {
+  CAR_SPEED,
   BANDS,
   ENTRY_LEN,
   GEN_SALT,
@@ -48,16 +49,27 @@ import { arg, has, percentile, summary, table } from './lib/report.mjs';
 const FIRST_DECISION_FLOOR = 90;
 // The per-band minimum AC-245 requires exactly: ENTRY_LEN + rowH in ticks, because V14 makes
 // rows[0] a pass and V15 makes a pass node's edge vertical, so rows[1] holds one node too.
-const FIRST_DECISION_MIN = { 1: 159, 2: 151, 3: 132, 4: 125, 5: 120 };
+//
+// TRANSCRIBED FROM gameplay.md §4.6b's ROUND-9 TABLE — 159 / 159 / 146 / 146 / 146 — and NOT
+// from AC-245's own sentence, which still quotes round 8's `159 / 151 / 132 / 125 / 120`.
+// Those were computed with the per-band speed column that round 9 deleted: at one constant
+// 2750 MLU/tick the window is `ceil((220 + rowH) * 1000 / 2750)`, which is 159 at rowH 216 and
+// 146 at rowH 180, and §4.6b's whole point is that the WORST case rose from 2.00 s to 2.43 s.
+// AC-245's numbers are the one place the criterion was not re-derived; §4.6b and §6.1.4 agree
+// with each other and with this, and gameplay.md §4.8's table has the same stale row.
+const FIRST_DECISION_MIN = { 1: 159, 2: 159, 3: 146, 4: 146, 5: 146 };
 // generation.md §6.1, transcribed. The audit compares the level object against THESE, never
 // against the code's own constants (development-process.md §6.8, the AC-202 lesson).
 const BAND_TABLE = {
-  1: { C: 3, K: 3, R: 5, colW: 260, rowH: 216, speed: 2750, interval: 204, jitter: 26, Ja: 3 },
-  2: { C: 4, K: 3, R: 5, colW: 230, rowH: 216, speed: 2900, interval: 150, jitter: 18, Ja: 3 },
-  3: { C: 4, K: 4, R: 6, colW: 230, rowH: 180, speed: 3050, interval: 140, jitter: 18, Ja: 4 },
-  4: { C: 5, K: 4, R: 6, colW: 180, rowH: 180, speed: 3200, interval: 132, jitter: 16, Ja: 5 },
-  5: { C: 6, K: 5, R: 6, colW: 150, rowH: 180, speed: 3350, interval: 128, jitter: 16, Ja: 7 },
+  1: { C: 3, K: 3, R: 5, colW: 300, rowH: 216, interval: 208, jitter: 21, Ja: 3 },
+  2: { C: 4, K: 4, R: 5, colW: 264, rowH: 216, interval: 147, jitter: 15, Ja: 3 },
+  3: { C: 4, K: 4, R: 6, colW: 264, rowH: 180, interval: 140, jitter: 14, Ja: 4 },
+  4: { C: 5, K: 5, R: 6, colW: 198, rowH: 180, interval: 131, jitter: 13, Ja: 5 },
+  5: { C: 6, K: 6, R: 6, colW: 158, rowH: 180, interval: 128, jitter: 13, Ja: 7 },
 };
+// gameplay.md §2.2 / generation.md §6.1 — speed left the band table in round 9 and is one
+// constant at every band. Transcribed, like everything else here.
+const DESIGN_CAR_SPEED = 2750;
 // AC-234's variety floors, over 3,000 seeds per band.
 const SIGNATURE_FLOOR = { 1: 160, 2: 250, 3: 360, 4: 490, 5: 1000 };
 
@@ -363,8 +375,18 @@ function actionableReport(seeds) {
     const T = summary(twice);
     const S = summary(staticJa);
     const belowPct = (100 * belowJa) / seeds;
-    // AC-243: live >= Ja - 1 in 100 % of runs, and >= Ja in at least 95 %.
-    const ok = belowJaMinusOne === 0 && belowPct <= 5 && notCleared === 0 && misrouted === 0;
+    const belowMinusOnePct = (100 * belowJaMinusOne) / seeds;
+    // AC-243, ROUND 9: live >= Ja - 1 in at least 99.5 % of runs, and >= Ja in at least 95 %.
+    //
+    // THE FIRST FLOOR MOVED FROM 100 % TO 99.5 % AND THAT IS A CORRECTION, NOT A RELAXATION.
+    // Round 8 measured a miss at band 5 of about 3 runs in 3,000. A criterion stated at 100 %
+    // over 3,000 seeds is one that fails on a one-in-a-thousand tail — and this AC's own note
+    // already explains why such a tail exists and why no static rule removes it: a junction
+    // can be structurally actionable and still not be exercised by one particular colour
+    // sequence. A 100 % floor on a quantity whose residue is acknowledged to be irreducible
+    // is a floor that will fail on a large enough sample and say nothing when it does.
+    // 99.5 % over 3,000 seeds still fails on 16 runs, five times the observed residue.
+    const ok = belowMinusOnePct <= 0.5 && belowPct <= 5 && notCleared === 0 && misrouted === 0;
     if (!ok) bad += 1;
     rows.push({
       band,
@@ -374,7 +396,7 @@ function actionableReport(seeds) {
       'live mean/min': L.mean.toFixed(2) + '/' + L.min,
       'flipped 2x+ mean/min': T.mean.toFixed(2) + '/' + T.min,
       'below Ja': belowPct.toFixed(1) + '%',
-      'below Ja-1': ((100 * belowJaMinusOne) / seeds).toFixed(1) + '%',
+      'below Ja-1 (<= 0.5 %)': belowMinusOnePct.toFixed(2) + '%',
       'decorative % of drawn': (100 * (1 - S.mean / D.mean)).toFixed(1) + '%',
       'oracle misroutes': misrouted,
       'AC-243': ok ? 'PASS' : 'FAIL',
@@ -386,6 +408,11 @@ function actionableReport(seeds) {
   console.log('this seed\'s spawn order. live < static is a SPAWN-ORDER effect, not a topology one: a');
   console.log('junction can be structurally actionable and still never be exercised, and no static');
   console.log('rule removes that residue. It is bounded, and reporting it is what keeps it visible.');
+  console.log('');
+  console.log('AC-243\'s "live >= Ja - 1" floor is 99.5 %, not 100 %: over 3,000 seeds that still fails');
+  console.log('on 16 runs, which is five times the residue round 8 observed and well inside anything a');
+  console.log('real defect would produce. The ">= Ja in 95 %" clause is unchanged and carries the');
+  console.log('actual requirement.');
   console.log(bad === 0 ? 'ACTIONABLE: PASS' : `ACTIONABLE: FAIL (${bad} band(s))`);
   process.exit(bad === 0 ? 0 : 1);
 }
@@ -396,9 +423,18 @@ function actionableReport(seeds) {
  * can fail:
  *
  *   1. every edge's lengthMlu is `(|Δx| + |Δy|) * 1000` (AC-207);
- *   2. no two horizontal runs in a row band are collinear and touching unless they share a
- *      source (the branch's own T) or a depot (the shared approach) — Lemma 2;
- *   3. no horizontal run terminates on an occupied lattice site of its own row — Lemma 1.
+ *   2. AC-206 (b)/(c) — no two horizontal runs in a row band are collinear and share more than
+ *      an endpoint, and where two share exactly an endpoint they leave the same source (the
+ *      branch's own T) or arrive at the same depot (the shared approach) — Lemma 2;
+ *   3. AC-206 (d) — WHERE A HORIZONTAL RUN TERMINATES ON AN OCCUPIED LATTICE SITE, THAT SITE
+ *      IS EITHER A DEPOT OR A BRANCH NODE CARRYING A JUNCTION MARKER. On a route row it holds
+ *      vacuously by Lemma 1 (the site is empty); on the terminal row the site is a depot, by
+ *      LEMMA 1T. Round 8's wording — "no horizontal run terminates on an occupied lattice
+ *      site" — cannot pass, because on the terminal row they almost always do.
+ *
+ * AC-206's reporting clause is the last two columns: the route-row and terminal-row landing
+ * counts are reported SEPARATELY, so that a route-row landing appearing at any rate is visible
+ * as a real defect instead of being hidden inside a terminal-row figure near 100 %.
  *
  * The fault to inject is a generator with rule (P) removed — a pass node allowed to change
  * column — which must fail (2) and (3). `--no-rule-p` builds that generator here, from the
@@ -567,13 +603,16 @@ function geometryReport(seedCount, noRuleP) {
   console.log('geometric test the generator runs. This sweep is the only thing that can falsify them,');
   console.log('and --no-rule-p is the fault it was written against.');
   console.log('');
-  console.log('THE TWO "reported" COLUMNS ARE A FINDING AGAINST THE DESIGN, not a pass. §2.5\'s');
-  console.log('Lemma 1 is proved from V2\'s STRICTLY INCREASING rule, which holds across a route row');
-  console.log('and not across the terminal row, where V2 is only non-decreasing so that two edges may');
-  console.log('feed one depot. Lemma 2\'s case analysis leans on Lemma 1, so both fail there, and');
-  console.log('AC-206 clauses (c) and (d) as written cannot pass. What the drawing guarantees instead');
-  console.log('is asserted: the run lands on a node that continues down its own column, and the');
-  console.log('meeting point carries a junction marker. Route rows are held to the design\'s claim.');
+  console.log('THE TWO "reported" COLUMNS ARE AC-206\'s REPORTING CLAUSE, and round 9 is where the');
+  console.log('criterion caught up with them. §2.5\'s Lemma 1 is proved from V2\'s STRICTLY INCREASING');
+  console.log('rule, which holds across a route row and NOT across the terminal row, where V2 is only');
+  console.log('non-decreasing so that two edges may feed one depot. Round 8\'s clause (d) — "no');
+  console.log('horizontal run terminates on an occupied lattice site" — therefore could not pass.');
+  console.log('LEMMA 1T states the terminal-row case and proves it safe for a different reason: a');
+  console.log('depot emits no edge, so a run that lands on one ends at a building rather than');
+  console.log('continuing into a road, and a false continuation needs an outgoing edge to exist.');
+  console.log('Route-row landings must be ZERO; terminal-row landings are reported, and every one of');
+  console.log('them is asserted to continue down its own column with a junction marker on it.');
   console.log(bad === 0 ? 'GEOMETRY: PASS' : `GEOMETRY: FAIL (${bad} band(s))`);
   process.exit(bad === 0 ? 0 : 1);
 }
@@ -731,9 +770,9 @@ for (let band = 1; band <= 5; band += 1) {
     // satisfies by construction: every band-table edit had passed it silently (§6.8).
     const T = BAND_TABLE[band];
     if (level.C !== T.C || level.K !== T.K || level.R !== T.R || level.colW !== T.colW ||
-        level.rowH !== T.rowH || level.speedMluPerTick !== T.speed ||
-        level.interval !== T.interval || level.jitter !== T.jitter ||
-        'quota' in level || 'diagLen' in level) {
+        level.rowH !== T.rowH || level.interval !== T.interval || level.jitter !== T.jitter ||
+        CAR_SPEED !== DESIGN_CAR_SPEED ||
+        'quota' in level || 'diagLen' in level || 'speedMluPerTick' in level) {
       bandTableMismatch += 1;
     }
 

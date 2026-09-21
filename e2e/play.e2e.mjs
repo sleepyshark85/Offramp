@@ -19,7 +19,7 @@ import assert from 'node:assert/strict';
 
 import { MAX_CATCHUP_TICKS, reachableColourMasks } from '../src/engine/index.js';
 import { DEFAULT_RUN_SEED, buildLevel } from '../src/ui/run.js';
-import { openApp, shot, snap, startPlaying, waitFor } from './harness.mjs';
+import { openApp, shot, snap, snapWithHud, startPlaying, waitFor } from './harness.mjs';
 
 const LEVEL = 1;
 
@@ -346,23 +346,37 @@ test('tier 3 · the game boots, plays, takes input, pauses, resumes and ends', a
       //
       // gameplay.md §4.3: `delivered` IS the score. The big number on the left is the delivered
       // count and there is no points total beside it.
-      const shown = await app.page.getByTestId('hud-delivered').textContent();
-      assert.equal(Number(shown), end.state.delivered, 'the HUD number is not `delivered`');
-      assert.ok(end.state.delivered > 0);
+      //
+      // THE STATE AND THE HUD ARE READ IN ONE EVALUATION, and that is load-bearing rather than
+      // tidy. The caption is a pure function of `state.tick` (AC-520) and the game runs at
+      // 60 Hz, so reading the tick in one round-trip and the caption in another compares two
+      // different ticks — and a screenshot between them is worth a whole second, which is one
+      // whole step of `m:ss`. The bar's ±2 pt tolerance absorbed 80 ticks of that; the caption
+      // is exact and had nothing, so it failed on timing rather than on behaviour.
+      const live = await snapWithHud(app.page, ['hud-delivered', 'hud-clock-fill', 'hud-clock']);
+      const tick = live.snapshot.state.tick;
+      assert.equal(
+        Number(live.hud['hud-delivered'].text),
+        live.snapshot.state.delivered,
+        'the HUD number is not `delivered`',
+      );
+      assert.ok(live.snapshot.state.delivered > 0);
 
       // AC-520 · the clock bar DRAINS, and both it and its caption are pure functions of the
       // tick. The bar filled under the quota model, so this is the assertion that a
       // pre-round-8 build fails.
       const LEVEL_TICKS = 7200;
       const BAR_W = 180;
-      const width = await app.page.getByTestId('hud-clock-fill').evaluate((el) => el.getBoundingClientRect().width);
-      const want = (BAR_W * (LEVEL_TICKS - end.state.tick)) / LEVEL_TICKS;
+      const width = live.hud['hud-clock-fill'].width;
+      const want = (BAR_W * (LEVEL_TICKS - tick)) / LEVEL_TICKS;
       assert.ok(Math.abs(width - want) < 2,
-        'clock bar is ' + width.toFixed(1) + ' pt at tick ' + end.state.tick + ', want ' + want.toFixed(1));
-      assert.ok(width < BAR_W, 'the clock bar has not drained at all after ' + end.state.tick + ' ticks');
-      const left = Math.floor((LEVEL_TICKS - end.state.tick) / 60);
-      const caption = await app.page.getByTestId('hud-clock').textContent();
-      assert.equal(caption, Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'));
+        'clock bar is ' + width.toFixed(1) + ' pt at tick ' + tick + ', want ' + want.toFixed(1));
+      assert.ok(width < BAR_W, 'the clock bar has not drained at all after ' + tick + ' ticks');
+      const left = Math.floor((LEVEL_TICKS - tick) / 60);
+      assert.equal(
+        live.hud['hud-clock'].text,
+        Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0'),
+      );
     });
 
     assert.deepEqual(app.errors, [], 'the page logged errors');
@@ -634,6 +648,67 @@ test('AC-313 · a second finger never moves the tap onto another junction', asyn
       );
     }
 
+    assert.deepEqual(app.errors, [], 'the page logged errors');
+  } finally {
+    await app.close();
+  }
+});
+
+test('tier 3 · band 5 PAINTS: six colours, six depots, and a canvas that is not blank', async () => {
+  // THIS TEST EXISTS BECAUSE ROUND 9 SHIPPED A BLANK BAND-5 BOARD AND EVERY OTHER CHECK WAS
+  // GREEN. `K` rose to 6 (generation.md §6.1) and `glyphPath` had five cases, so drawing a
+  // Lime car threw inside the Skia element tree — which takes the WHOLE CANVAS down. The HUD
+  // is React Native views, so it kept drawing; `window.__offramp` is published by the state
+  // layer, so the snapshot kept reporting four cars in flight; and the throw produced NO page
+  // error and NO console error, so `app.errors` was empty. 159 unit tests, 19 tier-3 cases,
+  // the layout sweep, the generator audit and the bot sweeps were all green over a play
+  // surface that painted nothing.
+  //
+  // The gap was that tier 3 only ever played LEVEL 1, which is band 1 and three colours. The
+  // band the owner actually plays was never rendered.
+  //
+  // The check has to be about PIXELS, because every queryable surface lied. CanvasKit renders
+  // through WebGL without `preserveDrawingBuffer`, so `drawImage` into a 2D canvas returns a
+  // blank copy — measured, it reports one distinct colour over 31,000 samples on a board that
+  // is visibly painted. What does work is the SCREENSHOT: a PNG of a painted board compresses
+  // far worse than a PNG of a flat one, and the two arms are five times apart.
+  const app = await openApp('?level=25&autoplay=1');
+  try {
+    await waitFor(app.page, (s) => s.screen === 'play' && s.state !== null, { label: 'band 5 play' });
+    const started = await waitFor(app.page, (s) => s.cars.length >= 3, {
+      label: 'three cars in flight at band 5', timeout: 40000,
+    });
+    // Level 25 is band 5 (AC-701), which is where `K = 6` and the sixth glyph live.
+    assert.equal(started.level.K, 6, 'level 25 is not a six-colour level');
+    assert.equal(started.level.C, 6);
+    assert.equal(started.level.depots.length, 6, 'six depots');
+    assert.deepEqual(
+      started.level.depots.map((d) => d.colour).sort((a, b) => a - b),
+      [0, 1, 2, 3, 4, 5],
+      'every palette index 0..5 has a depot, so every glyph must exist',
+    );
+
+    // A flat region of the play area against a region that must be full of road, cars and
+    // depots. `bytes / pixel` because the two clips are different sizes.
+    const board = await app.page.screenshot({ clip: { x: 0, y: 200, width: 393, height: 600 } });
+    const flat = await app.page.screenshot({ clip: { x: 0, y: 60, width: 393, height: 60 } });
+    const boardDensity = board.length / (393 * 600);
+    const flatDensity = flat.length / (393 * 60);
+    // Measured: 0.2483 painted, 0.0464 flat. The threshold sits between them with room on
+    // both sides, and the ratio clause is what makes it a comparison rather than a constant.
+    assert.ok(
+      boardDensity > 0.12,
+      'the band-5 play surface is blank or near-blank: ' + boardDensity.toFixed(4) + ' bytes/px',
+    );
+    assert.ok(
+      boardDensity > 3 * flatDensity,
+      'the board compresses like an empty strip: ' + boardDensity.toFixed(4) + ' vs ' + flatDensity.toFixed(4),
+    );
+    await shot(app.page, '16-band5-six-colours');
+
+    // generation.md §7.4.2 items R and P want this picture in front of the OWNER: whether the
+    // road recedes enough (ui.md §4.6) and whether the palette is still bleak (ui.md §5). A
+    // bot cannot settle either.
     assert.deepEqual(app.errors, [], 'the page logged errors');
   } finally {
     await app.close();

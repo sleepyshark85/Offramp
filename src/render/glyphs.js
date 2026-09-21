@@ -1,9 +1,19 @@
-// Offramp — the five colour glyphs (ui.md §5.1, §6.2).
+// Offramp — the SIX colour glyphs (ui.md §5.1, §6.2).
 //
 // Shapes are chosen for maximum silhouette difference: a filled disc, a filled equilateral
-// triangle apex-up, a filled square, a plus with arms 0.33 x s thick, and two horizontal bars
-// with a gap equal to the bar height. No two share an outline family and no shape is another
-// shape rotated (ui.md §6.2).
+// triangle apex-up, a filled square, a plus with arms 0.33 x s thick, two horizontal bars with
+// a gap equal to the bar height, and — new in round 9, for Lime — a filled diamond
+// (ui.md §5.1's table).
+//
+// ROUND 9's SIXTH GLYPH SITS AGAINST §6.2's OWN WORDING AND THAT IS RECORDED HERE RATHER THAN
+// RESOLVED QUIETLY. §6.2 says "no shape is another shape rotated", and a diamond is Rose's
+// square at 45 degrees. The sentence lists five shapes and was not re-derived when ui.md §5.1
+// assigned Lime the diamond; §5.2 then leans on the assignment ("diamond vs triangle separates
+// them anyway"). The rule is satisfiable in substance because every glyph is COUNTER-ROTATED
+// TO SCREEN-UPRIGHT (§6.2, AC-603) — which is the rule §6.2 introduces one sentence earlier,
+// with the words "without this, square and diamond would be the same shape". With the
+// counter-rotation in force they are two fixed, different outlines; without it they are one.
+// So the diamond is drawn as specified, and the conflicting sentence goes back to the designer.
 //
 // Every path is centred on (0, 0) and sized to fit an `s x s` box, so the caller places it by
 // translating and — on a car — counter-rotating (ui.md §6.2). Paths are built once per
@@ -46,8 +56,23 @@ function build(index, s) {
       p.addRect(Skia.XYWHRect(-h, h - bar, s, bar));
       break;
     }
+    case 5: // Lime — filled diamond, the square's outline at 45 degrees (ui.md §5.1)
+      p.moveTo(0, -h);
+      p.lineTo(h, 0);
+      p.lineTo(0, h);
+      p.lineTo(-h, 0);
+      p.close();
+      break;
     default:
-      throw new Error('UNKNOWN_GLYPH: ' + index);
+      // A missing glyph is not a missing glyph: a throw inside the Skia element tree takes
+      // the WHOLE CANVAS down, so the play surface renders nothing at all and the HUD keeps
+      // working. Round 9 shipped `K = 6` before this case existed and band 5 painted a black
+      // rectangle; the tier-3 suite did not see it because it only plays level 1. The message
+      // names the palette length so the next person reads "the palette grew" rather than
+      // "Skia broke".
+      throw new Error(
+        'UNKNOWN_GLYPH: ' + index + ' — every PALETTE entry needs a glyph (ui.md §5.1, §6.2)',
+      );
   }
   return p;
 }

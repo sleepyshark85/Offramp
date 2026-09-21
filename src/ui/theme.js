@@ -3,7 +3,7 @@
 // Transcribed from ui.md. No colour is computed, blended or "close enough": the contrast
 // ratios in §5.2 are measured against these exact values.
 
-// ui.md §5.1 — the five car colours. They are the match key and are used for nothing else.
+// ui.md §5.1 — the SIX car colours. They are the match key and are used for nothing else.
 // The engine carries the same list in PALETTE (constants.js) because V10 validates against
 // it; this re-export keeps one source rather than a second copy that has to be kept in sync.
 export { PALETTE as CAR_COLOURS } from '../engine/index.js';
@@ -13,10 +13,19 @@ export const C = {
   bg: '#0B0E13',
   surface: '#151A22',
   surfaceRaised: '#1F2630',
-  road: '#2B323C',
-  roadEdge: '#434C59',
-  roadDash: '#5A6472',
+  // `--road` got BRIGHTER in round 9, not darker, and that is not a contradiction: the road
+  // recedes by occupying 67 % less area (ui.md §4.6), and at 28 LU it has to be slightly
+  // brighter to read as a connected network at all, which is the one job it still has.
+  // #2B323C was 1.49 : 1 against --bg; #3A4350 is 1.93 : 1. A road that is both thin AND dim
+  // stops communicating the topology, which is the plan the whole game is played from.
+  road: '#3A4350',
+  // `--road-edge` (the casing) and `--road-dash` (the lane dashes) are DELETED (ui.md §5.3,
+  // §7.2, AC-512). Each failed §4.6's test — "what state does this report?" — and the dashes
+  // failed it by their own specification: their phase was required to carry no information.
   depot: '#1B222C',
+  // ui.md §5.3 — what answers "feels sad" without touching the rules. Both report state.
+  accent: '#4ADE9B', // the delivery counter, the level-complete panel, primary buttons
+  accentDim: '#2E8B66', // the same, at rest
   ink: '#0B0E13',
   text: '#E8ECF2',
   textDim: '#96A0B0',
@@ -35,7 +44,13 @@ export const C = {
 // entry.
 
 export const OPACITY = {
-  roadDash: 0.4, // ui.md §4.2 step 4
+  // ui.md §5.3 — `--depot-glow`: a soft fill behind each depot body in ITS OWN colour, at
+  // 18 %. It is the token that does the most work against "the palette is bleak": it puts
+  // each depot's colour on screen at an area comparable to a car's, which is what makes a
+  // board with six depots read as six colours rather than six grey buildings with stripes.
+  // Drawn UNDER the body, so it never competes with the face band AC-502 measures, and it
+  // belongs to `actors` rather than to furniture in §4.6's ink budget.
+  depotGlow: 0.18,
   carGlyph: 0.78, // ui.md §6.2, Standard symbol size
   carGlyphLarge: 1.0, // ui.md §6.2, Large
   carShadow: 0.32, // ui.md §4.3

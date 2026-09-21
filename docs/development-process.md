@@ -275,6 +275,36 @@ that moved a geometry constant and then measured the bot agreeing with itself. G
 human signal early — one person playing for ten minutes, once the thing runs at all, would have
 redirected both rounds before they happened.
 
+### 6.10 The band nobody had ever rendered
+
+Raising the colour count to six made the top band draw a **completely blank play surface**, and
+every check in the project stayed green over it.
+
+The glyph function had five cases. Drawing the sixth colour threw inside the Skia element tree,
+which takes down the *entire canvas*. Everything that could have noticed, didn't:
+
+- the HUD is React Native views, so it kept drawing and the screen looked alive;
+- `window.__offramp` is published by the state layer, so the snapshot kept cheerfully reporting
+  four cars in flight on a board that was painting nothing;
+- the throw produced **no page error and no console error**, so the error collector was empty.
+
+164 unit tests, 19 end-to-end cases, the layout sweep, the generator audit and every bot sweep
+passed over it. The engine was perfect. The game was invisible.
+
+**The gap was one line of test configuration: tier 3 only ever played level 1.** Every end-to-end
+case ran the first band, three colours, the tutorial. The band the owner actually plays had never
+once been rendered by anything.
+
+**Rule:** a rendering tier that exercises one configuration is testing that configuration, not the
+renderer. Every band, and every value a band parameter can take, needs to have been *painted* at
+least once — and the check has to be that it painted, not that the state says it should have.
+
+**Corollary, and the harder half: every queryable surface lied.** The snapshot is published from
+state, so it cannot see a render failure by construction. Proving the board painted needed a
+measurement of the *image* — compressibility of the screenshot, because CanvasKit's WebGL canvas
+does not preserve its drawing buffer and a pixel readback reports one flat colour over a visibly
+painted board. When the only honest witness is the picture, take the picture.
+
 ---
 
 ## 7. Git workflow

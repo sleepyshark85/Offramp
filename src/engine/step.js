@@ -5,7 +5,7 @@
 // `step(state, inputs)` advances exactly one tick; `apply(state, action)` is step 2 of that
 // tick and the only place a junction changes state.
 
-import { LEVEL_TICKS, LIVES, SPAWN_SALT } from './constants.js';
+import { CAR_SPEED, LEVEL_TICKS, LIVES, SPAWN_SALT } from './constants.js';
 import { mix32 } from './rng.js';
 
 /**
@@ -153,7 +153,7 @@ export function step(state, inputs) {
   // than spliced out mid-iteration.
   const kept = [];
   for (const car of next.cars) {
-    car.progress += level.speedMluPerTick;
+    car.progress += CAR_SPEED; // gameplay.md §2.2 — one constant at every band (AC-105)
     let edge = edges[car.edgeId];
     let arrived = false;
     let iterations = 0;

@@ -84,13 +84,20 @@ test('AC-411 · the depot row stays inside the design rect, at rest and while re
  * generator change nothing else is looking at.
  */
 test('§4 · the generated network population is pinned', () => {
+  // ROUND 9 MOVED THREE OF THE FIVE AND LEFT TWO BIT-IDENTICAL, which is the check doing its
+  // job rather than a surprise. `K = C` at every band now, so `tryBuild`'s
+  // `depotCols = (K === C) ? all : rngChoose(...)` stops drawing from the generator stream at
+  // bands 2, 4 and 5 — one fewer draw, a different stream, a different population. Bands 1 and
+  // 3 already had `K === C` in round 8 and their `C`, `R` and `pBranch` are unchanged, so
+  // their hashes must NOT move; `colW` does not enter a signature, which is why the derived
+  // width leaves them alone.
   const expected = [
     null,
-    '936208e906a34322', // band 1 — C 3, R 5, rule (P) + V14
-    '773bfb48a9ba2097', // band 2 — C 4, R 5
-    'b59df50a69d00ae8', // band 3 — C 4, R 6
-    '8faf828d80ae459d', // band 4 — C 5, R 6
-    'c881f704d3c9abd1', // band 5 — C 6, R 6
+    '936208e906a34322', // band 1 — C 3, K 3, R 5 — UNCHANGED from round 8
+    '1724855fda4bea93', // band 2 — C 4, K 3 -> 4, R 5
+    'b59df50a69d00ae8', // band 3 — C 4, K 4, R 6 — UNCHANGED from round 8
+    '1057199915e3b07f', // band 4 — C 5, K 4 -> 5, R 6
+    'cabaf1264b15df9c', // band 5 — C 6, K 5 -> 6, R 6
   ];
   for (let band = 1; band <= 5; band += 1) {
     const h = createHash('sha256');

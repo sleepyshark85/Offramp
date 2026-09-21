@@ -7,6 +7,7 @@
 
 import {
   BUILD_BUDGET,
+  CAR_SPEED,
   DEPOT_Y,
   ENTRY_LEN,
   ENTRY_Y,
@@ -15,6 +16,7 @@ import {
   MAX_ATTEMPTS,
   MIN_JUNCTION_SEP_LU,
   MLU,
+  colWFor,
   PALETTE,
   ROUTE_H,
   ROW0_Y,
@@ -29,15 +31,18 @@ import { choose, makeStream, mix32, shuffle } from './rng.js';
 // --- §3.2 site coordinates ---------------------------------------------------------------
 
 /**
- * `rowH = ROUTE_H / R` is THE ONLY DIVISION LEFT IN §3.2, and it is why AC-218's construction
- * guard still exists. `colW` used to be the other one — slices 0–1 derived it as
- * `min(300, LANE_SPAN / (C - 1))`, which made integrality an accident of which `C` a band
- * happened to use. Round 8 made it a band-table value, so integrality is now a property of the
- * table, and `colWFor()` went with it.
+ * `rowH = ROUTE_H / R` is one of TWO divisions in §3.2, and it is why AC-218's construction
+ * guard exists. `colW` is the other: slices 0–1 derived it as `min(300, LANE_SPAN / (C - 1))`,
+ * round 8 made it a band-table literal, and round 9 derives it again — but from the
+ * DEPOT-CLEARANCE rule of generation.md §3.2.1 rather than from a lane span, and rounded DOWN
+ * to an even number, so `colW * (C - 1)` is even by construction and `x(c)` is an exact
+ * integer. The band table no longer carries it.
  */
 export function rowHFor(R) {
   return ROUTE_H / R;
 }
+
+export { colWFor };
 
 export function xOf(c, C, colW) {
   return 500 + (2 * c - (C - 1)) * colW / 2;
@@ -210,12 +215,25 @@ export function spawnSchedule(seed, P) {
  */
 export function assertScheduleReachesClock(level) {
   const sp = level.spawns;
-  const reach = level.interval + level.jitter;
+  // AC-808's bound is `interval + 2 * jitter` and NOT `interval + jitter`, and round 9 found
+  // that by tripping it. gameplay.md §2.7's loop considers every nominal slot with
+  // `nominal - jitter < LEVEL_TICKS` and keeps it only if the JITTERED tick is under the
+  // clock, so the last KEPT slot can be preceded by a DROPPED one whose draw was positive
+  // while its own draw was negative. The worst gap the loop can construct is therefore one
+  // whole `jitter` wider than the old guard allowed, and the guard was throwing on legal
+  // schedules at a rate that depends on where `SPAWN_LEAD + i * interval` lands relative to
+  // 7,200. Round 8's table never hit it; round 9's lever sweep hit it at 145/14, 142/14,
+  // 134/13, 100/18 and 96/16 while leaving 143/14 and 140/14 clean.
+  //
+  // This is gameplay.md §8.4's lesson arriving from the other direction: the constant WAS
+  // written as a function of the lever, and the function was wrong by a term — which is worse
+  // than a constant, because it looks correct and only fires for some values.
+  const reach = level.interval + 2 * level.jitter;
   if (sp.length === 0 || LEVEL_TICKS - sp[sp.length - 1].tick > reach) {
     throw new Error(
       'SHORT_SCHEDULE: band=' + level.band + ' seed=' + level.seed +
         ' last=' + (sp.length ? sp[sp.length - 1].tick : 'none') +
-        ' of ' + LEVEL_TICKS + ' (interval+jitter=' + reach + ')',
+        ' of ' + LEVEL_TICKS + ' (interval+2*jitter=' + reach + ')',
     );
   }
   return level;
@@ -261,7 +279,7 @@ export function assertIntegerGeometry(level) {
 
 export function finalise(net, P, seed) {
   const { C, K, R } = P;
-  const colW = P.colW;
+  const colW = colWFor(C); // generation.md §3.2.1 — derived, not tabled
   const rowH = rowHFor(R);
 
   // Nodes in (row, col) order. The entry sits one notional row above row 0.
@@ -359,7 +377,9 @@ export function finalise(net, P, seed) {
     edges,
     junctions,
     entryEdgeId,
-    speedMluPerTick: P.speedMluPerTick,
+    // Speed is CAR_SPEED, a constant, and is deliberately NOT a field on the level
+    // (generation.md §1, §6.1). A per-level copy would be a second place the value lives and
+    // the one a future band table could quietly diverge from.
     interval: P.interval,
     jitter: P.jitter,
     spawns: spawnSchedule(seed, P),
@@ -449,7 +469,7 @@ export function firstDecisionTicks(level) {
     const n = level.nodes[nodeId];
     if (n.kind === 'depot') return;
     if (n.kind === 'branch') {
-      const t = Math.ceil(mlu / level.speedMluPerTick);
+      const t = Math.ceil(mlu / CAR_SPEED);
       if (t < min) min = t;
       return; // the FIRST branch on this path; everything past it is not a first decision
     }

@@ -17,18 +17,32 @@
 import { MLU } from '../engine/index.js';
 
 // --- ui.md §4.1, geometry constants (LU) ------------------------------------------------
-// Round 8 shrank everything by roughly a fifth. The ratios that matter were preserved:
-// CAR_W (66) is narrower than ROAD_W (84) leaving a 9 LU shoulder each side, and the junction
-// marker's diameter (68) is now SMALLER than the road, so the marker sits inside its road
-// rather than overhanging it (AC-503).
-export const ROAD_W = 84;
-export const ROAD_EDGE_W = 4;
+//
+// ROUND 9 INVERTS THE CAR-TO-ROAD RELATIONSHIP AND THAT IS THE WHOLE OF THE ROAD CHANGE.
+// `CAR_W` (66) is 2.4 times `ROAD_W` (28), where round 8 had the car 21 % NARROWER than the
+// road; the junction marker's diameter (68) is likewise 2.4 times the road. The car no longer
+// sits IN a lane, it rides OVER a line, and a junction reads as an object on the network
+// rather than as a fitting inside it (ui.md §4.1, AC-503).
+//
+// The measurement that decided it is ui.md §4.6's INK BUDGET: round 8 spent four to six times
+// as much lit area on road furniture as on everything the player was looking at. `ROAD_EDGE_W`
+// (the casing) and the lane dashes are DELETED — §7.2's test is "what state does this report?"
+// and both reported nothing — and `--road` got BRIGHTER rather than darker, because at 28 LU
+// it has to read as a connected network at all (ui.md §5.3). AC-521 is the check that keeps
+// the number from going back up.
+export const ROAD_W = 28;
 /**
- * The centreline fillet a car follows through a corner. A third of the road width: large
- * enough to read as a turn rather than a mitre, small enough that the road's outer corner is
- * still square-shouldered. The largest deviation between the filleted path and the polyline is
- * `CORNER_R * (sqrt(2) - 1) ~ 11.6` LU, well inside the road's 42 LU half-width, so a car never
- * leaves the tarmac on a turn (ui.md §4.1).
+ * The centreline fillet a car follows through a corner. `CORNER_R = 28` is unchanged in
+ * round 9 — it is the CENTRELINE fillet, not the road's, and the road's own outer corner
+ * radius is now `ROAD_W / 2 = 14` from the round join (ui.md §4.2). The car therefore turns a
+ * WIDER corner than the road it is on, which is correct, because the car is wider than the
+ * road (ui.md §4.1, §4.6).
+ *
+ * The largest deviation between the filleted path and the polyline is
+ * `CORNER_R * (sqrt(2) - 1) ~ 11.6` LU. ui.md §4.1 still calls that "well inside the road's
+ * 42 LU half-width"; the half-width is 14 LU now, so the sentence is stale, but the deviation
+ * is still inside `CAR_W / 2 = 33`, which is the quantity that decides whether the car looks
+ * like it left the line.
  */
 export const CORNER_R = 28;
 export const CAR_L = 104;
@@ -49,12 +63,6 @@ export const DEPOT_H = 128;
 export const COMMIT_PREVIEW = 200;
 export const TERRACE_FADE = 28;
 
-// ui.md §7.2 — lane dashes, 3 LU wide, 16 on / 22 off, drawn along the FILLETED centreline so
-// a dash never lands on a corner as a wedge.
-export const LANE_DASH_W = 3;
-export const LANE_DASH_ON = 16;
-export const LANE_DASH_OFF = 22;
-
 // ui.md §7.3 — junction marker. Both blade dimensions are proportions of the marker and are
 // specified there rather than left to the renderer: 30 LU from the centre of a 34 LU disc
 // keeps the whole blade on the marker and leaves 4 LU of disc face between the blade's tip and
@@ -65,11 +73,11 @@ export const BLADE_LEN = 30;
 export const BLADE_W = 9;
 const OPEN_BRANCH_LU = 120;
 /**
- * ui.md §7.3. The open-branch overdraw is butt-capped at both ends — a round cap on an 84 LU
- * stroke would put a 42 LU lobe of brightened road ABOVE the junction node, reading as the
- * branch being open backwards — and the near butt end is hidden under the 34 LU marker disc.
- * The far end is hidden by nothing, so the overdraw's alpha ramps linearly to zero over its
- * final 28 LU: the shortest run over which a road-width stroke can end without showing an edge.
+ * ui.md §7.3. The open-branch overdraw is butt-capped at both ends — a round cap would put a
+ * `ROAD_W / 2` lobe of brightened road ABOVE the junction node, reading as the branch being
+ * open backwards — and the near butt end is hidden under the 34 LU marker disc. The far end is
+ * hidden by nothing, so the overdraw's alpha ramps linearly to zero over its final 28 LU: the
+ * shortest run over which a road-width stroke can end without showing an edge.
  */
 export const OPEN_BRANCH_FADE = 28;
 const ARMED_ARC_LU = 170;
@@ -80,6 +88,15 @@ export const RIPPLE_R1 = 62;
 // ui.md §7.4 — depot (AC-518). Every number scaled with the depot's 0.78 shrink except the
 // disc ratio, which is derived and does not scale.
 export const DEPOT_RADIUS = 10;
+/**
+ * ui.md §5.3 — `--depot-glow` is "a soft fill behind each depot body in its own colour" and
+ * §5.3 sizes it by its job: put the depot's colour on screen "at an area comparable to a
+ * car's". The body is 124 x 128 = 15,872 LU^2 and a car is 104 x 66 = 6,864, so a glow padded
+ * by 10 LU on every side (144 x 148 = 21,312) adds 5,440 LU^2 of colour — 0.79 of a car's
+ * area — beyond the body's own footprint. It is drawn UNDER the body (ui.md §4.2), so the
+ * visible colour is the pad, not the whole rect.
+ */
+export const DEPOT_GLOW_PAD = 10;
 export const DEPOT_FACE_BAND = 14;
 export const DEPOT_HATCH_W = 5;
 export const DEPOT_RECEIVING_SCALE = 1.04;
@@ -266,8 +283,13 @@ export function subPathPoints(curve, fromLu, toLu, stepLu = 8) {
 
 /**
  * The filleted centreline of one edge, as a path description the caller turns into a Skia
- * path: `{ start, corner: { before, control, after } | null, end }`. The lane dashes follow
- * this so a dash turns the corner instead of meeting it at a point (ui.md §7.2).
+ * path: `{ start, corner: { before, control, after } | null, end }`.
+ *
+ * NOTHING IN THE PLAY SURFACE DRAWS THIS ANY MORE. The road is one stroke over the raw
+ * orthogonal polyline with round joins, and the lane dashes that needed a filleted path are
+ * deleted (ui.md §7.2, §4.6). It is kept as the analytic form of the centreline a car
+ * follows — `poseAtLu` walks the same fillet — and it is what test/render-geometry.test.js
+ * checks `poseAtLu` against, so it is an exported check surface and not dead drawing code.
  */
 export function filletedCentreline(curve) {
   const segs = curve.segs;
@@ -398,6 +420,13 @@ function buildDepots(level) {
       w: DEPOT_W,
       h: DEPOT_H,
       sill: depotSill(n.x - DEPOT_W / 2, n.y, DEPOT_W, DEPOT_H),
+      // ui.md §5.3 — the `--depot-glow` rect, the body inflated by DEPOT_GLOW_PAD a side.
+      glow: {
+        x: n.x - DEPOT_W / 2 - DEPOT_GLOW_PAD,
+        y: n.y - DEPOT_GLOW_PAD,
+        w: DEPOT_W + 2 * DEPOT_GLOW_PAD,
+        h: DEPOT_H + 2 * DEPOT_GLOW_PAD,
+      },
     }));
 }
 

@@ -10,7 +10,7 @@
 //                  junctions the level never asked about (AC-243).
 //
 
-import { createState, reachableColourMasks, step } from '../../src/engine/index.js';
+import { CAR_SPEED, createState, reachableColourMasks, step } from '../../src/engine/index.js';
 
 const MAX_RUN_TICKS = 20000;
 
@@ -28,7 +28,7 @@ function reaches(level, masks, node, k, colour) {
 function branchesEnteredThisTick(level, open, car) {
   const out = [];
   let edge = level.edges[car.edgeId];
-  let progress = car.progress + level.speedMluPerTick;
+  let progress = car.progress + CAR_SPEED;
   while (progress >= edge.lengthMlu) {
     progress -= edge.lengthMlu;
     const node = level.nodes[edge.to];

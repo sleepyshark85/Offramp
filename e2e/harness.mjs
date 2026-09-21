@@ -102,6 +102,32 @@ export function snap(page) {
   return page.evaluate(() => (typeof window.__offramp === 'undefined' ? null : window.__offramp));
 }
 
+/**
+ * The snapshot AND the HUD, read in ONE page evaluation.
+ *
+ * This exists because the clock caption is a pure function of `state.tick` (AC-520), so a test
+ * that reads the tick in one round-trip and the caption in another is comparing two different
+ * ticks. The game runs at 60 Hz: a screenshot plus two `getByTestId` round-trips between the
+ * two reads is easily a whole second of simulated time, which is one whole step of the
+ * `m:ss` caption. The clock-bar assertion carried a ±2 pt tolerance that absorbed 80 ticks of
+ * it; the caption assertion is exact and had nothing.
+ *
+ * Reading both inside one `evaluate` makes the comparison atomic with respect to the render
+ * loop, because `window.__offramp` and the DOM are both written from the same React commit and
+ * nothing can tick between two statements in the same synchronous callback.
+ */
+export function snapWithHud(page, testIds) {
+  return page.evaluate((ids) => {
+    if (typeof window.__offramp === 'undefined') return null;
+    const hud = {};
+    for (const id of ids) {
+      const el = document.querySelector('[data-testid="' + id + '"]');
+      hud[id] = el ? { text: el.textContent, width: el.getBoundingClientRect().width } : null;
+    }
+    return { snapshot: window.__offramp, hud };
+  }, testIds);
+}
+
 /** Poll `window.__offramp` until `pred` holds. Returns the snapshot that satisfied it. */
 export async function waitFor(page, pred, { timeout = 20000, label = 'condition' } = {}) {
   const t0 = Date.now();

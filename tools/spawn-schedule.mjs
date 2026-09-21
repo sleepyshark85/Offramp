@@ -31,13 +31,23 @@ import { arg, table } from './lib/report.mjs';
 // gameplay.md §2.1 and §2.7, transcribed.
 const DESIGN_LEVEL_TICKS = 7200;
 const DESIGN_SPAWN_LEAD = 90;
-// generation.md §6.1 — interval, jitter. gameplay.md §2.7 — the SPAWN_COUNT upper bound.
+// generation.md §6.1 — interval, jitter, K. gameplay.md §2.7 — the SPAWN_COUNT upper bound,
+// `floor((LEVEL_TICKS - 1 - SPAWN_LEAD + JITTER) / INTERVAL) + 1`.
+//
+// `countMax` IS RE-DERIVED FROM THE ROUND-9 interval/jitter AND NOT COPIED FROM gameplay.md
+// §2.7's TABLE, which still prints round 8's `35 / 48 / 51 / 54 / 56`. AC-139 quotes the same
+// stale row. At the round-9 column the closed form is 35 / 49 / 51 / 55 / 56 — §2.7's table
+// was not re-derived when `interval` and `jitter` moved, and the formula beside it was. The
+// formula is the normative statement; the row is a worked example of it, so the formula wins
+// and the disagreement is reported rather than transcribed.
+const COUNT_MAX = (interval, jitter) =>
+  Math.floor((DESIGN_LEVEL_TICKS - 1 - DESIGN_SPAWN_LEAD + jitter) / interval) + 1;
 const DESIGN = {
-  1: { interval: 204, jitter: 26, countMax: 35, K: 3 },
-  2: { interval: 150, jitter: 18, countMax: 48, K: 3 },
-  3: { interval: 140, jitter: 18, countMax: 51, K: 4 },
-  4: { interval: 132, jitter: 16, countMax: 54, K: 4 },
-  5: { interval: 128, jitter: 16, countMax: 56, K: 5 },
+  1: { interval: 208, jitter: 21, countMax: COUNT_MAX(208, 21), K: 3 },
+  2: { interval: 147, jitter: 15, countMax: COUNT_MAX(147, 15), K: 4 },
+  3: { interval: 140, jitter: 14, countMax: COUNT_MAX(140, 14), K: 4 },
+  4: { interval: 131, jitter: 13, countMax: COUNT_MAX(131, 13), K: 5 },
+  5: { interval: 128, jitter: 13, countMax: COUNT_MAX(128, 13), K: 6 },
 };
 
 const seeds = Number(arg('seeds', 2000));

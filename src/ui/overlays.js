@@ -212,7 +212,10 @@ const styles = StyleSheet.create({
   rowLabel: { ...TYPE.body, color: C.textDim },
   rowValue: { ...TYPE.body, color: C.text, fontVariant: ['tabular-nums'] },
   rowNote: { ...TYPE.caption, color: C.textMute, marginRight: SPACE.md },
-  display: { ...TYPE.display, color: C.text, fontVariant: ['tabular-nums'] },
+  // ui.md §5.3 — the level-complete panel's DELIVERED figure and the primary button are
+  // `--accent`. Both report progress: the number the player is playing for, and the action
+  // that carries them forward.
+  display: { ...TYPE.display, color: C.accent, fontVariant: ['tabular-nums'] },
   stack: { marginTop: SPACE.lg, gap: SPACE.md },
   buttons: { flexDirection: 'row', marginTop: SPACE.lg, gap: SPACE.md },
   button: {
@@ -224,7 +227,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   buttonGrow: { flex: 1 },
-  buttonPrimary: { backgroundColor: C.text },
+  buttonPrimary: { backgroundColor: C.accent },
   buttonLabel: { ...TYPE.button, color: C.text },
   buttonLabelPrimary: { color: C.bg },
   countdown: { ...TYPE.display, color: C.text },

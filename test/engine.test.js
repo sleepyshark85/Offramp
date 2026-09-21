@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  CAR_SPEED,
   LEVEL_TICKS,
   LIVES,
   MAX_CATCHUP_TICKS,
@@ -13,7 +14,7 @@ import {
   bandParams,
 } from '../src/engine/constants.js';
 import { createState, step, TRANSITION_STATS, resetTransitionStats } from '../src/engine/step.js';
-import { assertScheduleReachesClock, generate } from '../src/engine/generate.js';
+import { assertScheduleReachesClock, generate, spawnSchedule } from '../src/engine/generate.js';
 import { drive, twoDepotLevel } from './helpers.js';
 import { playLevel } from '../tools/lib/solver.mjs';
 import { lazyOptimal, lazyOptimalInputs } from '../tools/lib/oracle.mjs';
@@ -87,13 +88,21 @@ test('AC-104 · a car is always on exactly one existing edge, inside it', () => 
   }
 });
 
-test('AC-105 · a car not transitioning advances by exactly speedMluPerTick', () => {
+test('AC-105 · a car not transitioning advances by exactly CAR_SPEED', () => {
   const level = twoDepotLevel();
   let s = createState(level);
   s = step(s, []); // spawn + first advance
   const before = s.cars[0].progress;
   s = step(s, []);
-  assert.equal(s.cars[0].progress, before + level.speedMluPerTick);
+  assert.equal(s.cars[0].progress, before + CAR_SPEED);
+  // CAR_SPEED is ONE CONSTANT AT EVERY BAND in round 9 (gameplay.md §2.2, §5). 2750 is
+  // transcribed from the design, not read back out of the module: it is the value band 1
+  // already ran at, so no band gets faster than the tutorial did.
+  assert.equal(CAR_SPEED, 2750, 'gameplay.md §2.2 / generation.md §6.1');
+  for (let band = 1; band <= 5; band += 1) {
+    const lvl = generate(band * 7, band);
+    assert.ok(!('speedMluPerTick' in lvl), 'band ' + band + ' still carries a per-band speed');
+  }
 });
 
 test('AC-106 · a transition carries the remainder', () => {
@@ -107,24 +116,26 @@ test('AC-106 · a transition carries the remainder', () => {
   const old = prev.cars[0];
   const now = s.cars[0];
   assert.equal(now.edgeId, 1); // open defaults to 0 -> out[0]
-  assert.equal(now.progress, old.progress + level.speedMluPerTick - level.edges[0].lengthMlu);
+  assert.equal(now.progress, old.progress + CAR_SPEED - level.edges[0].lengthMlu);
 });
 
 test('AC-107/AC-109 · junction state is read at the transition, after this tick’s inputs', () => {
   const level = twoDepotLevel();
-  // The car transitions during tick 33. A tap stamped at tick 33 must be honoured.
-  const withTap = drive(step, createState(level), new Map([[33, [{ tick: 33, junctionId: 0 }]]]), 34);
+  // The car transitions during tick 36 at CAR_SPEED = 2750 (the fixture's entry edge is
+  // 100 LU: ceil(100000 / 2750) = 37 ticks of travel, so the transition is on tick 36 counting
+  // from the spawn tick 0's own advance). A tap stamped at tick 36 must be honoured.
+  const withTap = drive(step, createState(level), new Map([[36, [{ tick: 36, junctionId: 0 }]]]), 37);
   assert.equal(withTap.cars[0].edgeId, 2, 'took out[1] after the same-tick flip');
-  const without = drive(step, createState(level), new Map(), 34);
+  const without = drive(step, createState(level), new Map(), 37);
   assert.equal(without.cars[0].edgeId, 1);
 });
 
 test('AC-108/AC-311 · a flip behind a car does not re-route it', () => {
   const level = twoDepotLevel();
-  const late = drive(step, createState(level), new Map([[34, [{ tick: 34, junctionId: 0 }]]]), 160);
+  const late = drive(step, createState(level), new Map([[37, [{ tick: 37, junctionId: 0 }]]]), 180);
   assert.equal(late.delivered, 1, 'still arrived at depot colour 0');
   assert.equal(late.misrouted, 0);
-  const never = drive(step, createState(level), new Map(), 160);
+  const never = drive(step, createState(level), new Map(), 180);
   assert.equal(never.delivered, 1);
 });
 
@@ -159,8 +170,10 @@ test('AC-112 · cars spawn on their scheduled tick', () => {
   assert.equal(before.cars.filter((c) => c.id === 0).length, 0, 'no car with that id a tick earlier');
   // progress is one tick of travel because spawn precedes advance within the tick. AC-112's
   // note: progress === 0 is not observable by any caller, it exists only between two
-  // statements inside step().
-  assert.equal(s.cars[0].progress, level.speedMluPerTick);
+  // statements inside step(). ENTRY_LEN is 220,000 MLU against CAR_SPEED = 2,750, so a
+  // spawning car cannot transition on its spawn tick at any band — eighty times over now that
+  // speed no longer rises up the ladder.
+  assert.equal(s.cars[0].progress, CAR_SPEED);
   const spawned = s.events.filter((e) => e.type === 'spawn');
   assert.equal(spawned.length, 1);
   assert.deepEqual(spawned[0], { type: 'spawn', tick: 7, carId: 0, colour: 1 });
@@ -169,10 +182,10 @@ test('AC-112 · cars spawn on their scheduled tick', () => {
 test('AC-112 · every scheduled car of a real level arrives exactly once, on its tick', () => {
   // On the shipped geometry rather than the fixture, because AC-112's claim that a car cannot
   // transition on its spawn tick rests on ENTRY_LEN = 220,000 MLU being far longer than one
-  // tick of travel at any band — 3,350 MLU at the fastest, so sixty times over.
+  // tick of travel at any band — 2,750 MLU at EVERY band in round 9, so eighty times over.
   for (let band = 1; band <= 5; band += 1) {
     const level = generate(40 + band, band);
-    assert.ok(level.edges[level.entryEdgeId].lengthMlu > 60 * level.speedMluPerTick);
+    assert.ok(level.edges[level.entryEdgeId].lengthMlu > 60 * CAR_SPEED);
     const wanted = new Map(level.spawns.map((sp) => [sp.tick, sp]));
     const seenIds = new Set();
     let prev = createState(level);
@@ -194,7 +207,7 @@ test('AC-112 · every scheduled car of a real level arrives exactly once, on its
       assert.ok(car, 'car ' + sp.index + ' not present after its spawn tick');
       assert.equal(car.colour, sp.colour);
       assert.equal(car.edgeId, level.entryEdgeId);
-      assert.equal(car.progress, level.speedMluPerTick);
+      assert.equal(car.progress, CAR_SPEED);
       assert.ok(!seenIds.has(sp.index), 'car id ' + sp.index + ' spawned twice');
       seenIds.add(sp.index);
     }
@@ -344,7 +357,7 @@ test('AC-122/AC-802 · the clock and the third misroute on the same tick is a LO
   // with one life left. Step 4 resolves it, step 5 checks `lives` BEFORE the clock, so the
   // phase is 'lost' even though the clock also expired on that tick.
   const arrive = LEVEL_TICKS - 1;
-  const spawnTick = arrive - 153; // the fixture's jogL journey is 153 ticks
+  const spawnTick = arrive - 167; // the fixture's jogL journey is 167 ticks at CAR_SPEED
   const level = twoDepotLevel({ spawns: [{ index: 0, tick: spawnTick, colour: 1 }] });
   let s = createState(level);
   s.lives = 1;
@@ -371,7 +384,10 @@ test('AC-122/AC-136 · two misroutes on one tick with one life: both resolve, li
   // Car 0 (colour 1) takes the long branch to depot colour 0; car 1 (colour 0) takes the short
   // branch to depot colour 1. Both misroute, and both resolve on the same tick.
   const level = twoDepotLevel({
-    spawns: [{ index: 0, tick: 0, colour: 1 }, { index: 1, tick: 20, colour: 0 }],
+    // Car 0 spawns at 0 and takes the 167-tick jogL; car 1 spawns at 22 and takes the
+    // 145-tick jogR, so both resolve on tick 167. The offset is 22 rather than round 8's 20
+    // because CAR_SPEED is 2750 at every band now and both journeys got longer.
+    spawns: [{ index: 0, tick: 0, colour: 1 }, { index: 1, tick: 22, colour: 0 }],
   });
   let s = createState(level);
   s.lives = 1;
@@ -381,7 +397,7 @@ test('AC-122/AC-136 · two misroutes on one tick with one life: both resolve, li
     s = step(s, inputs.get(s.tick) || []);
     if (s.events.some((e) => e.type === 'misrouted')) arrivalTick = s.tick - 1;
   }
-  assert.equal(arrivalTick, 153, 'both arrivals land on tick 153');
+  assert.equal(arrivalTick, 167, 'both arrivals land on tick 167');
   assert.equal(s.misrouted, 2, 'misrouted counts BOTH, unconditionally');
   assert.equal(s.events.filter((e) => e.type === 'misrouted').length, 2);
   assert.equal(s.delivered, 0);
@@ -427,10 +443,25 @@ test('AC-120/AC-121 · delivered non-decreasing, lives non-increasing and floore
 test('AC-139 · the spawn schedule matches its closed form', () => {
   // gameplay.md §2.7 / AC-139. TRANSCRIBED, not imported: the closed form is
   // floor((LEVEL_TICKS - 1 - SPAWN_LEAD + JITTER) / INTERVAL) + 1 and it comes out at
-  // 35 / 48 / 51 / 54 / 56. `SPAWN_SLACK`, `inFlightMax` and `transitMax` are deleted — under a
-  // clock the schedule is not a guess about how many cars a level will need, it is the list of
-  // cars that fit in two minutes.
-  const wantCount = [null, 35, 48, 51, 54, 56];
+  // 35 / 49 / 51 / 55 / 56 at round 9's interval/jitter column. `SPAWN_SLACK`, `inFlightMax`
+  // and `transitMax` are deleted — under a clock the schedule is not a guess about how many
+  // cars a level will need, it is the list of cars that fit in two minutes.
+  //
+  // THE DESIGN'S OWN ROW IS STALE AND THE FORMULA IS NOT. gameplay.md §2.7's SPAWN_COUNT table
+  // and AC-139's sentence both still print round 8's `35 / 48 / 51 / 54 / 56`, which is the
+  // formula evaluated at round 8's `interval`/`jitter`. The formula is the normative statement
+  // and the row is a worked example of it, so the row is what moved. Both are written out here
+  // so the arithmetic is checkable rather than asserted.
+  const wantCount = [null, 35, 49, 51, 55, 56];
+  const designInterval = [null, 208, 147, 140, 131, 128];
+  const designJitter = [null, 21, 15, 14, 13, 13];
+  for (let band = 1; band <= 5; band += 1) {
+    assert.equal(
+      Math.floor((LEVEL_TICKS - 1 - SPAWN_LEAD + designJitter[band]) / designInterval[band]) + 1,
+      wantCount[band],
+      'band ' + band + ': the closed form at the round-9 column',
+    );
+  }
   for (let band = 1; band <= 5; band += 1) {
     assert.equal(spawnCountMax(bandParams(band)), wantCount[band], 'band ' + band + ' closed form');
     for (let seed = 0; seed < 40; seed += 1) {
@@ -640,7 +671,20 @@ test('AC-133 · cars in flight at the bell are kept, unscored, and number 2 to 5
     }
     const min = Math.min(...counts);
     const max = Math.max(...counts);
-    assert.ok(min >= 2 && max <= 5, 'band ' + band + ' in flight at the bell: ' + min + '-' + max);
+    // AC-133 states 2 to 5 and requires the count to match `transit / interval` to within one
+    // car. ROUND 9 RAISES `transit / interval` AT EVERY BAND ABOVE 1 — cars in flight is
+    // 2.73 / 3.96 / 4.26 / 4.38 / 4.40 against round 8's 2.72 / 3.70 / 3.74 / 3.77 / 3.66 —
+    // so the upper end of the observed range follows it up. The band is widened to 2..6 with
+    // the arithmetic recorded: the claim AC-133 actually makes is the `transit / interval`
+    // agreement, and 6 is `ceil(4.40) + 1`.
+    const IN_FLIGHT = [null, 2.73, 3.96, 4.26, 4.38, 4.40];
+    assert.ok(min >= 2 && max <= 6, 'band ' + band + ' in flight at the bell: ' + min + '-' + max);
+    const mean = counts.reduce((a, b) => a + b, 0) / counts.length;
+    assert.ok(
+      Math.abs(mean - IN_FLIGHT[band]) <= 1,
+      'band ' + band + ': mean in flight at the bell ' + mean.toFixed(2) +
+        ' is more than one car from transit/interval = ' + IN_FLIGHT[band],
+    );
   }
 });
 
@@ -651,7 +695,7 @@ test('AC-801 · the last misroute ends the level on that tick', () => {
   s = drive(step, s, new Map(), 400);
   assert.equal(s.phase, 'lost');
   assert.equal(s.lives, 0);
-  assert.equal(s.tick, 154, 'ended on the arrival tick, not later');
+  assert.equal(s.tick, 168, 'ended on the arrival tick, not later');
   assert.ok(s.tick < LEVEL_TICKS);
 });
 
@@ -665,6 +709,54 @@ test('AC-808 · a schedule that stops short of the clock is a build error', () =
     const short = { ...level, spawns: level.spawns.slice(0, -4) };
     assert.throws(() => assertScheduleReachesClock(short), /SHORT_SCHEDULE/);
     assert.throws(() => assertScheduleReachesClock({ ...level, spawns: [] }), /SHORT_SCHEDULE/);
+  }
+});
+
+test('AC-808 · the bound is `interval + 2*jitter`, and `interval + jitter` throws on legal schedules', () => {
+  // ROUND 9 FOUND THIS BY TRIPPING IT. gameplay.md §2.7's loop considers every nominal slot
+  // with `nominal - jitter < LEVEL_TICKS` and keeps it only if the JITTERED tick is under the
+  // clock, so the last KEPT slot can be preceded by a DROPPED one whose draw was positive
+  // while its own draw was negative. The worst gap the loop can construct is therefore one
+  // whole `jitter` wider than `interval + jitter`, and the old guard was throwing on LEGAL
+  // schedules at a rate that depends on where `SPAWN_LEAD + i * interval` lands relative to
+  // 7,200.
+  //
+  // The five (interval, jitter) pairs AC-808 names are exercised directly, with the two it
+  // names as clean as the control. Round 8's table never hit it; round 9's lever sweep did.
+  const TRIPS = [[145, 14], [142, 14], [134, 13], [100, 18], [96, 16]];
+  const CLEAN = [[143, 14], [140, 14]];
+  const SEEDS = 2000;
+  for (const [interval, jitter] of TRIPS.concat(CLEAN)) {
+    const shouldTrip = TRIPS.some(([i, j]) => i === interval && j === jitter);
+    let oldGuard = 0;
+    let newGuard = 0;
+    let worstGap = 0;
+    for (let seed = 0; seed < SEEDS; seed += 1) {
+      const sp = spawnSchedule(seed, { interval, jitter, K: 4 });
+      const gap = LEVEL_TICKS - sp[sp.length - 1].tick;
+      if (gap > worstGap) worstGap = gap;
+      if (gap > interval + jitter) oldGuard += 1;
+      if (gap > interval + 2 * jitter) newGuard += 1;
+    }
+    assert.equal(newGuard, 0,
+      'interval ' + interval + '/' + jitter + ': the CORRECTED bound throws on ' + newGuard + ' legal schedules');
+    if (shouldTrip) {
+      assert.ok(oldGuard > 0,
+        'interval ' + interval + '/' + jitter + ' was supposed to trip the old bound and did not');
+    } else {
+      assert.equal(oldGuard, 0, 'interval ' + interval + '/' + jitter + ' is the control and it tripped');
+    }
+    // The bound is TIGHT: the worst gap a seed produces is under it, but not by much.
+    assert.ok(worstGap <= interval + 2 * jitter, 'worst gap ' + worstGap);
+  }
+
+  // And the shipped table is clean under BOTH bounds, which is why round 8 never saw this.
+  for (let band = 1; band <= 5; band += 1) {
+    const P = bandParams(band);
+    for (let seed = 0; seed < 300; seed += 1) {
+      const sp = spawnSchedule(seed, P);
+      assert.ok(LEVEL_TICKS - sp[sp.length - 1].tick <= P.interval + 2 * P.jitter);
+    }
   }
 });
 
@@ -734,4 +826,29 @@ test('AC-135 · the engine entry point imports and runs in bare Node', async () 
   }
   const s = engine.step(engine.createState(engine.generate(1, 1)), []);
   assert.equal(s.tick, 1);
+});
+
+test('AC-122/AC-231 · a run that spends its third life on tick 7,199 is LOST at tick 7,200', () => {
+  // AC-231 SAYS "every run that reaches `phase === 'lost'` has `state.tick < 7200`" AND THAT
+  // IS NOT TRUE OF THE CASE AC-122 REQUIRES. Step 5 checks `lives` BEFORE the clock
+  // (gameplay.md §2.5), so a third misroute landing on tick 7,199 makes the phase 'lost'; step
+  // 6 still increments, so the final tick is 7,200. AC-231 therefore forbids the outcome
+  // AC-122 and AC-802 mandate — "resolving the tie as a clear would mean the last tick of the
+  // level is the one tick on which a misroute is free".
+  //
+  // It is not a corner case anyone has to construct: the constrained bot hits it at band 5,
+  // seed 2900, over 3,000 seeds. It was unreachable in round 8 only because band 5 cleared
+  // 87.5 % and now clears 71.2 %, so there are more third misroutes for one to land on.
+  //
+  // The engine is right and the criterion is not; this pins the behaviour so a future "fix"
+  // to satisfy AC-231's wording fails here.
+  const arrive = LEVEL_TICKS - 1;
+  const spawnTick = arrive - 167; // the fixture's jogL journey
+  const level = twoDepotLevel({ spawns: [{ index: 0, tick: spawnTick, colour: 1 }] });
+  let s = createState(level);
+  s.lives = 1;
+  while (s.phase === 'running') s = step(s, []);
+  assert.equal(s.phase, 'lost', 'AC-122: lives are checked before the clock');
+  assert.equal(s.tick, LEVEL_TICKS, 'AC-231 says this is < 7200, and it is exactly 7200');
+  assert.ok(s.tick <= LEVEL_TICKS, 'no run of either kind exceeds 7,200 ticks');
 });

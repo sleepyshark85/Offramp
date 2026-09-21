@@ -13,7 +13,7 @@
 // memory that decays, and a safe-window check that ranges only over the cars it is currently
 // holding. BOT_LOOKAHEAD_CARS is deleted.
 
-import { createState, reachableColourMasks, step } from '../../src/engine/index.js';
+import { CAR_SPEED, createState, reachableColourMasks, step } from '../../src/engine/index.js';
 import { makeStream, mix32 } from '../../src/engine/rng.js';
 
 // --- §7.1.3 constants ---------------------------------------------------------------------
@@ -99,7 +99,7 @@ export function ticksToReach(level, open, car, junctionNode) {
     d += e.lengthMlu;
     node = level.nodes[e.to];
   }
-  return Math.ceil(d / level.speedMluPerTick);
+  return Math.ceil(d / CAR_SPEED);
 }
 
 /** Does branch k of this branch node lead to a depot of `colour`? */
@@ -502,7 +502,18 @@ export function playLevel(level, mode = 'constrained', opts = {}) {
   const bot = makeBot(level.seed, overrides);
   let state = createState(level);
   const inputs = [];
-  const { onTick, onBotTick, decisions } = opts;
+  const { onTick, onBotTick, decisions, uncappedLives } = opts;
+
+  // generation.md §8 `--lives-distribution` / §6.1.5. To measure LIVES as a lever without
+  // changing a rule of the game, the run is given a life count no run can spend, so it always
+  // reaches the bell and `misrouted` is the honest count of what the player did. The clear
+  // rate at 1, 2, 3 and 4 lives is then read straight OFF that distribution rather than
+  // inverted from anything — which matters, because at one life the governing model is
+  // `(1-p)^N`, a different curve and not a shifted one.
+  //
+  // `lives` is an integer here as everywhere: Infinity would be a non-integer in a state the
+  // fuzzer's invariants also read. LIVES itself is untouched (gameplay.md §4.1).
+  if (uncappedLives) state = { ...state, lives: 1e9 };
 
   while (state.phase === 'running' && state.tick < MAX_RUN_TICKS) {
     let tickInputs;

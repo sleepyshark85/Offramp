@@ -9,7 +9,7 @@
 // engine's design space) for everything inside the canvas. `scale` is the single boundary
 // between them and is applied once.
 
-import { DESIGN_H, DESIGN_W, ROUTE_H, bandParams } from '../engine/index.js';
+import { DESIGN_H, DESIGN_W, ROUTE_H, bandParams, colWFor } from '../engine/index.js';
 
 // ui.md §3.1
 export const HUD_H = 56;
@@ -20,8 +20,10 @@ const SLACK_TOP_FRACTION = 0.55;
 
 // ui.md §4.4 — the declared support floor. The height floor moved 400 -> 460 in round 8: the
 // design rectangle is shorter (1500 rather than 1600 LU), so it reaches its height bound at a
-// LARGER playH, and at playH = 460 the scale is 0.30667 where AC-401 and AC-402 clear their
-// floors by 0.16 pt and 0.24 pt. Below it, band 5's 44 pt target cannot be met (AC-409).
+// LARGER playH, and at playH = 460 the scale is 0.30667. AC-402's 20 pt car body clears there
+// by 0.24 pt; AC-401's 44 pt tap target clears by 2.61 pt in round 9, where it cleared by
+// 0.16 pt in round 8 — `colW` became derived and band 5's grid went 150 -> 158 LU.
+// Below the floor, band 5's 44 pt target cannot be met (AC-409).
 const MIN_PLAY_W = 320;
 const MIN_PLAY_H = 460;
 
@@ -75,14 +77,15 @@ export function hitRadiusLu(scale, minSepLu) {
 
 /**
  * `min(colW, rowH)` for a band — the minimum distance between two lattice sites, which is the
- * number the whole 44 pt tap-target arithmetic is built on (generation.md §3.2). `colW` is a
- * band-table value; `rowH` is `ROUTE_H / R`, the one division §3.2 has left.
- * 216 / 216 / 180 / 180 / 150 LU by band, and at band 5 it is the binding constraint on the
- * entire design.
+ * number the whole 44 pt tap-target arithmetic is built on (generation.md §3.2). `colW` is
+ * DERIVED from `C` in round 9 (generation.md §3.2.1); `rowH` is `ROUTE_H / R`.
+ * **216 / 216 / 180 / 180 / 158 LU by band.** Band 5 is still the binding case for the whole
+ * design, but round 9 moves it 150 -> 158, which takes the junction target at the support
+ * floor from 44.16 pt to 46.61 pt (AC-401).
  */
 export function minSepLuForBand(band) {
   const p = bandParams(band);
-  return Math.min(p.colW, ROUTE_H / p.R);
+  return Math.min(colWFor(p.C), ROUTE_H / p.R);
 }
 
 /** LU point -> screen pt. `screen = origin + design * scale` (ui.md §3.2). */

@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { MAX_CATCHUP_TICKS, TICK_HZ, advanceClock, createState, resetClock } from '../src/engine/index.js';
+import { CAR_SPEED, MAX_CATCHUP_TICKS, TICK_HZ, advanceClock, createState, resetClock } from '../src/engine/index.js';
 import { generate } from '../src/engine/generate.js';
 import { EVENT_WINDOW_TICKS, advanceFrame, collectEvents, enqueueTap } from '../src/ui/loop.js';
 import { MODE, backgroundAction } from '../src/ui/appState.js';
@@ -294,7 +294,10 @@ test('AC-806 · a 2 s stall moves no car more than 8 * speed LU', () => {
     observed += 1;
   }
   assert.ok(observed > 0, 'every car crossed a node, so no in-edge displacement was measured');
-  const cap = (8 * level.speedMluPerTick) / 1000;
+  // AC-806's cap: 8 * CAR_SPEED = 22,000 MLU = 22.0 LU, a fifth of a car. Round 8's worst
+  // case was 26.8 LU at 3,350 MLU/tick; one constant speed makes the cap the same at every
+  // band and smaller than it was.
+  const cap = (8 * CAR_SPEED) / 1000;
   assert.ok(moved <= cap, 'a car jumped ' + moved + ' LU against a cap of ' + cap);
   assert.equal(stalled.state.tick, s.tick + 8);
 });

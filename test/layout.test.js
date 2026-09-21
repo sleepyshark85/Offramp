@@ -6,9 +6,12 @@
 // expectation; transcribe it." So `1000`, `1500`, `0.55`, `56`, `8`, `22`, `76`, `6`, `84`,
 // `66`, `104`, `124`, `128` and the nine device rows below are literals here on purpose.
 //
-// ROUND 8 MOVED EVERY ONE OF THEM. The design rectangle is 1000 x 1500, the support floor is
-// 320 x 460, and BOTH SIZE FLOORS ARE NOW TIGHT: the 44 pt tap target clears by 0.16 pt and
-// the 20 pt car body by 0.24 pt, where the old geometry cleared them by 2.00 and 1.00.
+// ROUND 8 MOVED EVERY ONE OF THEM and ROUND 9 MOVED TWO BACK. `colW` is DERIVED rather than
+// tabled (generation.md §3.2.1), which takes band 5 from 150 LU to 158 and `min(colW, rowH)`
+// with it, so the 44 pt tap target now clears by 2.61 pt rather than by 0.16 — the first time
+// a round of this design has made a tap target BIGGER. The 20 pt car-body floor is unmoved and
+// still clears by only 0.24 pt. `ROAD_W` fell 84 -> 28 (ui.md §4.6), so the road column of
+// §3.3 moved with it.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -23,22 +26,24 @@ import {
 // ui.md §3.3, "Measured fit across real devices". Columns: W, H, insetTop, insetBottom,
 // scale, play H, junction target.
 // The junction-target column is ui.md §3.3's, which states it for the WORST BAND — always
-// band 5, where min(colW, rowH) = 150 LU is the finest grid in the game.
+// band 5, where min(colW, rowH) = 158 LU is the finest grid in the game.
+// Columns: name, W, H, insetTop, insetBottom, scale, playH, junction target, car W, car L,
+// road width.
 const DEVICES = [
-  ['iPhone SE (1st)', 320, 568, 20, 0, 0.32, 484, 46.1, 21.1, 33.3],
-  ['iPhone SE (2nd/3rd)', 375, 667, 20, 0, 0.375, 583, 54.0, 24.8, 39.0],
-  ['iPhone 13 mini', 375, 812, 50, 34, 0.375, 664, 54.0, 24.8, 39.0],
-  ['iPhone 13/14', 390, 844, 47, 34, 0.39, 699, 56.2, 25.7, 40.6],
-  ['iPhone 15/16', 393, 852, 59, 34, 0.393, 695, 56.6, 25.9, 40.9],
-  ['iPhone 16 Pro Max', 440, 956, 62, 34, 0.44, 796, 63.4, 29.0, 45.8],
-  ['Galaxy S23', 360, 780, 24, 24, 0.36, 668, 51.8, 23.8, 37.4],
-  ['Pixel 7', 412, 915, 24, 24, 0.412, 803, 59.3, 27.2, 42.8],
-  ['Tall Android 21:9', 412, 1024, 32, 24, 0.412, 904, 59.3, 27.2, 42.8],
+  ['iPhone SE (1st)', 320, 568, 20, 0, 0.32, 484, 48.6, 21.1, 33.3, 9.0],
+  ['iPhone SE (2nd/3rd)', 375, 667, 20, 0, 0.375, 583, 57.0, 24.8, 39.0, 10.5],
+  ['iPhone 13 mini', 375, 812, 50, 34, 0.375, 664, 57.0, 24.8, 39.0, 10.5],
+  ['iPhone 13/14', 390, 844, 47, 34, 0.39, 699, 59.3, 25.7, 40.6, 10.9],
+  ['iPhone 15/16', 393, 852, 59, 34, 0.393, 695, 59.7, 25.9, 40.9, 11.0],
+  ['iPhone 16 Pro Max', 440, 956, 62, 34, 0.44, 796, 66.9, 29.0, 45.8, 12.3],
+  ['Galaxy S23', 360, 780, 24, 24, 0.36, 668, 54.7, 23.8, 37.4, 10.1],
+  ['Pixel 7', 412, 915, 24, 24, 0.412, 803, 62.6, 27.2, 42.8, 11.5],
+  ['Tall Android 21:9', 412, 1024, 32, 24, 0.412, 904, 62.6, 27.2, 42.8, 11.5],
 ];
 
 test('AC-403 / AC-405 / AC-406 · ui.md §3.3 device table reproduces exactly', () => {
   let checked = 0;
-  for (const [name, w, h, top, bottom, scale, playH, target, carW, carL] of DEVICES) {
+  for (const [name, w, h, top, bottom, scale, playH, target, carW, carL, roadW] of DEVICES) {
     const L = computeLayout({ screenW: w, screenH: h, insetTop: top, insetBottom: bottom });
     // ui.md §3.1: playTop = safeAreaTop + HUD_H (56); playBottom = screenH - inset - 8.
     assert.equal(L.playTop, top + 56, name + ' playTop');
@@ -52,6 +57,7 @@ test('AC-403 / AC-405 / AC-406 · ui.md §3.3 device table reproduces exactly', 
     assert.equal(Math.round(2 * r * L.scale * 10) / 10, target, name + ' junction target');
     assert.equal(Math.round(CAR_W * L.scale * 10) / 10, carW, name + ' car width');
     assert.equal(Math.round(CAR_L * L.scale * 10) / 10, carL, name + ' car length');
+    assert.equal(Math.round(ROAD_W * L.scale * 10) / 10, roadW, name + ' road width');
     checked += 1;
   }
   assert.ok(checked === DEVICES.length, 'every device row was checked');
@@ -63,10 +69,10 @@ test('AC-408 · reference device: 393 x 852 with insets 59 / 34', () => {
   assert.equal(L.playH, 695);
   assert.equal(Math.round(L.slackY * 10) / 10, 105.5, 'ui.md §3.3 rounds this to 106');
   // The junction target at band 5, the car body, and the road width, all from ui.md §3.3.
-  assert.equal(Math.round(2 * hitRadiusLu(L.scale, 150) * L.scale * 10) / 10, 56.6);
+  assert.equal(Math.round(2 * hitRadiusLu(L.scale, 158) * L.scale * 10) / 10, 59.7);
   assert.equal(Math.round(CAR_W * L.scale * 10) / 10, 25.9);
   assert.equal(Math.round(CAR_L * L.scale * 10) / 10, 40.9);
-  assert.equal(Math.round(ROAD_W * L.scale * 10) / 10, 33.0);
+  assert.equal(Math.round(ROAD_W * L.scale * 10) / 10, 11.0);
 });
 
 test('AC-404 · vertical slack is split 55 / 45 and horizontal slack is centred', () => {
@@ -94,6 +100,44 @@ test('AC-302 · HIT_R_LU === clamp(ceil(22/scale), 76, floor((min(colW,rowH) - 6
     }
   }
   assert.ok(observed > 0, 'the formula was evaluated somewhere');
+});
+
+test('AC-302 · the "upper bound applied LAST" clause is UNREACHABLE on round 9\'s table', () => {
+  // development-process.md §6.8, exactly: a check's reachability is a function of the
+  // PARAMETERS, not only of the code, and this round moved the parameter.
+  //
+  // AC-302 says the upper bound is applied last and calls the ordering normative, on the
+  // ground that "at band 5, min(colW, rowH) = 150 gives an upper bound of 72, which is below
+  // the lower bound of 76 — so the lower bound is inert there and the upper bound wins. An
+  // implementation that applied them the other way round would produce 76 LU hit circles on a
+  // 150 LU pitch, which touch."
+  //
+  // `colW` is derived now (generation.md §3.2.1) and band 5's `min(colW, rowH)` is 158, so the
+  // upper bound is `floor((158 - 6) / 2) = 76` — EQUAL TO the lower bound, not below it. And
+  // `min(max(a, L), U)` differs from `max(min(a, U), L)` only when `L > U`. So the two
+  // orderings now agree at every band and every scale, and an implementation that applied
+  // them the wrong way round would pass every check in this file.
+  //
+  // The right response is §6.8's: do not loosen it, assert the STRONGER statement with the
+  // arithmetic recorded, so that a band table which takes `min(colW, rowH)` back below 158
+  // fails HERE and re-arms the ordering clause rather than silently un-testing it.
+  let differs = 0;
+  let observed = 0;
+  for (let band = 1; band <= 5; band += 1) {
+    const minSep = minSepLuForBand(band);
+    const upper = Math.floor((minSep - 6) / 2);
+    assert.ok(upper >= 76, 'band ' + band + ': upper bound ' + upper + ' is below the 76 LU lower clamp — AC-302\'s ordering clause is live again and needs a discriminating test');
+    for (let scale = 0.20; scale <= 0.70; scale += 0.001) {
+      const a = Math.ceil(22 / scale);
+      if (Math.min(Math.max(a, 76), upper) !== Math.max(Math.min(a, upper), 76)) differs += 1;
+      observed += 1;
+    }
+  }
+  assert.ok(observed > 2000, 'the sweep evaluated nothing');
+  assert.equal(differs, 0, 'the two orderings disagree somewhere, so the clause IS reachable and must be tested directly');
+  // And the band that used to make it reachable, stated as arithmetic rather than as a memory:
+  // at min(colW, rowH) = 150 the upper bound is 72 and the orderings differ.
+  assert.notEqual(Math.min(Math.max(72, 76), 72), Math.max(Math.min(72, 72), 76));
 });
 
 test('AC-303 · 2 * HIT_R_LU < min(colW, rowH) at every band and every supported scale', () => {
@@ -208,7 +252,12 @@ test('AC-514 · mouthLu === rowH - JUNCTION_MARK_R - 12 EXACTLY, at every band',
     assert.equal(ROW_H[band] - MOUTH_LU[band], 46, 'band ' + band + ' visible approach');
   }
   assert.equal(JUNCTION_MARK_R, 34);
-  assert.ok(2 * JUNCTION_MARK_R < ROAD_W, 'AC-503: the marker sits inside its road');
+  // AC-503 INVERTED IN ROUND 9: the marker's diameter is 2.4 x the road, so a junction reads
+  // as an object ON the network rather than as a fitting inside it (ui.md §4.1, §4.6). The
+  // terrace clearance above is unaffected — it is measured against JUNCTION_MARK_R, not
+  // against the road.
+  assert.equal(ROAD_W, 28);
+  assert.ok(2 * JUNCTION_MARK_R > ROAD_W, 'AC-503: the marker no longer overhangs the road');
 });
 
 test('AC-402 · CAR_W * scale >= 20 pt on the binding device AND at the support floor', () => {
@@ -229,17 +278,33 @@ test('AC-402 · CAR_W * scale >= 20 pt on the binding device AND at the support 
   assert.equal(Math.round(CAR_W * floorScale * 100) / 100, 20.24);
   assert.ok(CAR_W * floorScale >= 20);
   assert.ok(65 * floorScale < 20, 'a 65 LU car would FAIL: ' + (65 * floorScale).toFixed(2) + ' pt');
-  // And the 44 pt tap target at the same configuration, which is the other tight floor.
+  // And the 44 pt tap target at the same configuration. IT IS NO LONGER TIGHT. `colW` became
+  // derived in round 9 (generation.md §3.2.1), which takes band 5's `min(colW, rowH)` from
+  // 150 LU to 158 — so `floor((158 - 6) / 2) = 76` equals the 76 LU lower clamp instead of
+  // falling below it, and the target goes 44.16 pt -> 46.61 pt (AC-401).
+  //
+  // The consequence worth stating: ui.md §4.4's "both floors are now tight" applies to AC-402
+  // ONLY. The car body is the sole binding constraint on the support floor now.
   const r = hitRadiusLu(floorScale, minSepLuForBand(5));
-  assert.equal(r, 72, 'the upper clamp binds at band 5: floor((150 - 6)/2)');
-  assert.equal(Math.round(2 * r * floorScale * 100) / 100, 44.16);
+  assert.equal(minSepLuForBand(5), 158, 'band 5 grid');
+  assert.equal(r, 76, 'both clamps land on 76: max(ceil(22/0.30667), 76) and floor((158-6)/2)');
+  assert.equal(Math.round(2 * r * floorScale * 100) / 100, 46.61);
   assert.ok(2 * r * floorScale >= 44);
 });
 
 test('AC-409 · the support floor is a property the layout reports, not an assumption', () => {
   // ui.md §4.4: playW >= 320 and playH >= 460. The HEIGHT floor moved 400 -> 460 in round 8,
-  // because the design rectangle is shorter and therefore reaches its height bound at a LARGER
-  // playH; below it, band 5's 44 pt target cannot be met.
+  // because the design rectangle is shorter and therefore reaches its height bound at a
+  // LARGER playH.
+  //
+  // AC-409 AND ui.md §4.4 BOTH SAY THE REASON IS THE 44 pt TARGET — "below it, band 5's 44 pt
+  // target cannot be met" — AND THAT STOPPED BEING TRUE IN ROUND 9. At `min(colW, rowH) = 158`
+  // the hit radius is 76 LU at every in-envelope scale, so the target fails 44 pt only below
+  // `44 / (2 * 76) = 0.28947`, i.e. playH 434. The floor at 460 is now set by AC-402's 20 pt
+  // CAR BODY, which fails below `20 / 66 = 0.30303`, i.e. playH 454.5.
+  //
+  // The floor's VALUE is still right; its stated reason is not, and the assertions below check
+  // the binding constraint that actually holds it up rather than the one the document names.
   const belowW = computeLayout({ screenW: 300, screenH: 900, insetTop: 20, insetBottom: 0 });
   assert.equal(belowW.supported, false, 'a 300 pt width is outside the envelope');
   // playH = 568 - 20 - 56 - 0 - 8 = 484, which is above 460.
@@ -251,8 +316,29 @@ test('AC-409 · the support floor is a property the layout reports, not an assum
   const belowH = computeLayout({ screenW: 360, screenH: 540, insetTop: 20, insetBottom: 0 });
   assert.equal(belowH.playH, 456);
   assert.equal(belowH.supported, false, 'playH 456 is below the 460 floor');
-  assert.ok(2 * hitRadiusLu(belowH.scale, minSepLuForBand(5)) * belowH.scale < 44,
-    'and it really does fail the 44 pt target, which is why the floor moved');
+  // AC-409's stated reason does not hold at 456: the 44 pt target still passes there, and so
+  // does the 20 pt car body. The 460 floor is a DECLARED envelope with margin under it, not
+  // the height at which either criterion bites.
+  assert.ok(2 * hitRadiusLu(belowH.scale, minSepLuForBand(5)) * belowH.scale >= 44,
+    'the 44 pt target still passes at playH 456 — AC-409\'s stated reason is stale');
+  assert.ok(CAR_W * belowH.scale >= 20, 'and so does the 20 pt car body, by 0.06 pt');
+
+  // Where each criterion ACTUALLY bites, as arithmetic rather than as a memory. The car body
+  // is the nearer of the two, so it is what the declared floor is protecting — and a band
+  // table that took `min(colW, rowH)` back under 158 would move the tap target above it and
+  // make AC-409's stated reason true again, visibly, here.
+  const tapFailsBelowPlayH = (44 / (2 * hitRadiusLu(0.30667, minSepLuForBand(5)))) * 1500;
+  const carFailsBelowPlayH = (20 / CAR_W) * 1500;
+  assert.ok(Math.abs(tapFailsBelowPlayH - 434.2) < 0.5, 'tap target fails below playH ' + tapFailsBelowPlayH.toFixed(1));
+  assert.ok(Math.abs(carFailsBelowPlayH - 454.5) < 0.5, 'car body fails below playH ' + carFailsBelowPlayH.toFixed(1));
+  assert.ok(carFailsBelowPlayH > tapFailsBelowPlayH, 'the car body is the binding floor, not the tap target');
+  assert.ok(carFailsBelowPlayH < 460, 'the declared floor sits above where anything bites');
+
+  // The case that does fail: playH 452, below both the declared floor and AC-402's real one.
+  const wayBelow = computeLayout({ screenW: 360, screenH: 536, insetTop: 20, insetBottom: 0 });
+  assert.equal(wayBelow.playH, 452);
+  assert.equal(wayBelow.supported, false);
+  assert.ok(CAR_W * wayBelow.scale < 20, 'playH 452 fails AC-402');
   // The layout still computes rather than crashing, which is AC-409's first clause.
   assert.ok(Number.isFinite(belowH.scale) && belowH.scale > 0);
 });

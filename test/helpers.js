@@ -1,6 +1,6 @@
 // Shared fixtures for the engine tests. Not a test file (the runner globs *.test.js).
 
-import { MLU } from '../src/engine/constants.js';
+import { CAR_SPEED, MLU } from '../src/engine/constants.js';
 
 /**
  * A hand-built two-depot level, so that rules can be exercised at exact ticks instead of
@@ -14,8 +14,12 @@ import { MLU } from '../src/engine/constants.js';
  *   depot col 0, colour 0     depot col 2, colour 1
  *   at (400, 420)             at (560, 400)
  *
- * A car spawned at tick s reaches the junction at tick s+33 and the depot at s+153 via
- * edge 1, or s+133 via edge 2.
+ * A car spawned at tick s transitions through the junction on tick s+36 and reaches the depot
+ * on tick s+167 via edge 1, or s+145 via edge 2, at CAR_SPEED = 2750 MLU/tick.
+ *
+ * ROUND 9: SPEED IS NO LONGER A FIELD ON THE LEVEL. It is `CAR_SPEED`, one constant at every
+ * band (gameplay.md §2.2, generation.md §6.1), so the fixture cannot carry its own and the
+ * arrival ticks move with the real constant rather than with a fixture literal.
  *
  * ROUND 8: the geometry is ORTHOGONAL and every length is `|Δx| + |Δy|` exactly, the same
  * identity generation.md §3.3 states and AC-207 asserts — 100 + 0, 100 + 260, 60 + 240. The
@@ -27,7 +31,7 @@ import { MLU } from '../src/engine/constants.js';
  * stays `'running'` for 7,200 ticks unless three lives go first, and the tests that want a
  * terminal phase drive it there explicitly.
  */
-export function twoDepotLevel({ spawns, speed = 3000 } = {}) {
+export function twoDepotLevel({ spawns } = {}) {
   const list = (spawns || [{ index: 0, tick: 0, colour: 0 }]).slice();
   const node = (id, row, col, x, y, kind, out, junctionId = null, depotColour = null) => ({
     id, row, col, x, y, kind, out, junctionId, depotColour,
@@ -50,7 +54,6 @@ export function twoDepotLevel({ spawns, speed = 3000 } = {}) {
     ],
     junctions: [1],
     entryEdgeId: 0,
-    speedMluPerTick: speed,
     interval: 156,
     jitter: 12,
     spawns: list,

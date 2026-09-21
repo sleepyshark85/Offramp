@@ -15,7 +15,6 @@ import {
   Canvas,
   Circle,
   ColorMatrix,
-  DashPathEffect,
   Fill,
   Group,
   LinearGradient,
@@ -26,7 +25,7 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 
-import { MLU, TICK_HZ } from '../engine/index.js';
+import { CAR_SPEED, MLU, TICK_HZ } from '../engine/index.js';
 import { C, MS, OPACITY, CAR_COLOURS, lighten, withAlpha } from '../ui/theme.js';
 import { glyphPath } from './glyphs.js';
 import {
@@ -41,6 +40,7 @@ import {
   DEPOT_DISC_RATIO,
   DEPOT_FACE_BAND,
   DEPOT_HATCH_W,
+  DEPOT_GLOW_PAD,
   DEPOT_RADIUS,
   DEPOT_RECEIVING_SCALE,
   FLARE_R,
@@ -57,16 +57,11 @@ import {
   GLYPH_DEPOT_LARGE,
   JUNCTION_MARK_R,
   JUNCTION_RING_W,
-  LANE_DASH_OFF,
-  LANE_DASH_ON,
-  LANE_DASH_W,
   RIPPLE_R0,
   RIPPLE_R1,
-  ROAD_EDGE_W,
   ROAD_W,
   armingDistanceLu,
   carPose,
-  filletedCentreline,
 } from './geometry.js';
 import { easeOutCubic, easeOutQuad, jitter01, lerp, phase } from './motion.js';
 
@@ -89,8 +84,8 @@ function polyPath(points) {
 
 /**
  * The raw orthogonal polyline of every edge. Stroked with ROUND JOINS, which is what draws
- * the fillet: the join radius is half the stroke width, so the casing's outer corner radius is
- * (84 + 8)/2 = 46 LU and the surface's is 42 (ui.md §4.2).
+ * the fillet: the join radius is half the stroke width, so the road's outer corner radius is
+ * `ROAD_W / 2 = 14` LU (ui.md §4.2).
  */
 function roadPath(geom) {
   const p = Skia.Path.Make();
@@ -101,42 +96,23 @@ function roadPath(geom) {
   return p;
 }
 
+// --- 2 · road ----------------------------------------------------------------------------
+
 /**
- * The FILLETED centreline, which the lane dashes follow so a dash turns the corner instead of
- * meeting it at a point (ui.md §7.2). The dash pattern restarts at the start of every edge, so
- * the phase is a property of the edge and a car's position is never inferable from where the
- * dashes happen to be.
+ * ONE STROKE, 28 LU wide, in `--road`, round joins and round caps. That is the entire road
+ * (ui.md §7.2, §4.2 step 2).
+ *
+ * The casing and the lane dashes are DELETED. §7.2's test is "what state does this report?"
+ * and each reported nothing; the dashes failed it by their own specification, because ui.md
+ * had already argued their phase must restart per edge precisely so that a car's position is
+ * NOT inferable from them — an element explicitly designed to be uninformative is decoration
+ * by its own spec. Round 8 spent four to six times as much lit area on road furniture as on
+ * the cars, depots and junctions combined (ui.md §4.6); this and `ROAD_W` 84 -> 28 are what
+ * bought that back, and AC-521 is what stops it going up again.
  */
-function dashPath(geom) {
-  const p = Skia.Path.Make();
-  for (const c of geom.curves) {
-    const f = filletedCentreline(c);
-    p.moveTo(f.start[0], f.start[1]);
-    if (f.corner) {
-      p.lineTo(f.corner.before[0], f.corner.before[1]);
-      p.quadTo(f.corner.control[0], f.corner.control[1], f.corner.after[0], f.corner.after[1]);
-    }
-    p.lineTo(f.end[0], f.end[1]);
-  }
-  return p;
-}
-
-// --- 2, 3, 4 · road ----------------------------------------------------------------------
-
-function Roads({ road, dashes }) {
+function Roads({ road }) {
   return (
-    <Group>
-      <Path path={road} style="stroke" strokeWidth={ROAD_W + 2 * ROAD_EDGE_W} strokeCap="round" strokeJoin="round" color={C.roadEdge} />
-      <Path path={road} style="stroke" strokeWidth={ROAD_W} strokeCap="round" strokeJoin="round" color={C.road} />
-      <Path
-        path={dashes}
-        style="stroke"
-        strokeWidth={LANE_DASH_W}
-        color={withAlpha(C.roadDash, OPACITY.roadDash)}
-      >
-        <DashPathEffect intervals={[LANE_DASH_ON, LANE_DASH_OFF]} />
-      </Path>
-    </Group>
+    <Path path={road} style="stroke" strokeWidth={ROAD_W} strokeCap="round" strokeJoin="round" color={C.road} />
   );
 }
 
@@ -157,10 +133,10 @@ function Junction({ j, open, armOpacity, flipTick, tick, paths }) {
   return (
     <Group>
       {/* ui.md §7.3 — the open branch, --road lightened 16 % for 120 LU. Butt caps, not
-          round: a round cap on an 84 LU stroke puts a 42 LU lobe ABOVE the junction node, so
-          the brightening would spill backwards up the incoming road. The near butt end is
-          hidden under the marker disc, which is painted after it; the far end is hidden by
-          nothing, so its alpha ramps linearly to zero over OPEN_BRANCH_FADE. */}
+          round: a round cap puts a ROAD_W/2 lobe ABOVE the junction node, so the brightening
+          would spill backwards up the incoming road. The near butt end is hidden under the
+          marker disc, which is painted after it; the far end is hidden by nothing, so its
+          alpha ramps linearly to zero over OPEN_BRANCH_FADE. */}
       <Path path={paths.open[open]} style="stroke" strokeWidth={ROAD_W} strokeCap="butt" strokeJoin="round" color={OPEN_BRANCH_COLOUR} />
       <Path
         path={paths.openFade[open]}
@@ -192,7 +168,7 @@ function Junction({ j, open, armOpacity, flipTick, tick, paths }) {
         r={JUNCTION_MARK_R - JUNCTION_RING_W / 2}
         style="stroke"
         strokeWidth={JUNCTION_RING_W}
-        color={C.roadEdge}
+        color={C.road}
       />
       <Group transform={[{ translateX: j.x }, { translateY: j.y }, { rotate: angle }]}>
         <RoundedRect x={0} y={-BLADE_W / 2} width={BLADE_LEN} height={BLADE_W} r={BLADE_W / 2} color={withAlpha(C.text, OPACITY.blade)} />
@@ -361,6 +337,20 @@ function Depot({ d, glyphSize, receiving, rejecting }) {
   const body = desat > 0 ? lighten(C.depot, 0.1 * desat) : C.depot;
   return (
     <Group transform={[{ translateX: d.cx }, { translateY: d.cy }, { scale: s }, { translateX: -d.cx }, { translateY: -d.cy }]}>
+      {/* ui.md §5.3 — `--depot-glow`: a soft fill behind the body in the depot's OWN colour
+          at 18 %. It is a state carrier rather than a flourish — it is what makes a board
+          with six depots read as six COLOURS rather than six grey buildings with coloured
+          stripes, at an area comparable to a car's. Drawn UNDER the body, so it never
+          competes with the face band AC-502 measures, and it belongs to `actors` rather than
+          to furniture in §4.6's ink budget. It desaturates with the rest of the depot. */}
+      <RoundedRect
+        x={d.glow.x}
+        y={d.glow.y}
+        width={d.glow.w}
+        height={d.glow.h}
+        r={DEPOT_RADIUS + DEPOT_GLOW_PAD}
+        color={withAlpha(accent, OPACITY.depotGlow)}
+      />
       <RoundedRect x={d.x} y={d.y} width={d.w} height={d.h} r={DEPOT_RADIUS} color={body} />
       <RoundedRect x={d.x} y={d.y} width={d.w} height={DEPOT_FACE_BAND} r={DEPOT_RADIUS / 3} color={face} />
       {/* ui.md §7.4 / AC-518 — the glyph disc is 0.75 x the glyph size: the widest glyph is
@@ -428,7 +418,6 @@ function Shatter({ frags }) {
  */
 export default function PlaySurface({ geom, state, events, layout, symbolLarge, dim, desaturate }) {
   const road = useMemo(() => roadPath(geom), [geom]);
-  const dashes = useMemo(() => dashPath(geom), [geom]);
   const junctionPaths = useMemo(
     () =>
       geom.junctions.map((j) => ({
@@ -470,7 +459,7 @@ export default function PlaySurface({ geom, state, events, layout, symbolLarge, 
   // ui.md §7.3 — armed when the nearest approaching car is within COMMIT_PREVIEW. The fade-in
   // is expressed as distance travelled rather than as an event, because arming is a
   // continuous property of the state and a distance is replay-identical by construction.
-  const armFadeLu = (level.speedMluPerTick / MLU) * (MS.armFade / 1000) * TICK_HZ;
+  const armFadeLu = (CAR_SPEED / MLU) * (MS.armFade / 1000) * TICK_HZ;
   const arm = geom.junctions.map((j) => {
     const d = armingDistanceLu(level, curves, state.cars, j.nodeId);
     if (!(d <= COMMIT_PREVIEW)) return 0;
@@ -558,7 +547,7 @@ export default function PlaySurface({ geom, state, events, layout, symbolLarge, 
         <Group
           transform={[{ translateX: layout.originX }, { translateY: layout.originY }, { scale: layout.scale }]}
         >
-          <Roads road={road} dashes={dashes} />
+          <Roads road={road} />
           {geom.junctions.map((j, i) => (
             <Junction
               key={j.junctionId}

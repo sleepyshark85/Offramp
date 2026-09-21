@@ -7,10 +7,10 @@ bottom each wear a colour. Junctions along the way have two branches, one open; 
 junction flips which. Route each car into the depot matching its colour. Cars keep coming and
 overlap in time — the pressure is **divided attention**, not reflex.
 
-Levels are bounded: deliver the quota and you win, lose your lives and you don't. A level runs
-roughly 50 seconds at the start of the ladder and about 110 at the top, with a hard ceiling of
-130 for any seed, because sustained attention past about two minutes is not something players
-have.
+**A level is exactly two minutes.** Your score is the cars you delivered; three misroutes ends
+the run early. Two minutes because sustained attention past that is not something players have —
+and a fixed clock rather than a car quota because duration then stops being a thing that can be
+got wrong.
 
 Road networks are **procedurally generated**, not authored.
 
@@ -18,17 +18,18 @@ Free, offline, no accounts, no ads, no analytics, no network calls of any kind.
 
 ## Look
 
-A night road seen from directly above. Dark asphalt, bright painted lane edges, saturated
-vehicle paint. The reference points are motorway signage and a traffic-control screen, not a toy
-train set. Three rules carry it: the road network *is* the screen; nothing decorative moves, so
-every animation reports a state change; and colour is reserved — the five car colours belong to
-cars and depots and appear nowhere else.
+A night road seen from directly above. Dark asphalt, saturated vehicle paint, and a road that is
+one thin bright line rather than a slab — the reference points are motorway signage and a
+traffic-control screen, not a toy train set. Four rules carry it: the road network *is* the
+screen; nothing decorative moves, so every animation reports a state change; colour is reserved —
+the six car colours belong to cars and depots and appear nowhere else; and every road runs
+north–south or east–west, so every corner in the network is a junction.
 
-The five car colours were chosen by constrained optimisation rather than by eye, maximising the
+The six car colours were chosen by constrained optimisation rather than by eye, maximising the
 minimum CIEDE2000 separation under simulated protanopia and deuteranopia. Every one clears
-4.2 : 1 against the road surface. A shape glyph rides on every car and depot face, always on,
-which is what carries tritanopia — where two pairs collapse to ΔE 8.2 and colour alone would not
-be enough.
+3.0 : 1 against the road line and 4.5 : 1 against the background. A shape glyph rides on every
+car and depot face, always on, which is what carries tritanopia — where two pairs collapse to
+ΔE 8.2 and colour alone would not be enough.
 
 ## Stack
 

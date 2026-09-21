@@ -10,6 +10,7 @@ import {
   ENTRY_Y,
   MIN_JUNCTION_SEP_LU,
   MLU,
+  CAR_SPEED,
   PALETTE,
   ROUTE_H,
   ROW0_Y,
@@ -26,7 +27,9 @@ import {
   signature,
   validate,
   RULES,
+  assertIntegerGeometry,
   buildRow,
+  colWFor,
   finalise,
   xOf,
   yOf,
@@ -37,12 +40,17 @@ import { makeStream, mix32 } from '../src/engine/rng.js';
 // that reads it back out of the module under test is not a check
 // (docs/development-process.md §6.8, the AC-202 lesson).
 const DESIGN_GEOMETRY = { DESIGN_W: 1000, DESIGN_H: 1500, ENTRY_Y: 50, ENTRY_LEN: 220, ROW0_Y: 270, ROUTE_H: 1080, DEPOT_Y: 1350 };
+// generation.md §6.1's ROUND-9 table. `speed` has LEFT it — CAR_SPEED is 2750 at every band
+// (gameplay.md §2.2) — and `colW` is DERIVED from `C` (generation.md §3.2.1) rather than
+// tabled, so the values below are the derivation's published results and are checked against
+// the rule as well as against the level.
+const DESIGN_CAR_SPEED = 2750;
 const DESIGN_BANDS = {
-  1: { C: 3, K: 3, R: 5, colW: 260, rowH: 216, speed: 2750, interval: 204, jitter: 26, J: [3, 4], Ja: 3, D: [2, 3] },
-  2: { C: 4, K: 3, R: 5, colW: 230, rowH: 216, speed: 2900, interval: 150, jitter: 18, J: [3, 5], Ja: 3, D: [2, 3] },
-  3: { C: 4, K: 4, R: 6, colW: 230, rowH: 180, speed: 3050, interval: 140, jitter: 18, J: [4, 6], Ja: 4, D: [2, 4] },
-  4: { C: 5, K: 4, R: 6, colW: 180, rowH: 180, speed: 3200, interval: 132, jitter: 16, J: [5, 7], Ja: 5, D: [2, 4] },
-  5: { C: 6, K: 5, R: 6, colW: 150, rowH: 180, speed: 3350, interval: 128, jitter: 16, J: [7, 9], Ja: 7, D: [2, 5] },
+  1: { C: 3, K: 3, R: 5, colW: 300, rowH: 216, interval: 208, jitter: 21, J: [3, 4], Ja: 3, D: [2, 3] },
+  2: { C: 4, K: 4, R: 5, colW: 264, rowH: 216, interval: 147, jitter: 15, J: [3, 5], Ja: 3, D: [2, 3] },
+  3: { C: 4, K: 4, R: 6, colW: 264, rowH: 180, interval: 140, jitter: 14, J: [4, 6], Ja: 4, D: [2, 4] },
+  4: { C: 5, K: 5, R: 6, colW: 198, rowH: 180, interval: 131, jitter: 13, J: [5, 7], Ja: 5, D: [2, 4] },
+  5: { C: 6, K: 6, R: 6, colW: 158, rowH: 180, interval: 128, jitter: 13, J: [7, 9], Ja: 7, D: [2, 5] },
 };
 
 import { readFileSync, readdirSync } from 'node:fs';
@@ -454,14 +462,32 @@ test('AC-218 · integer geometry, and a bad band table THROWS rather than return
   } finally {
     Object.assign(BANDS[3], saved);
   }
-  const saved2 = { ...BANDS[2] };
-  try {
-    BANDS[2].colW = 231; // colW * (C - 1) = 693 is odd, so x(0) is a half-integer
-    assert.throws(() => generate(5, 2), /NON_INTEGER_GEOMETRY/);
-  } finally {
-    Object.assign(BANDS[2], saved2);
+  assert.ok(generate(5, 3), 'generation recovers once the table is restored');
+
+  // THE ODD-`colW` HALF OF THIS GUARD IS NO LONGER REACHABLE THROUGH THE BAND TABLE, and that
+  // is a §6.8 finding in the good direction rather than a gap. Round 8 injected
+  // `BANDS[2].colW = 231` — `colW * (C - 1) = 693` is odd, so `x(0)` is a half-integer and
+  // every node coordinate is fractional. `colW` is DERIVED now (generation.md §3.2.1) and the
+  // derivation rounds DOWN TO AN EVEN NUMBER, so no band table can produce an odd product:
+  // the hazard is designed out, not merely unchecked.
+  //
+  // A guard whose fault has become unconstructible still has to be executed against a
+  // violation, so the check is invoked DIRECTLY on a fixture instead — which is AC-244's rule
+  // applied to a construction guard.
+  const odd = generate(5, 2);
+  assert.throws(
+    () => assertIntegerGeometry({ ...odd, colW: 231 }),
+    /NON_INTEGER_GEOMETRY/,
+    'the odd-colW clause of the guard never fires',
+  );
+  assert.throws(
+    () => assertIntegerGeometry({ ...odd, nodes: [{ ...odd.nodes[0], x: 0.5 }, ...odd.nodes.slice(1)] }),
+    /NON_INTEGER_GEOMETRY/,
+    'a fractional node x never fires',
+  );
+  for (let C = 3; C <= 6; C += 1) {
+    assert.equal(colWFor(C) % 2, 0, 'colWFor(' + C + ') is even by construction');
   }
-  assert.ok(generate(5, 3) && generate(5, 2), 'generation recovers once the table is restored');
 });
 
 test('AC-202 · a level carries the band table of generation.md §6.1, and no quota or diagLen', () => {
@@ -476,11 +502,14 @@ test('AC-202 · a level carries the band table of generation.md §6.1, and no qu
     assert.equal(level.R, D.R, 'band ' + band + ' R');
     assert.equal(level.colW, D.colW, 'band ' + band + ' colW');
     assert.equal(level.rowH, D.rowH, 'band ' + band + ' rowH');
-    assert.equal(level.speedMluPerTick, D.speed, 'band ' + band + ' speed');
     assert.equal(level.interval, D.interval, 'band ' + band + ' interval');
     assert.equal(level.jitter, D.jitter, 'band ' + band + ' jitter');
     assert.ok(!('quota' in level), 'band ' + band + ' carries no quota');
     assert.ok(!('diagLen' in level), 'band ' + band + ' carries no diagLen');
+    // SPEED LEFT THE LEVEL OBJECT IN ROUND 9. A per-level copy would be a second place the
+    // value lives and the one a future band table could quietly diverge from.
+    assert.ok(!('speedMluPerTick' in level), 'band ' + band + ' still carries a per-band speed');
+    assert.equal(CAR_SPEED, DESIGN_CAR_SPEED, 'gameplay.md §2.2 — one speed at every band');
   }
 });
 
@@ -492,15 +521,28 @@ test('generation.md §3.2 · the design rectangle and the site coordinates are t
   assert.equal(ROUTE_H, G.ROUTE_H);
   assert.equal(DEPOT_Y, G.DEPOT_Y);
   // The column x positions §3.2 tables, for every C the bands use.
+  // generation.md §3.2's column table, at round 9's DERIVED colW (300 / 264 / 198 / 158).
   const wantX = {
-    3: [240, 500, 760],
-    4: [155, 385, 615, 845],
-    5: [140, 320, 500, 680, 860],
-    6: [125, 275, 425, 575, 725, 875],
+    3: [200, 500, 800],
+    4: [104, 368, 632, 896],
+    5: [104, 302, 500, 698, 896],
+    6: [105, 263, 421, 579, 737, 895],
   };
   for (const band of [1, 2, 3, 4, 5]) {
     const D = DESIGN_BANDS[band];
     for (let c = 0; c < D.C; c += 1) assert.equal(xOf(c, D.C, D.colW), wantX[D.C][c]);
+    // generation.md §3.2.1 — `colW` is DERIVED, and the derivation is checked against the
+    // design's published result rather than the other way round.
+    assert.equal(colWFor(D.C), D.colW, 'C = ' + D.C + ': colWFor');
+    assert.equal(colWFor(D.C) % 2, 0, 'colW is EVEN, so colW*(C-1) cannot be odd');
+    assert.ok((D.C - 1) * D.colW <= 792, 'C = ' + D.C + ': the depot-clearance bound');
+    assert.ok(D.colW <= 300, 'C = ' + D.C + ': the 30 % corridor cap');
+    // And it is the LARGEST such value: 2 LU more breaks one of the two bounds.
+    assert.ok((D.C - 1) * (D.colW + 2) > 792 || D.colW + 2 > 300,
+      'C = ' + D.C + ': colW is not the largest legal even value');
+    // The outermost depot's clearance to the design-space edge — AC-410's 42 LU at C >= 4.
+    const margin = wantX[D.C][0] - 124 / 2;
+    assert.ok(margin >= 30, 'C = ' + D.C + ': depot margin ' + margin + ' LU');
     // And the row y positions.
     for (let r = 0; r <= D.R; r += 1) assert.equal(yOf(r, D.rowH), G.ROW0_Y + r * D.rowH);
     assert.equal(yOf(D.R, D.rowH), G.DEPOT_Y, 'band ' + band + ': row R is the depot row');
@@ -563,12 +605,13 @@ test('AC-211 · V7 — junction count inside the band range', () => {
   // generation.md §6.2's round-8 table, TRANSCRIBED, which is what AC-211's 5-point tolerance
   // is stated against. §6.2's figures come from the designer's prototype; where this generator
   // disagrees the audit is right and §6.2 is corrected (AC-211's own note).
+  // generation.md §6.2's ROUND-9 table, transcribed.
   const expected = {
     1: { 3: 13, 4: 87 },
-    2: { 3: 9, 4: 25, 5: 67 },
-    3: { 4: 1, 5: 14, 6: 85 },
-    4: { 5: 1, 6: 19, 7: 80 },
-    5: { 7: 1, 8: 19, 9: 80 },
+    2: { 3: 9, 4: 24, 5: 68 },
+    3: { 4: 2, 5: 14, 6: 84 },
+    4: { 5: 2, 6: 23, 7: 75 },
+    5: { 7: 2, 8: 26, 9: 72 },
   };
   for (const band of [1, 2, 3, 4, 5]) {
     for (const [j, pct] of Object.entries(expected[band])) {
@@ -629,11 +672,16 @@ test('AC-245 · the first-decision window clears its 90-tick floor at every band
   // ENTRY_LEN. The minimum is EXACTLY `ENTRY_LEN + rowH` in ticks, because rows[0] holds one
   // pass node and V15 makes its edge vertical, so rows[1] holds one node too.
   const FLOOR = 90;
-  const wantMin = [null, 159, 151, 132, 125, 120];
+  // gameplay.md §4.6b's ROUND-9 table: `ceil((ENTRY_LEN + rowH) * MLU / CAR_SPEED)` at one
+  // constant 2750 MLU/tick. AC-245's own sentence still quotes round 8's
+  // `159 / 151 / 132 / 125 / 120`, which was computed with the per-band speed column round 9
+  // deleted; §4.6b and §6.1.4 agree with the values below. gameplay.md §4.8's table has the
+  // same stale row.
+  const wantMin = [null, 159, 159, 146, 146, 146];
   for (let band = 1; band <= 5; band += 1) {
     const D = DESIGN_BANDS[band];
     // The expected minimum, re-derived from the DESIGN's numbers rather than the level's.
-    const derived = Math.ceil(((DESIGN_GEOMETRY.ENTRY_LEN + D.rowH) * 1000) / D.speed);
+    const derived = Math.ceil(((DESIGN_GEOMETRY.ENTRY_LEN + D.rowH) * 1000) / DESIGN_CAR_SPEED);
     assert.equal(derived, wantMin[band], 'band ' + band + ': ENTRY_LEN + rowH in ticks');
     let min = Infinity;
     for (let seed = 0; seed < 600; seed += 1) {
@@ -648,10 +696,11 @@ test('AC-245 · the first-decision window clears its 90-tick floor at every band
   // free to branch the window would be `ENTRY_LEN` alone — 80 / 76 / 73 / 69 / 66 ticks, above
   // the OLD floor of 40 at every band and BELOW the new floor of 90 at every band. More entry
   // road does not buy a fair first decision; a whole row does.
-  const wantAlone = [null, 80, 76, 73, 69, 66];
+  // At one constant speed the counterfactual is the SAME at every band: 80 ticks. Round 8 read
+  // `80 / 76 / 73 / 69 / 66` only because speed rose up the ladder.
+  const wantAlone = [null, 80, 80, 80, 80, 80];
   for (let band = 1; band <= 5; band += 1) {
-    const D = DESIGN_BANDS[band];
-    const alone = Math.ceil((DESIGN_GEOMETRY.ENTRY_LEN * 1000) / D.speed);
+    const alone = Math.ceil((DESIGN_GEOMETRY.ENTRY_LEN * 1000) / DESIGN_CAR_SPEED);
     assert.equal(alone, wantAlone[band], 'band ' + band + ': ENTRY_LEN alone');
     assert.ok(alone < FLOOR, 'band ' + band + ': ENTRY_LEN alone is below the floor');
   }
@@ -804,7 +853,10 @@ test('AC-139 · a level carries exactly the cars that fit in two minutes', () =>
   // a level will need — it is the list of cars that fit, computed exactly (gameplay.md §8.4),
   // and what used to need 2,000 seeds and an oracle is an identity any single level checks.
   // The full sweep is `node tools/spawn-schedule.mjs`.
-  const wantCount = [null, 35, 48, 51, 54, 56];
+  // The closed form at round 9's interval/jitter. gameplay.md §2.7's SPAWN_COUNT table and
+  // AC-139's sentence both still print round 8's `35 / 48 / 51 / 54 / 56`; the formula beside
+  // them is normative and it produces these.
+  const wantCount = [null, 35, 49, 51, 55, 56];
   eachLevel((level, band) => {
     assert.ok(level.spawns.length === wantCount[band] || level.spawns.length === wantCount[band] - 1,
       'band ' + band + ' seed ' + level.seed + ' has ' + level.spawns.length + ' spawns');

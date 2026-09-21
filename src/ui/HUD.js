@@ -114,7 +114,10 @@ const styles = StyleSheet.create({
   centre: { alignItems: 'center', justifyContent: 'center' },
   right: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
   levelLabel: { ...TYPE.label, color: C.textDim },
-  score: { ...TYPE.hudNumeric, color: C.text, fontVariant: ['tabular-nums'] },
+  // ui.md §5.3 — the delivered counter is `--accent`. It is the number the player is playing
+  // for, and it is one of the three additions that answer "feels sad" without touching a
+  // rule: it reports PROGRESS, so it is a state carrier rather than decoration.
+  score: { ...TYPE.hudNumeric, color: C.accent, fontVariant: ['tabular-nums'] },
   barTrack: {
     width: BAR_W,
     height: BAR_H,

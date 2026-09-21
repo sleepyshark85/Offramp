@@ -12,7 +12,7 @@
 // expectation each audit is measured against comes from ui.md, never from the module under
 // test.
 
-import { LIVES, createState, generate, reachableColourMasks, step } from '../../src/engine/index.js';
+import { CAR_SPEED, LIVES, createState, generate, reachableColourMasks, step } from '../../src/engine/index.js';
 import { buildLevelGeometry } from '../../src/render/geometry.js';
 
 /**
@@ -74,7 +74,7 @@ export function angularSeparationDeg(a, b) {
 }
 
 /**
- * AC-504's second clause. For every junction of every level in the sweep, the angle the blade
+ * AC-504's CLAUSE (i). For every junction of every level in the sweep, the angle the blade
  * is drawn at with `open === 0` against the angle with `open === 1`.
  *
  * Returns the floor, the distinct values seen (rounded to 0.01°, because the clause is about
@@ -123,17 +123,20 @@ export function auditBladeSeparation({ bands = [1, 2, 3, 4, 5], levels = 100, se
 }
 
 /**
- * AC-504's FIRST clause, and the one that actually catches a blade drawn along the wrong
- * branch. The expected heading is re-derived from the edge's `shape` tag using ui.md §7.3's
+ * AC-504's CLAUSE (ii) — new in round 9, and the one that actually catches a blade drawn along
+ * the wrong branch. The expected heading is re-derived from the edge's `shape` tag using ui.md §7.3's
  * own words — "down for a `straight`, left for a `jogL`, right for a `jogR`" — which shares
  * nothing with src/render/geometry.js's derivation from the polyline.
  *
- * THIS EXISTS BECAUSE THE SECOND CLAUSE CANNOT DO IT. ui.md §7.3 and AC-504 both say the ≥ 90°
- * separation check "also catches a blade drawn along the wrong branch". It does not: drawing
+ * THIS EXISTS BECAUSE CLAUSE (i) CANNOT DO IT. Round 8's ui.md §7.3 and AC-504 both said the
+ * ≥ 90° separation check "also catches a blade drawn along the wrong branch". It does not:
+ * drawing
  * branch k's blade along `out[1 - k]` SWAPS the two angles, and the separation between a
  * swapped pair is the separation between the original pair. Measured: the `wrong-branch`
- * injection leaves the separation histogram bit-identical. The separation clause catches a
- * blade that is wrong in DIRECTION; only this clause catches one that is wrong in CHOICE.
+ * injection leaves the separation histogram BIT-IDENTICAL. Clause (i) catches a blade that is
+ * wrong in DIRECTION; only clause (ii) catches one that is wrong in CHOICE. Round 9's AC-504
+ * requires that blindness to be asserted rather than commented, which
+ * `auditBladeBlindness()` below does.
  */
 export function auditBladeDirection({ bands = [1, 2, 3, 4, 5], levels = 100, seedBase = 700000, mode = 'first-segment' } = {}) {
   // ui.md §7.3, transcribed. Angles in the blade's own convention: 0 points right along +x.
@@ -175,7 +178,7 @@ function reaches(level, masks, node, k, colour) {
 function branchesEnteredThisTick(level, open, car) {
   const out = [];
   let edge = level.edges[car.edgeId];
-  let progress = car.progress + level.speedMluPerTick;
+  let progress = car.progress + CAR_SPEED;
   while (progress >= edge.lengthMlu) {
     progress -= edge.lengthMlu;
     const node = level.nodes[edge.to];
@@ -322,4 +325,172 @@ export function auditArrivalEdges({ bands = [1, 2, 3, 4, 5], levels = 100, seedB
   }
 
   return { perBand, seen, delivered, misrouted, sharedMouth, disagreements, notTerminal, wrongDepot, examples };
+}
+
+/**
+ * AC-504's round-9 requirement, executed: under the `wrong-branch` injection, clause (ii) must
+ * FAIL and clause (i) must PASS — "the test must also assert that clause (i) passes under that
+ * injection, so the blindness is recorded in the suite rather than in a comment".
+ *
+ * Returns the two verdicts plus the evidence that the separation histogram is unchanged, which
+ * is the sharpest form of the statement: the injection is invisible to clause (i) not by a
+ * margin but exactly.
+ */
+export function auditBladeBlindness(opts = {}) {
+  const clean = auditBladeSeparation({ ...opts, mode: 'first-segment' });
+  const swappedSep = auditBladeSeparation({ ...opts, mode: 'wrong-branch' });
+  const swappedDir = auditBladeDirection({ ...opts, mode: 'wrong-branch' });
+  const histogramsMatch =
+    JSON.stringify(clean.distinct) === JSON.stringify(swappedSep.distinct) &&
+    clean.junctions === swappedSep.junctions;
+  return {
+    junctions: clean.junctions,
+    clauseIBelow: swappedSep.below,      // must be 0 — clause (i) is blind to the swap
+    clauseIiWrong: swappedDir.wrong,     // must be > 0 — clause (ii) catches it
+    histogramsMatch,
+    ok: swappedSep.below === 0 && swappedDir.wrong > 0 && histogramsMatch && clean.junctions > 0,
+  };
+}
+
+// --- AC-521, the ink budget (ui.md §4.6) ---------------------------------------------------
+
+/**
+ * ui.md §4.6's proxy, transcribed:
+ *
+ *   furniture = SUM(edge length) * ROAD_W + SUM(edge length) * 2 * ROAD_EDGE_W
+ *               + SUM(edge length) * dashDuty * dashWidth + terraceArea
+ *   actors    = carsInFlight * CAR_L * CAR_W + K * DEPOT_W * DEPOT_H
+ *               + J * pi * JUNCTION_MARK_R^2
+ *
+ * and the budget is `furniture / (furniture + actors) <= 65 %` at every band.
+ *
+ * ROUND 9 ZEROES TWO OF THE FOUR FURNITURE TERMS. The casing (`ROAD_EDGE_W`) and the lane
+ * dashes are deleted, so they are written here as explicit zeros rather than dropped: the
+ * formula is the design's and a term that vanished should be visibly zero, not absent. A
+ * future round that wants a shoulder or a texture has to put a number back in one of them and
+ * fail this check to get it.
+ *
+ * WHY IT IS SUMMED AND NOT RASTERISED. AC-521 says "rasterising", but §4.6's formula is
+ * defined to IGNORE OVERLAP where two edges meet at a junction, and a rasteriser does not
+ * ignore it — the two are different measurements, and the published numbers
+ * (`63.8 / 59.0 / 61.3 / 57.6 / 56.3 %`) are the formula's. The formula is therefore the
+ * verdict and `rasterShare` below is the cross-check, so the proxy's overlap blindness is a
+ * measured quantity rather than a caveat.
+ *
+ * The geometry constants come from src/render/geometry.js because they ARE the drawing — a
+ * budget measured against a transcribed copy would pass while the renderer drew something
+ * else. What is transcribed is the BUDGET (65 %) and the cars-in-flight column, both of which
+ * are the design's expectation.
+ */
+export const INK_BUDGET_PCT = 65; // ui.md §4.6, AC-521
+
+const ROAD_CASING_W = 0; // was ROAD_EDGE_W = 4 — deleted (ui.md §7.2)
+const DASH_DUTY = 0; // was 16 / (16 + 22) — deleted
+const DASH_W = 0; // was LANE_DASH_W = 3
+
+export function inkBudgetForLevel(level, carsInFlight, geomConsts) {
+  const { ROAD_W, CAR_L, CAR_W, DEPOT_W, DEPOT_H, JUNCTION_MARK_R, DEPOT_GLOW_PAD, mouthLu } = geomConsts;
+  let edgeLu = 0;
+  for (const e of level.edges) edgeLu += e.lengthMlu / 1000;
+
+  const depots = level.nodes.filter((n) => n.kind === 'depot');
+  const xs = depots.map((n) => n.x);
+  const terraceW = Math.max(...xs) + DEPOT_W / 2 + 12 - (Math.min(...xs) - DEPOT_W / 2 - 12);
+  const terraceH = mouthLu + DEPOT_H;
+
+  const furniture =
+    edgeLu * ROAD_W + edgeLu * 2 * ROAD_CASING_W + edgeLu * DASH_DUTY * DASH_W + terraceW * terraceH;
+  const actors =
+    carsInFlight * CAR_L * CAR_W +
+    level.K * DEPOT_W * DEPOT_H +
+    level.junctions.length * Math.PI * JUNCTION_MARK_R * JUNCTION_MARK_R;
+
+  // ui.md §5.3 puts `--depot-glow` in `actors` rather than in furniture. §4.6's formula
+  // predates it, so it is reported as its own column: the glow's area BEYOND the body, which
+  // is the only part of it that is visible under the body.
+  const glowExtra =
+    depots.length *
+    ((DEPOT_W + 2 * DEPOT_GLOW_PAD) * (DEPOT_H + 2 * DEPOT_GLOW_PAD) - DEPOT_W * DEPOT_H);
+
+  // THE TERRACE IS REPORTED SEPARATELY BECAUSE IT IS THE WHOLE OF THE DISAGREEMENT WITH THE
+  // DESIGN'S PUBLISHED NUMBERS. ui.md §4.6's formula lists `+ terraceArea` and §7.6 says the
+  // terrace "is counted as furniture in §4.6's budget so that it cannot grow quietly" — but
+  // §4.6's published shares are only reproducible with the term at roughly a tenth of the
+  // rect's area. The road-only share is therefore carried alongside, so the gap is a measured
+  // quantity rather than an argument.
+  const roadOnly = edgeLu * ROAD_W + edgeLu * 2 * ROAD_CASING_W + edgeLu * DASH_DUTY * DASH_W;
+  return {
+    edgeLu,
+    furniture,
+    roadOnly,
+    terrace: terraceW * terraceH,
+    actors,
+    share: furniture / (furniture + actors),
+    shareExclTerrace: roadOnly / (roadOnly + actors),
+    shareWithGlow: furniture / (furniture + actors + glowExtra),
+    ratio: furniture / actors,
+  };
+}
+
+/**
+ * The cross-check. Rasterises the same level at `step` LU and counts LIT UNITS, so that two
+ * road strokes meeting at a junction are counted once. It is deliberately a separate number:
+ * the gap between it and `share` IS the overlap the formula ignores.
+ */
+export function rasterInkShare(level, carsInFlight, geomConsts, curves, step = 4) {
+  const { ROAD_W, CAR_L, CAR_W, DEPOT_W, DEPOT_H, JUNCTION_MARK_R, mouthLu } = geomConsts;
+  const W = 1000;
+  const H = 1500;
+  const nx = Math.ceil(W / step);
+  const ny = Math.ceil(H / step);
+  const grid = new Uint8Array(nx * ny); // 0 unlit, 1 furniture, 2 actor
+
+  const paint = (x0, y0, x1, y1, v) => {
+    const i0 = Math.max(0, Math.floor(x0 / step));
+    const i1 = Math.min(nx - 1, Math.floor(x1 / step));
+    const j0 = Math.max(0, Math.floor(y0 / step));
+    const j1 = Math.min(ny - 1, Math.floor(y1 / step));
+    for (let j = j0; j <= j1; j += 1) for (let i = i0; i <= i1; i += 1) grid[j * nx + i] = v;
+  };
+
+  // Furniture: the road stroke, segment by segment, then the terrace.
+  for (const c of curves) {
+    for (const s of c.segs) {
+      paint(
+        Math.min(s.x0, s.x1) - ROAD_W / 2, Math.min(s.y0, s.y1) - ROAD_W / 2,
+        Math.max(s.x0, s.x1) + ROAD_W / 2, Math.max(s.y0, s.y1) + ROAD_W / 2, 1,
+      );
+    }
+  }
+  const depots = level.nodes.filter((n) => n.kind === 'depot');
+  const xs = depots.map((n) => n.x);
+  const depotY = depots[0].y;
+  paint(
+    Math.min(...xs) - DEPOT_W / 2 - 12, depotY - mouthLu,
+    Math.max(...xs) + DEPOT_W / 2 + 12, depotY + DEPOT_H, 1,
+  );
+
+  // Actors, painted over furniture: depot bodies, junction markers, and `carsInFlight` cars
+  // placed at the deterministic positions a level would hold them at — evenly spaced along
+  // the entry edge's column, which is a stand-in for "the band's mean occupancy" and is what
+  // §4.6's `carsInFlight * CAR_L * CAR_W` term abstracts.
+  for (const n of depots) paint(n.x - DEPOT_W / 2, n.y, n.x + DEPOT_W / 2, n.y + DEPOT_H, 2);
+  for (const id of level.junctions) {
+    const n = level.nodes[id];
+    paint(n.x - JUNCTION_MARK_R, n.y - JUNCTION_MARK_R, n.x + JUNCTION_MARK_R, n.y + JUNCTION_MARK_R, 2);
+  }
+  const whole = Math.round(carsInFlight);
+  const entry = level.nodes[level.edges[level.entryEdgeId].from];
+  for (let k = 0; k < whole; k += 1) {
+    const y = 300 + k * (1000 / Math.max(1, whole));
+    paint(entry.x - CAR_W / 2, y - CAR_L / 2, entry.x + CAR_W / 2, y + CAR_L / 2, 2);
+  }
+
+  let furniture = 0;
+  let actors = 0;
+  for (let i = 0; i < grid.length; i += 1) {
+    if (grid[i] === 1) furniture += 1;
+    else if (grid[i] === 2) actors += 1;
+  }
+  return { furniture, actors, share: furniture / (furniture + actors || 1) };
 }

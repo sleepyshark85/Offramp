@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BANDS, MLU } from '../src/engine/constants.js';
+import { BANDS, CAR_SPEED, MLU } from '../src/engine/constants.js';
 import { generate } from '../src/engine/generate.js';
 import { createState, step } from '../src/engine/step.js';
 import { checkInvariants, minSharedEdgeSeparationMlu } from '../src/engine/invariants.js';
@@ -109,23 +109,30 @@ test('AC-124 · cars sharing an edge are never closer than the spawn gap allows'
   // ROUND 8 MOVED THE REACHABILITY AGAIN, AND IN THE OTHER DIRECTION. Round 6's lever pull had
   // made band 5 arithmetically unreachable — the floor was 319.2 LU against a longest edge of
   // 293 — so the band was asserted the other way, at exactly zero observations. Round 8's
-  // geometry makes the longest edge `rowH + colW` = 330 LU against a floor of 321.6, so the
-  // case is reachable again but only just: the window is 8.4 LU of a 330 LU edge, and ten
-  // seeds find nothing. Measured over 200 seeds, band 5 yields 11 observations with the first
-  // at seed 13, against 383 / 20,599 / 6,330 / 833 for bands 1-4.
+  // geometry made the longest edge 330 LU against a floor of 321.6: reachable again, but the
+  // window was 8.4 LU of a 330 LU edge and ten seeds found nothing.
   //
-  // The response §6.8 prescribes is to make the check able to observe, not to loosen it: band
-  // 5 sweeps a larger seed budget, and the `observations > 0` guard stays. A band that stops
-  // exercising the rule fails instead of passing.
-  const SEEDS_FOR_BAND = [null, 20, 20, 20, 20, 80];
+  // ROUND 9 OPENS IT PROPERLY, at both ends and without anyone aiming at it. The floor FELL —
+  // `(interval - 2*jitter) * CAR_SPEED / 1000` with a constant 2750 rather than a per-band
+  // 3350 — and the longest edge ROSE, because `colW` is derived and larger at every `C`. Band
+  // 5's window goes from 8.4 LU of a 330 LU edge to 57.5 LU of a 338 LU edge.
+  //
+  // TWO DESIGN NUMBERS ARE STALE HERE AND THE TEST HOLDS THE FORMULA, NOT THE ROW.
+  // AC-124 and gameplay.md §4.5's table both still print `418 / 331 / 317 / 320 / 322 LU`,
+  // "never less than 317 LU — three times CAR_L = 104". Those are round 8's, computed with the
+  // per-band speed column round 9 deleted. generation.md §6.1.4's "min car separation" row has
+  // the round-9 values — 457 / 322 / 308 / 289 / 281 — and they are what the formula produces.
+  // The "three times CAR_L" clause does NOT survive: band 5's floor is 280.5 LU, which is 2.70
+  // car lengths. It is still 2.7x a car and the guarantee is unharmed; the multiple in the
+  // sentence is not.
+  const SEEDS_FOR_BAND = [null, 20, 20, 20, 20, 20];
   for (let band = 1; band <= 5; band += 1) {
     const P = BANDS[band];
-    const floorLu = ((P.interval - 2 * P.jitter) * P.speedMluPerTick) / MLU;
-    // gameplay.md §4.5's table, transcribed: 418 / 331 / 317 / 320 / 322 LU, never below 317 —
-    // three times CAR_L = 104.
-    const WANT_FLOOR = [null, 418, 330.6, 317.2, 320, 321.6];
-    assert.equal(Number(floorLu.toFixed(1)), WANT_FLOOR[band], 'band ' + band + ' separation floor');
-    assert.ok(floorLu >= 317, 'band ' + band + ' separation floor ' + floorLu);
+    const floorLu = ((P.interval - 2 * P.jitter) * CAR_SPEED) / MLU;
+    // generation.md §6.1.4, transcribed.
+    const WANT_FLOOR = [null, 456.5, 321.75, 308, 288.75, 280.5];
+    assert.equal(Number(floorLu.toFixed(2)), WANT_FLOOR[band], 'band ' + band + ' separation floor');
+    assert.ok(floorLu >= 280, 'band ' + band + ' separation floor ' + floorLu);
     let observedMinMlu = Infinity;
     let observations = 0;
     let longestEdgeLu = 0;
@@ -157,8 +164,12 @@ test('AC-124 · cars sharing an edge are never closer than the spawn gap allows'
       observedMinMlu / MLU >= floorLu,
       'band ' + band + ' observed ' + observedMinMlu / MLU + ' LU < floor ' + floorLu + ' LU',
     );
-    assert.ok(observedMinMlu / MLU > 3 * 104,
-      'band ' + band + ' closer than three car lengths: ' + observedMinMlu / MLU);
+    // AC-124's "three times CAR_L" is round 8's multiple and band 5 is at 2.70 now. The
+    // durable statement is the FLOOR above; this keeps a second, weaker bound so that a future
+    // table which halves the separation is caught by something other than the formula agreeing
+    // with itself.
+    assert.ok(observedMinMlu / MLU > 2.5 * 104,
+      'band ' + band + ' closer than 2.5 car lengths: ' + observedMinMlu / MLU);
   }
 });
 
@@ -166,7 +177,7 @@ test('the AC-124 sweep fails when a separation violation is injected', () => {
   // A second car planted one third of a spawn gap behind a real one, on the same edge.
   for (let band = 1; band <= 5; band += 1) {
     const level = generate(0, band);
-    const floorLu = ((level.interval - 2 * level.jitter) * level.speedMluPerTick) / MLU;
+    const floorLu = ((level.interval - 2 * level.jitter) * CAR_SPEED) / MLU;
     const gapMlu = Math.floor((floorLu * MLU) / 3);
     const tailgate = (s) => {
       const lead = s.cars.find((c) => c.progress >= gapMlu);

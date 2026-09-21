@@ -21,16 +21,20 @@
 //
 // ROUND 8 MOVED EVERY NUMBER IN THIS FILE. The design rectangle is 1000 x 1500 rather than
 // 1000 x 1600, the support floor is 320 x 460 rather than 320 x 400, DEPOT_Y is 1350 rather
-// than 1420, DEPOT_W/H are 124 x 128 rather than 160 x 170, CAR_W is 66 rather than 84, and
-// `colW` is a band-table value rather than `min(300, 780/(C-1))`. BOTH FLOORS ARE NOW TIGHT:
-// 44.16 pt against 44, and 20.24 pt against 20, where the old geometry cleared them by 2.00
-// and 1.00. A sixth column at band 5 and a 66 LU car are as far as this rectangle goes.
+// than 1420, DEPOT_W/H are 124 x 128 rather than 160 x 170, and CAR_W is 66 rather than 84.
+//
+// ROUND 9 MOVED ONE OF THE TWO FLOORS BACK OFF THE WALL. `colW` is derived from the
+// depot-clearance rule (generation.md §3.2.1) rather than hand-chosen, which takes band 5's
+// `min(colW, rowH)` from 150 LU to 158 and the junction target at the support floor from
+// 44.16 pt to 46.61 pt — a margin of 2.61 rather than 0.16. The car body is unmoved and still
+// clears 20 pt by 0.24, so "both floors are tight" is now true of AC-402 alone. `ROAD_W` fell
+// 84 -> 28 (ui.md §4.6), so the road column of the device table moved with it. A sixth column at band 5 and a 66 LU car are as far as this rectangle goes.
 //
 // EVERY CHECK COUNTS ITS OBSERVATIONS AND ASSERTS THE COUNT IS NON-ZERO. §6.8 exists because
 // a tuning change made a safety check arithmetically unreachable and nothing failed. A check
 // that never ran is reported here as a failure, not as a pass.
 
-import { BANDS } from '../src/engine/index.js';
+import { BANDS, colWFor } from '../src/engine/index.js';
 import { computeLayout, hitRadiusLu, minSepLuForBand } from '../src/ui/layout.js';
 import { CAR_L, CAR_W, DEPOT_H, DEPOT_W, DEPOT_RECEIVING_SCALE, ROAD_W } from '../src/render/geometry.js';
 import { arg, has, table } from './lib/report.mjs';
@@ -46,11 +50,12 @@ const DEPOT_Y = 1350; // generation.md §3.2 / ui.md §3.3
 const SUPPORT_W = 320; // ui.md §4.4, "declared support floor"
 const SUPPORT_H = 460; // moved 400 -> 460: the rectangle is shorter, so it hits its height
                        // bound at a LARGER playH (AC-409)
-// generation.md §6.1 and §3.2, transcribed. `colW` is a BAND-TABLE value in round 8, not a
+// generation.md §3.2.1 and §6.1, transcribed. `colW` is DERIVED in round 9 — the largest EVEN
+// value with `(C-1)*colW <= 792` and `colW <= 300` — rather than a band-table value, and it
 // division — which is the whole reason integrality is now a property of the table.
-const DESIGN_COLW = { 1: 260, 2: 230, 3: 230, 4: 180, 5: 150 };
+const DESIGN_COLW = { 1: 300, 2: 264, 3: 264, 4: 198, 5: 158 };
 const DESIGN_C = { 1: 3, 2: 4, 3: 4, 4: 5, 5: 6 };
-const DESIGN_MINSEP = { 1: 216, 2: 216, 3: 180, 4: 180, 5: 150 };
+const DESIGN_MINSEP = { 1: 216, 2: 216, 3: 180, 4: 180, 5: 158 };
 
 const W_FROM = 320;
 const W_TO = 520;
@@ -80,15 +85,15 @@ const INSETS = [
 // ui.md §3.3, transcribed. name, W, H, insetTop, insetBottom, scale, playH, junction target at
 // the worst band (always band 5, min(colW, rowH) = 150 LU), car body W x L, road width.
 const DEVICES = [
-  ['iPhone SE (1st)', 320, 568, 20, 0, 0.32, 484, 46.1, 21.1, 33.3, 26.9],
-  ['iPhone SE (2nd/3rd)', 375, 667, 20, 0, 0.375, 583, 54.0, 24.8, 39.0, 31.5],
-  ['iPhone 13 mini', 375, 812, 50, 34, 0.375, 664, 54.0, 24.8, 39.0, 31.5],
-  ['iPhone 13/14', 390, 844, 47, 34, 0.39, 699, 56.2, 25.7, 40.6, 32.8],
-  ['iPhone 15/16', 393, 852, 59, 34, 0.393, 695, 56.6, 25.9, 40.9, 33.0],
-  ['iPhone 16 Pro Max', 440, 956, 62, 34, 0.44, 796, 63.4, 29.0, 45.8, 37.0],
-  ['Galaxy S23', 360, 780, 24, 24, 0.36, 668, 51.8, 23.8, 37.4, 30.2],
-  ['Pixel 7', 412, 915, 24, 24, 0.412, 803, 59.3, 27.2, 42.8, 34.6],
-  ['Tall Android 21:9', 412, 1024, 32, 24, 0.412, 904, 59.3, 27.2, 42.8, 34.6],
+  ['iPhone SE (1st)', 320, 568, 20, 0, 0.32, 484, 48.6, 21.1, 33.3, 9.0],
+  ['iPhone SE (2nd/3rd)', 375, 667, 20, 0, 0.375, 583, 57.0, 24.8, 39.0, 10.5],
+  ['iPhone 13 mini', 375, 812, 50, 34, 0.375, 664, 57.0, 24.8, 39.0, 10.5],
+  ['iPhone 13/14', 390, 844, 47, 34, 0.39, 699, 59.3, 25.7, 40.6, 10.9],
+  ['iPhone 15/16', 393, 852, 59, 34, 0.393, 695, 59.7, 25.9, 40.9, 11.0],
+  ['iPhone 16 Pro Max', 440, 956, 62, 34, 0.44, 796, 66.9, 29.0, 45.8, 12.3],
+  ['Galaxy S23', 360, 780, 24, 24, 0.36, 668, 54.7, 23.8, 37.4, 10.1],
+  ['Pixel 7', 412, 915, 24, 24, 0.412, 803, 62.6, 27.2, 42.8, 11.5],
+  ['Tall Android 21:9', 412, 1024, 32, 24, 0.412, 904, 62.6, 27.2, 42.8, 11.5],
 ];
 
 /**
@@ -108,7 +113,12 @@ const OUT_OF_ENVELOPE = [
 // Never trust a green check you have not seen fail (development-process.md §6.2). Each name
 // breaks one thing the sweep claims to catch; `--inject <name>` must make the sweep fail.
 const INJECTIONS = {
-  'support-floor': 'admit playH 440-459, below the declared floor, so band 5 fails 44 pt',
+  // ROUND 9 CHANGED WHAT THIS INJECTION CATCHES, and the label is corrected rather than left
+  // to flatter the check. It admits playH 440-459. Under round 8 that broke band 5's 44 pt
+  // target (the upper clamp was 72 LU); under round 9 the clamp is 76 LU at every band and
+  // 2*76*(440/1500) = 44.6 pt still passes, so what now fails is AC-402's 20 pt CAR BODY —
+  // 66*(440/1500) = 19.4 pt. The injection still bites, at a different check.
+  'support-floor': 'admit playH 440-459, below the declared floor, so the car body fails 20 pt',
   'hit-cap': 'halve the upper clamp so it binds and the target falls below 44 pt',
   'car-width': 'shrink CAR_W from 66 to 60 LU',
   'depot-depth': 'grow DEPOT_H from 128 to 200 LU',
@@ -127,10 +137,20 @@ function injectedHitR(scale, minSep, inject) {
   // either rounding, and the injection could no longer fail. Nothing in the code changed; a
   // geometry constant moved and a fault injection stopped being able to inject a fault.
   //
-  // What actually delivers 44 pt now: at bands 1-4 the lower clamp of 76 LU does (76*2*0.30667
-  // = 46.6 pt), and at band 5 the UPPER clamp does, at 72 LU — 2*72*0.30667 = 44.16 pt, a
-  // margin of 0.16 pt. Which is why the two reachable injections are the upper clamp binding
-  // harder (`hit-cap`) and the support floor being lowered under it (`support-floor`).
+  // ROUND 9 TOOK A SECOND INJECTION HALFWAY TO THE SAME PLACE, and it is the same §6.8
+  // finding one round on. Under round 8 the upper clamp at band 5 was `floor((150-6)/2) = 72`,
+  // BELOW the 76 LU lower clamp — so the ordering of the two clamps was observable, and the
+  // target at the support floor was 44.16 pt, 0.16 pt of margin. `colW` is derived now and
+  // band 5's grid is 158, so the upper clamp is `floor((158-6)/2) = 76` — EQUAL to the lower
+  // clamp. `min(max(a,L),U)` differs from `max(min(a,U),L)` only when `L > U`, so AC-302's
+  // "upper bound applied last" clause is no longer observable at any band or any scale.
+  // test/layout.test.js asserts that unreachability with the arithmetic attached, so a band
+  // table that takes `min(colW, rowH)` back under 158 re-arms it visibly.
+  //
+  // What actually delivers 44 pt now: the lower clamp of 76 LU, at EVERY band — 2*76*0.30667
+  // = 46.61 pt, a margin of 2.61. Which is why the two reachable injections are the upper
+  // clamp binding harder (`hit-cap`) and the support floor being lowered under it
+  // (`support-floor`) — and why `support-floor` needs re-checking below.
   if (inject === 'hit-cap') {
     return Math.min(Math.max(Math.ceil(22 / scale), 76), Math.floor((minSep - 6) / 4));
   }
@@ -240,7 +260,11 @@ function checkDepotColumns(inject, obs) {
   for (let band = 1; band <= 5; band += 1) {
     const C = DESIGN_C[band];
     const colW = DESIGN_COLW[band];
-    if (BANDS[band].C !== C || BANDS[band].colW !== colW) {
+    // `colW` left the band table in round 9 and is derived from `C` (generation.md §3.2.1),
+    // so the comparison is against the DERIVATION rather than against a table field. The
+    // expectation is still transcribed: DESIGN_COLW above is ui.md/generation.md's, not
+    // `colWFor`'s output.
+    if (BANDS[band].C !== C || colWFor(BANDS[band].C) !== colW) {
       bad.push('band ' + band + ' band table disagrees with ui.md/generation.md §6.1');
     }
     const depotW = injectedDepotW(inject);

@@ -16,6 +16,15 @@ export const LEVEL_TICKS = TICK_HZ * LEVEL_SECONDS; // 7200
 
 // --- Fixed point (gameplay.md §2.2) -----------------------------------------------------
 export const MLU = 1000; // milli-layout-units per LU
+/**
+ * CAR_SPEED is ONE CONSTANT AT EVERY BAND — 2750 MLU/tick = 165 LU/s (gameplay.md §2.2, §5,
+ * generation.md §6.1). It left the band table in round 9 on the owner's instruction, and the
+ * measurement agrees with him: the board's occupancy is `transit / interval`, so round 8's
+ * rising speed column was cancelling its falling interval column and the difficulty ladder was
+ * flat (generation.md §6.1.1). Speed is a TRAFFIC lever with as much force as `interval`, and
+ * because it is shared by every band it is never pulled for one (generation.md §7.4 lever 1).
+ */
+export const CAR_SPEED = 2750;
 
 // --- Lives (gameplay.md §4.1) -----------------------------------------------------------
 export const LIVES = 3;
@@ -53,6 +62,37 @@ export const ROUTE_H = 1080; // DEPOT_Y - ROW0_Y, the same at every band
 export const DEPOT_Y = ROW0_Y + ROUTE_H; // 1350
 // 50 + 220 + 1080 + DEPOT_H(128) + 22 margin = 1500 exactly (generation.md §3.2, AC-411).
 
+// --- colW is DERIVED, not tabled (generation.md §3.2.1) ---------------------------------
+//
+//   colW(C) = the largest EVEN value satisfying both
+//               (C - 1) * colW <= DESIGN_W - DEPOT_W_LU - 2 * DEPOT_EDGE_CLEARANCE_LU = 792
+//               colW           <= COL_W_MAX
+//
+// The first bound keeps the OUTERMOST DEPOT at least DEPOT_EDGE_CLEARANCE_LU inside the design
+// rectangle; the second caps a horizontal run at 30 % of the design width, above which a jog
+// stops reading as a jog and starts reading as a corridor. `C = 3` is the only C the cap binds
+// at; every other band takes the clearance bound exactly, which is AC-410's 42 LU margin.
+//
+// Round 8 chose colW by hand and chose it too small at every C, which cost difficulty
+// (`jogs * colW` is the only band-varying term in `transit`) and cost the tap target
+// (`min(colW, rowH)` is what ui.md §4.4's 44 pt floor is computed from).
+//
+// DEPOT_EDGE_CLEARANCE_LU is 42 and it is written as its own number rather than as
+// `ROAD_W / 2`. It was half a road width when the road was 84 LU wide; ROAD_W is now 28
+// (ui.md §4.1) and the clearance did NOT follow it down — generation.md §3.2.1's formula still
+// evaluates to 792 and AC-410 spells the constant `ROAD_W_OLD/2*2`. Tying it to the live
+// ROAD_W would give 848 and move every colW in the table.
+export const DEPOT_W_LU = 124;
+export const DEPOT_EDGE_CLEARANCE_LU = 42;
+export const COL_W_MAX = 300;
+
+/** generation.md §3.2.1. Integer, even, and a pure function of `C`. */
+export function colWFor(C) {
+  const span = DESIGN_W - DEPOT_W_LU - 2 * DEPOT_EDGE_CLEARANCE_LU; // 792
+  const fit = Math.floor(span / (C - 1));
+  return Math.min(COL_W_MAX, fit - (fit % 2));
+}
+
 // --- Generator search (generation.md §4, §4.2) ------------------------------------------
 export const MAX_ATTEMPTS = 256;
 export const BUILD_BUDGET = 40000; // recursion steps per buildRow call
@@ -63,7 +103,11 @@ export const MIN_JUNCTION_SEP_LU = 150; // V11
 // --- Palette (ui.md §5.1) ---------------------------------------------------------------
 // Colour index is the match key; the hex is render-only and lives here so that V10 can be
 // checked against one list.
-export const PALETTE = ['#FF852A', '#89D9FF', '#FF5386', '#22C6AF', '#A879FF'];
+// Six colours in round 9. `K` is now `C` at every band and `C` caps at 6 (generation.md
+// §3.2.1), so six is the most colour this design rectangle can carry. Lime was OPTIMISED
+// rather than picked — the same constrained CIELCh search that produced the other five, at
+// C* >= 45, >= 3.0 : 1 against `--road` and >= 4.5 : 1 against `--bg` (ui.md §5.1, AC-611).
+export const PALETTE = ['#FF852A', '#89D9FF', '#FF5386', '#22C6AF', '#A879FF', '#B0F0A3'];
 
 // --- Band table (generation.md §6.1) ----------------------------------------------------
 // pBranchPct is generation.md's pBranch expressed as an exact integer percentage, so the
@@ -71,16 +115,27 @@ export const PALETTE = ['#FF852A', '#89D9FF', '#FF5386', '#22C6AF', '#A879FF'];
 //
 // `quota`, `SPAWN_SLACK` and `diagLen` are GONE. A level ends on the clock, the spawn schedule
 // is the exact list of cars that fit in two minutes, and an edge's length is computed from its
-// endpoints (generation.md §3.3). `colW` is now a table value rather than
-// `min(300, LANE_SPAN / (C - 1))`, which makes integrality a property of the table rather than
-// an accident of which C a band happens to use (generation.md §3.2).
+// endpoints (generation.md §3.3).
+//
+// TWO COLUMNS LEFT THE TABLE IN ROUND 9 and both departures are the round's content:
+//
+//   `speedMluPerTick` — now CAR_SPEED, one constant at every band. Round 8 raised it
+//   2750 -> 3350 across the ladder, which exactly cancelled the falling `interval` column in
+//   `carsInFlight = transit / interval` and flattened the difficulty ladder
+//   (generation.md §6.1.1).
+//
+//   `colW` — now DERIVED by colWFor(C) above. It was a table value in round 8 and hand-chosen
+//   too small at every C (generation.md §3.2.1).
+//
+// `K` is now `C` at every band: 3 / 4 / 4 / 5 / 6. Round 8 ran 3 / 3 / 4 / 4 / 5, so the first
+// nine levels were chromatically identical and the ceiling was five colours (ui.md §5.1).
 export const BANDS = [
   null, // bands are 1-indexed
-  { band: 1, levels: [1, 4],   C: 3, K: 3, R: 5, pBranchPct: 85, Jmin: 3, Jmax: 4, Ja: 3, Dmin: 2, Dmax: 3, colW: 260, speedMluPerTick: 2750, interval: 204, jitter: 26 },
-  { band: 2, levels: [5, 9],   C: 4, K: 3, R: 5, pBranchPct: 80, Jmin: 3, Jmax: 5, Ja: 3, Dmin: 2, Dmax: 3, colW: 230, speedMluPerTick: 2900, interval: 150, jitter: 18 },
-  { band: 3, levels: [10, 15], C: 4, K: 4, R: 6, pBranchPct: 85, Jmin: 4, Jmax: 6, Ja: 4, Dmin: 2, Dmax: 4, colW: 230, speedMluPerTick: 3050, interval: 140, jitter: 18 },
-  { band: 4, levels: [16, 22], C: 5, K: 4, R: 6, pBranchPct: 85, Jmin: 5, Jmax: 7, Ja: 5, Dmin: 2, Dmax: 4, colW: 180, speedMluPerTick: 3200, interval: 132, jitter: 16 },
-  { band: 5, levels: [23, Infinity], C: 6, K: 5, R: 6, pBranchPct: 90, Jmin: 7, Jmax: 9, Ja: 7, Dmin: 2, Dmax: 5, colW: 150, speedMluPerTick: 3350, interval: 128, jitter: 16 },
+  { band: 1, levels: [1, 4],   C: 3, K: 3, R: 5, pBranchPct: 85, Jmin: 3, Jmax: 4, Ja: 3, Dmin: 2, Dmax: 3, interval: 208, jitter: 21 },
+  { band: 2, levels: [5, 9],   C: 4, K: 4, R: 5, pBranchPct: 80, Jmin: 3, Jmax: 5, Ja: 3, Dmin: 2, Dmax: 3, interval: 147, jitter: 15 },
+  { band: 3, levels: [10, 15], C: 4, K: 4, R: 6, pBranchPct: 85, Jmin: 4, Jmax: 6, Ja: 4, Dmin: 2, Dmax: 4, interval: 140, jitter: 14 },
+  { band: 4, levels: [16, 22], C: 5, K: 5, R: 6, pBranchPct: 85, Jmin: 5, Jmax: 7, Ja: 5, Dmin: 2, Dmax: 4, interval: 131, jitter: 13 },
+  { band: 5, levels: [23, Infinity], C: 6, K: 6, R: 6, pBranchPct: 90, Jmin: 7, Jmax: 9, Ja: 7, Dmin: 2, Dmax: 5, interval: 128, jitter: 13 },
 ];
 
 /** Level number -> band index (gameplay.md §5, AC-701). */
