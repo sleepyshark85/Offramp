@@ -4,8 +4,8 @@
 what the next action is. `docs/development-process.md` says *how* work is done; this says *where
 it is*.
 
-Last updated: **round 8 implemented** (`5c03e4a`). 157 unit tests and 19 E2E green on
-`slice-2-play`. Design round 9 (difficulty levers) is in flight.
+Last updated: **round 9 implemented** (`9e1adc8`). 164 unit tests and 20 E2E green on
+`slice-2-play`. Everything committed and pushed.
 
 ---
 
@@ -28,41 +28,53 @@ Last updated: **round 8 implemented** (`5c03e4a`). 157 unit tests and 19 E2E gre
 
 ## → The next action
 
-**Implement design round 8.** The owner played the game for the first time and changed four
-things. This is tier-5 feedback and it is not up for debate; `docs/design/` is already revised
-and committed at `c62b84f`.
+**Put round 9 in front of the owner, then act on what they say.** Nothing is blocked on code.
 
-1. **A level is exactly 2:00** (`LEVEL_TICKS = 7200`). `quota`, `phase === 'won'` and the entire
-   points system are deleted. Score is cars delivered; three misroutes still ends a run early.
-2. **Orthogonal roads only** — horizontal and vertical runs with rounded corners. No Béziers, no
-   arc-length tables, no `diagLen`. **Every float leaves `src/engine/`.** New rule **V15**: a pass
-   node's outgoing edge is vertical; only a branch changes column.
-3. **Smaller everything.** Car 104×66 LU (was 140×84), road 84 (was 104). Both AC floors are now
-   tight rather than comfortable: 44.16 pt junction target, 20.24 pt car body.
-4. **V14 — the row-0 node is always a pass**, enforced in construction. First decision goes from
-   the 717 ms the owner rejected to 2.00–2.65 s.
+Round 9 delivered the owner's three instructions and fixed the ladder. Measured, not predicted:
 
-**22 sites in `generation.md` and 8 ACs are marked `(to be measured)`.** Round 6's numbers are
-quoted only as history and **none of them transfers.** The developer's sweep produces the real
-ones: all five clear rates, all five `p`, AC-246 gaps, AC-240 rises, tap rate, the attention
-report, the actionable-junction oracle, delivery medians, and AC-513's converging-car rate.
+| | band 1 | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|---|
+| cars in flight | 2.73 | 3.96 | 4.26 | 4.38 | 4.40 |
+| clear rate | 100.0 | 92.3 | 84.0 | 78.7 | 71.2 % |
+| per-decision error `p` | 0.30 | 1.98 | 2.88 | 3.02 | 3.53 % |
+| colours | 3 | 4 | 4 | 5 | 6 |
 
-Harness changes: `tools/spawn-schedule.mjs` replaces `tools/spawn-margin.mjs`,
-`tools/converge.mjs` is new, `tools/pacing.mjs` is **deleted** (the clock makes it trivially
-true), `generator-audit --geometry` is new.
+All five clear rates in window, `p` monotone and inside its reading window, R2 and R3 passing at
+all four pairs. **Cars in flight is strictly increasing for the first time in this design's
+history**, and it is the reading that gates everything else — it is `transit / interval` and does
+not depend on how well the bot plays.
 
-Also outstanding from the playtest and slice 2:
+### The six questions waiting on the owner — `generation.md` §7.4.2
 
-- **Backgrounding pauses too eagerly on web.** Correct on a phone — a phone call must not advance
-  the simulation — but web is only a dev harness and it interrupted the owner's play session.
-  Make it lenient on web only.
-- **The title screen's buttons are not centred.** Fixed 340 pt wide and left-aligned, so at any
-  width above ~372 they sit left of the title. Measured at three widths.
-- **`tools/layout-sweep.mjs` exists now**, but its numbers are stale — the design rect is
-  1000×1500 and every geometry constant moved.
-- The **depot is materially worse** under orthogonal routing: two cars come within a car length in
-  59–301 runs per 1,000, against 0–5 with curves. Two structural repairs were measured and
-  rejected. AC-513 now reports a rate and **asks for a screenshot**.
+Each has a measured price and a recommendation. **R and P want a screenshot before slice 3
+polishes anything**; `.e2e-shots/r9-band5-board.png` is band 5 at level 25.
+
+| | question | why it matters |
+|---|---|---|
+| **D** | Is 4.4 cars still sparse? | **The important one.** If yes, the finding is that `BOT_WORKING_SET = 3` is the wrong model of a human — §7.4's one exception — and **every target has to be re-read.** |
+| **R** | Does the road recede enough? | It went from 81–85 % of lit area to 53–60 %. May have gone slightly past. |
+| **P** | Is the palette still bleak? | Six depots with `--depot-glow`, and the first non-grey chrome in the game. |
+| **L** | Lives at the top band? | A life step is worth 19–21 pp against R3's 15 pp ceiling, so it cannot be a step inside 1–5. Priced as a band 6 at levels 30+. |
+| **T** | Two-colour cars? | **The instrument cannot measure this** — a two-bit mask costs the bot what a one-bit mask costs, and two acceptable depots is mechanically *easier*. Pure human judgement. |
+| **S** | Is one constant speed right? | 2750 is band 1's old value, so nothing is now faster than the tutorial was. |
+| — | The depot terrace | Largest object on the board, reports no state, exists only to hide overlaps at shared depots. |
+
+### Then, in order
+
+1. **The deferred identity question** (below) — the owner's, queued explicitly.
+2. **AC-521 is the only red check**, and it is a documentation disagreement rather than a drawing
+   problem: §4.6 counts the whole terrace as road furniture while §7.6 holds it at maximum legal
+   depth for AC-513. Excluding the terrace gives 53–60 %, within 4 pp of the design's own
+   published figures — so those figures correspond to the fade strip, not the slab. **The designer
+   must say which term §4.6 meant** before a tester reads the FAIL as a regression.
+3. **Seven stale design numbers**, each a row contradicted by another row in the same document.
+   The developer built to whichever section is self-consistent and wrote every disagreement down.
+4. **AC-231 contradicts AC-122** — a third life spent on tick 7,199 ends the run at tick 7,200,
+   which is exactly the tie AC-122 requires. The engine is right; the AC needs the tie written in.
+5. **Merge slice 2 to `main`.** It has been ready since round 8 and has only grown since.
+6. Slices 3–6.
+
+---
 
 ### Queued by the owner — the Train of Thought identity question
 
