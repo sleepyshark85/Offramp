@@ -1,7 +1,7 @@
 # Offramp — UI, Visual System and Motion
 
-Slice-0 design. Screen inventory, layout arithmetic with real dimensions, the palette with hex
-codes and measured contrast, every component state, the motion spec, and accessibility.
+Screen inventory, layout arithmetic with real dimensions, the palette with hex codes and measured
+contrast, every component state, the motion spec, and accessibility.
 
 Companion documents: [`gameplay.md`](gameplay.md), [`generation.md`](generation.md),
 [`acceptance-criteria.md`](acceptance-criteria.md).
@@ -13,6 +13,11 @@ Two units appear throughout and are never interchangeable:
   ([`generation.md` §3.1](generation.md#31-design-space)). Everything inside the Skia canvas is
   specified in LU and scaled once, at the canvas boundary.
 
+> **Round 8 changed every dimension in §3 and §4 and rewrote §7.6.** The design rectangle is
+> 1000 × 1500 LU, roads are orthogonal with filleted corners, and the road and the car are about a
+> quarter smaller in each dimension than they were. §5 (the palette) and §6 (colour-blind support)
+> are untouched, because nothing about colour changed.
+
 ---
 
 ## 1. Identity
@@ -23,13 +28,18 @@ there is no wood grain, no rounded cartoon bevel, no cheerful sky. The reference
 motorway signage and a traffic-control screen — flat, high-contrast, legible at a glance and at
 arm's length.
 
-Three rules carry the identity:
+Four rules carry the identity, and the fourth is new:
 
 1. **The road network is the screen.** Chrome is a thin bar at the top; everything else is road.
 2. **Nothing decorative moves.** Every animation in the play surface reports a state change. If
    it moves, it means something.
 3. **Colour is reserved.** The five car colours belong to cars and depots and appear nowhere
    else. Chrome is greyscale plus one alert red.
+4. **Every road runs north–south or east–west, and every corner is a junction.** Nothing curves
+   except a 28 LU fillet at a corner. This is the owner's direction and it is also, as it turns
+   out, the strongest thing the drawing has to say: because a pass node's road is always vertical
+   ([`generation.md` §2.5](generation.md#25-planarity-and-non-coincidence-why-no-two-roads-are-ever-mistaken-for-one)),
+   a player can read "this road turns" as "there is a decision here" with no exceptions.
 
 ---
 
@@ -38,11 +48,11 @@ Three rules carry the identity:
 | # | Screen | Purpose |
 |---|---|---|
 | S1 | **Title** | Name, Play, Levels, Settings |
-| S2 | **Level select** | Grid of unlocked levels with best score |
+| S2 | **Level select** | Grid of unlocked levels with best delivered |
 | S3 | **Play** | HUD + Skia play surface. The game. |
 | S4 | **Pause** overlay | Resume, Restart, Quit |
-| S5 | **Level complete** overlay | Score breakdown, Retry, Next |
-| S6 | **Level failed** overlay | Progress reached, Retry, Levels |
+| S5 | **Level complete** overlay | Result, Retry, Next |
+| S6 | **Level failed** overlay | Result, Retry, Levels |
 | S7 | **Settings** | Symbol size, reduce motion, haptics, sound |
 | S8 | **Resume countdown** overlay | 3-2-1 after backgrounding |
 
@@ -62,24 +72,26 @@ Reference device: iPhone 15/16, **393 × 852 pt**, safe-area insets top 59, bott
 ├──────────────────────────────────────────────────────────────────────┤  ▼
 │ 16                                                              16   │  ▲
 │ ┌──────────┐   ┌────────────────────────┐   ┌───────┐  ┌────┐        │  │
-│ │ LEVEL 12 │   │ ████████████░░░░░░░░░░ │   │ ● ● ○ │  │ ▮▮ │        │  │ 56
-│ │  4,820   │   │        23 / 36         │   │       │  │    │        │  │
+│ │ LEVEL 12 │   │ ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░ │   │ ● ● ○ │  │ ▮▮ │        │  │ 56
+│ │    23    │   │         1:07           │   │       │  │    │        │  │
 │ └──────────┘   └────────────────────────┘   └───────┘  └────┘        │  ▼
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                      │  ▲
 │                         (vertical slack, 55 %)                       │  │
 │  · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·   │  │
 │                             ENTRY                                    │  │
-│                               ┃                                      │  │
-│                             ╭─◆─╮                                    │  │
-│                            ╱     ╲                                   │  │ play
-│                          ◆         ◆                                 │  │ area
-│                         ╱ ╲       ╱ ╲                                │  │ 695
-│                       ┃    ┃    ┃    ┃                               │  │
-│                       ┃    ┃    ┃    ┃                               │  │
-│                    ┌─────┐┌─────┐┌─────┐┌─────┐                      │  │
-│                    │  ●  ││  ▲  ││  ■  ││  ✚  │      ← depots        │  │
-│                    └─────┘└─────┘└─────┘└─────┘                      │  │
+│                               │                                      │  │
+│                               ·     ← row 0 is always a pass (V14)   │  │
+│                               │                                      │  │
+│                               ◆────────╮                             │  │ play
+│                               │        │                             │  │ area
+│                         ╭─────◆        ◆──────╮                      │  │ 695
+│                         │     │        │      │                      │  │
+│                         │     │        │      │                      │  │
+│                      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓   ← depot terrace   │  │
+│                      ┌────┐┌────┐┌────┐┌────┐                        │  │
+│                      │ ●  ││ ▲  ││ ■  ││ ✚  │       ← depots         │  │
+│                      └────┘└────┘└────┘└────┘                        │  │
 │  · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · · ·   │  │
 │                         (vertical slack, 45 %)                       │  ▼
 ├──────────────────────────────────────────────────────────────────────┤
@@ -104,56 +116,58 @@ playW      = screenW                          // full bleed, no side gutter
 A single uniform scale. No stretch, no non-uniform axes, no per-band special case.
 
 ```
-scale   = min(playW / 1000, playH / 1600)
+scale   = min(playW / 1000, playH / 1500)
 slackX  = playW - 1000 * scale
-slackY  = playH - 1600 * scale
+slackY  = playH - 1500 * scale
 originX = slackX / 2
 originY = playTop + slackY * 0.55
 ```
 
 The horizontal slack is centred. The **vertical slack is split 55 % above / 45 % below**, which
 biases the whole network a few points downward toward the thumb without crowding the home
-indicator. On a 21:9 Android with 245 pt of slack that is 135 pt above and 110 pt below.
+indicator.
 
 `screen = origin + design * scale`, and the inverse is used for hit testing (§10.1).
 
+**`DESIGN_H` moved 1600 → 1500 and the gain is real.** LU is a ratio unit, so only the aspect of
+the design rectangle matters. The binding device is the iPhone SE 1st generation, whose play area
+is 320 × 484 pt — an aspect of 0.661 against the old rectangle's 0.625, so the old rectangle was
+**height-bound there and left 17.5 pt of width unused**. At 1000 × 1500 the aspect is 0.667, the SE
+fits within a hair on both axes, and the scale goes 0.3025 → **0.3200**: 5.8 % more of everything,
+on the one device every floor in §4.4 is measured against.
+([`generation.md` §3.1](generation.md#31-design-space))
+
 ### 3.3 Measured fit across real devices
 
-| Device | W × H | insets | `scale` | play H | vertical slack | junction target | car body |
-|---|---|---|---|---|---|---|---|
-| iPhone SE (1st) | 320 × 568 | 20 / 0 | 0.3025 | 484 | 0 | **46.0 pt** | 25.4 × 42.4 |
-| iPhone SE (2nd/3rd) | 375 × 667 | 20 / 0 | 0.3644 | 583 | 0 | 55.4 pt | 30.6 × 51.0 |
-| iPhone 13 mini | 375 × 812 | 50 / 34 | 0.3750 | 664 | 64 | 57.0 pt | 31.5 × 52.5 |
-| iPhone 13/14 | 390 × 844 | 47 / 34 | 0.3900 | 699 | 75 | 59.3 pt | 32.8 × 54.6 |
-| **iPhone 15/16** | 393 × 852 | 59 / 34 | 0.3930 | 695 | 66 | 59.7 pt | 33.0 × 55.0 |
-| iPhone 16 Pro Max | 440 × 956 | 62 / 34 | 0.4400 | 796 | 92 | 66.9 pt | 37.0 × 61.6 |
-| Galaxy S23 | 360 × 780 | 24 / 24 | 0.3600 | 668 | 92 | 54.7 pt | 30.2 × 50.4 |
-| Pixel 7 | 412 × 915 | 24 / 24 | 0.4120 | 803 | 144 | 62.6 pt | 34.6 × 57.7 |
-| Tall Android 21:9 | 412 × 1024 | 32 / 24 | 0.4120 | 904 | 245 | 62.6 pt | 34.6 × 57.7 |
+| Device | W × H | insets | `scale` | play H | vertical slack | junction target (worst band) | car body | road width |
+|---|---|---|---|---|---|---|---|---|
+| iPhone SE (1st) | 320 × 568 | 20 / 0 | 0.3200 | 484 | 4 | **46.1 pt** | 21.1 × 33.3 | 26.9 |
+| iPhone SE (2nd/3rd) | 375 × 667 | 20 / 0 | 0.3750 | 583 | 21 | **54.0 pt** | 24.8 × 39.0 | 31.5 |
+| iPhone 13 mini | 375 × 812 | 50 / 34 | 0.3750 | 664 | 102 | **54.0 pt** | 24.8 × 39.0 | 31.5 |
+| iPhone 13/14 | 390 × 844 | 47 / 34 | 0.3900 | 699 | 114 | **56.2 pt** | 25.7 × 40.6 | 32.8 |
+| **iPhone 15/16** | 393 × 852 | 59 / 34 | 0.3930 | 695 | 106 | **56.6 pt** | 25.9 × 40.9 | 33.0 |
+| iPhone 16 Pro Max | 440 × 956 | 62 / 34 | 0.4400 | 796 | 136 | **63.4 pt** | 29.0 × 45.8 | 37.0 |
+| Galaxy S23 | 360 × 780 | 24 / 24 | 0.3600 | 668 | 128 | **51.8 pt** | 23.8 × 37.4 | 30.2 |
+| Pixel 7 | 412 × 915 | 24 / 24 | 0.4120 | 803 | 185 | **59.3 pt** | 27.2 × 42.8 | 34.6 |
+| Tall Android 21:9 | 412 × 1024 | 32 / 24 | 0.4120 | 904 | 286 | **59.3 pt** | 27.2 × 42.8 | 34.6 |
 
 The binding device is the **iPhone SE 1st generation at 320 × 568**. Everything in §4 is sized so
-that device passes.
+that device passes. The junction-target column is the worst band on that device, which is always
+band 5 (`min(colW, rowH) = 150` LU, the finest grid in the game).
 
-**Re-checked after slice 1b's `ENTRY_LEN` change, and nothing in this table moves.** `ROW0_Y` and
-`DEPOT_Y` each went down 60 LU while the route height stayed at 1200
-([`generation.md` §3.2](generation.md#32-site-coordinates)), so `DESIGN_W`, `DESIGN_H`, `colW`,
-`rowH` and therefore `scale`, `slackY`, the junction target and the car body are all the numbers
-already printed above. What changed is where the content sits **inside** the design rectangle: it
-now spans `y = 60 … 1590` instead of `60 … 1530`, so the clearance below the depot body falls from
-70 LU to 10.
+**What the size change actually did**, on the reference device: the car goes from 33.0 × 55.0 pt to
+**25.9 × 40.9 pt** — 21 % narrower, 26 % shorter, **42 % less area** — and the road from 40.9 pt to
+33.0 pt wide. The owner's report was that the road and the vehicles were too big and were pulling
+attention away from changing routes; this is the answer, and it is bounded from below by
+[AC-402](acceptance-criteria.md)'s 20 pt car-body floor, which the smallest supported configuration
+clears at 20.24 pt (§4.4).
 
-| Device | `scale` | depot bottom, LU | clearance to `DESIGN_H`, pt | plus slack below + gutter | total below the depot |
-|---|---|---|---|---|---|
-| iPhone SE (1st) | 0.3025 | 1590 | 3.0 | 0.0 + 8 | **11.0 pt** |
-| iPhone 15/16 | 0.3930 | 1590 | 3.9 | 29.7 + 8 | 41.6 pt |
-| Tall Android 21:9 | 0.4120 | 1590 | 4.1 | 110.3 + 8 | 122.4 pt |
-
-The binding case is again the SE 1st generation, at 11.0 pt of clear space between the depot body
-and the bottom of the screen — it has no home indicator and a zero bottom inset, which is why it
-is the one device where the design rectangle is height-bound with no slack at all. The depot's
-1.04 **receiving** scale (§7.4) reaches `y = 1593.4`, still inside the rectangle. A future change
-that pushes `DEPOT_Y + DEPOT_H` past 1600 is a layout change, not a geometry tweak, and belongs
-back in this table. ([AC-411](acceptance-criteria.md))
+**Clearance below the depot row.** `DEPOT_Y + DEPOT_H = 1350 + 128 = 1478` against
+`DESIGN_H = 1500`, so 22 LU of margin. On the SE that is 7.0 pt of design margin plus 1.8 pt of
+lower slack plus the 8 pt gutter = **16.8 pt** between the depot body and the bottom of the screen;
+over the whole viewport sweep the minimum is **14.75 pt** against [AC-411](acceptance-criteria.md)'s
+8 pt floor. *The old layout ran this down to 11.0 pt after slice 1b spent 60 LU of it on
+`ENTRY_LEN`; the re-laid rectangle gives it back.*
 
 ---
 
@@ -161,107 +175,128 @@ back in this table. ([AC-411](acceptance-criteria.md))
 
 ### 4.1 Geometry constants (LU)
 
-| Constant | Value | At SE scale 0.3025 | At iPhone 16 scale 0.393 |
-|---|---|---|---|
-| `ROAD_W` | 104 | 31.5 pt | 40.9 pt |
-| `ROAD_EDGE_W` | 4 | 1.2 pt | 1.6 pt |
-| `CAR_L` | 140 | 42.4 pt | 55.0 pt |
-| `CAR_W` | 84 | 25.4 pt | 33.0 pt |
-| `CAR_RADIUS` | 16 | — | — |
-| `GLYPH_CAR` | 48 | 14.5 pt | 18.9 pt |
-| `GLYPH_CAR_LARGE` | 66 | 20.0 pt | 25.9 pt |
-| `GLYPH_DEPOT` | 64 | 19.4 pt | 25.2 pt |
-| `GLYPH_DEPOT_LARGE` | 88 | 26.6 pt | 34.6 pt |
-| `JUNCTION_MARK_R` | 46 | 27.8 pt ⌀ | 36.2 pt ⌀ |
-| `DEPOT_W` | 160 | 48.4 pt | 62.9 pt |
-| `DEPOT_H` | 170 | 51.4 pt | 66.8 pt |
-| `COMMIT_PREVIEW` | 260 | — | — |
-| `MOUTH_W` | 176 | 53.2 pt | 69.2 pt |
-| `MOUTH_FADE` | 36 | 10.9 pt | 14.1 pt |
-| `mouthLu` | per band, §7.6 | — | — |
+| Constant | Value | was | At SE scale 0.3200 | At iPhone 16 scale 0.393 |
+|---|---|---|---|---|
+| `ROAD_W` | **84** | 104 | 26.9 pt | 33.0 pt |
+| `ROAD_EDGE_W` | 4 | 4 | 1.3 pt | 1.6 pt |
+| `CORNER_R` | **28** | — | 9.0 pt | 11.0 pt |
+| `CAR_L` | **104** | 140 | 33.3 pt | 40.9 pt |
+| `CAR_W` | **66** | 84 | 21.1 pt | 25.9 pt |
+| `CAR_RADIUS` | **12** | 16 | — | — |
+| `GLYPH_CAR` | **42** | 48 | 13.4 pt | 16.5 pt |
+| `GLYPH_CAR_LARGE` | **58** | 66 | 18.6 pt | 22.8 pt |
+| `GLYPH_DEPOT` | **52** | 64 | 16.6 pt | 20.4 pt |
+| `GLYPH_DEPOT_LARGE` | **72** | 88 | 23.0 pt | 28.3 pt |
+| `JUNCTION_MARK_R` | **34** | 46 | 21.8 pt ⌀ | 26.7 pt ⌀ |
+| `BLADE_LEN` | **30** | 40 | — | — |
+| `BLADE_W` | **9** | 12 | — | — |
+| `DEPOT_W` | **124** | 160 | 39.7 pt | 48.7 pt |
+| `DEPOT_H` | **128** | 170 | 41.0 pt | 50.3 pt |
+| `COMMIT_PREVIEW` | **200** | 260 | — | — |
+| `OPEN_BRANCH_FADE` | **28** | 36 | — | — |
+| `TERRACE_FADE` | **28** | 36 | — | — |
+| `mouthLu` | per band, §7.6 | — | — | — |
 
-`CAR_W` (84) is narrower than `ROAD_W` (104), leaving a 10 LU shoulder on each side. `DEPOT_W`
-(160) is a constant rather than a fraction of `colW`, so the depot never collides with its
-neighbour (narrowest case `colW = 195` leaves a 35 LU gap) and never overhangs the design-space
-edge (narrowest margin is 30 LU).
+**Everything shrank by roughly a fifth and the ratios that matter were preserved.** `CAR_W` (66) is
+narrower than `ROAD_W` (84), leaving a 9 LU shoulder on each side — the old pair left 10. The
+junction marker's diameter (68) is now **smaller than the road** (84), where the old 92 LU marker
+overhung a 104 LU road by nothing at all; a marker that sits inside its road reads as a fitting on
+the road rather than a sticker over it. `DEPOT_W` (124) is a constant rather than a fraction of
+`colW`, so the depot never collides with its neighbour (narrowest case `colW = 150` leaves a 26 LU
+gap) and never overhangs the design-space edge (narrowest margin 63 LU,
+[`generation.md` §3.2](generation.md#32-site-coordinates)).
+
+**`CAR_W = 66` is the binding number in this table and it is set by an acceptance criterion, not by
+taste.** [AC-402](acceptance-criteria.md) requires ≥ 20 pt of car body on the smallest supported
+configuration, which is `playW = 320, playH = 460` → `scale = 0.30667` → `CAR_W >= 65.2`. 66 gives
+20.24 pt. Anything smaller fails the sweep. **The car cannot get smaller than this without either
+raising the support floor or re-arguing AC-402**, and that is the wall the owner's "smaller
+vehicles" direction runs into.
+
+**`CORNER_R = 28` is a third of the road width.** Large enough to read as a turn rather than a
+mitre, small enough that the road's outer corner is still square-shouldered. The car centre follows
+the un-filleted polyline mapped onto the fillet
+([`generation.md` §3.4](generation.md#34-placing-a-car-renderer-only)); the largest deviation
+between the two is `CORNER_R·(√2 − 1) ≈ 11.6` LU, well inside the road's 42 LU half-width, so a car
+never leaves the tarmac on a turn.
 
 ### 4.2 Draw order
 
 1. Background fill
-2. Road casing — every edge stroked at `ROAD_W + 2*ROAD_EDGE_W` in `--road-edge`
-3. Road surface — every edge stroked at `ROAD_W` in `--road`
-4. Lane dashes — every edge stroked at 3 LU, dash 20/28, in `--road-dash`
-5. Junction markers, and the lead-highlight arc when armed (§7.3)
+2. Road casing — every edge stroked at `ROAD_W + 2*ROAD_EDGE_W` in `--road-edge`, round joins
+3. Road surface — every edge stroked at `ROAD_W` in `--road`, round joins
+4. Lane dashes — every edge stroked at 3 LU, dash 16/22, in `--road-dash`
+5. Junction markers, and the lead-highlight bar when armed (§7.3)
 6. Entry flares (§7.5) — beneath the cars, so a flare never dims the car whose arrival it marks
 7. **Car shadows** — every car's shadow, ascending by id, as one layer
 8. **Car bodies** — ascending by id, each with body, windscreen and roof glyph
-9. **Depot-mouth aprons** (§7.6) — one filled path for the opaque cores, then one `saveLayer`
-   for the fade segments
+9. **The depot terrace** (§7.6) — one rounded rectangle in `--depot` with a `TERRACE_FADE` alpha
+   ramp along its top edge
 10. Depot bodies and depot glyphs
 11. Transient effects sourced from `state.events` (§9)
 
-**Steps 7 and 8 are two passes over the cars, not one, and that is what makes
-[AC-501](acceptance-criteria.md) satisfiable.** Through slice 2 this was a single step — "cars,
-ascending by id, each with body, roof glyph and shadow" — which draws car *n+1*'s shadow on top of
-car *n*'s body. AC-501 forbids exactly that ("a car is never occluded by … another car's shadow"),
-so the document contradicted its own acceptance criterion, and per-car ordering was the thing that
-produced the violation. Shadows are a ground layer: they all belong under all of the bodies.
+**Steps 2, 3 and 4 stroke a polyline with round joins, and that is what draws the fillet.** A
+Skia stroke with `StrokeJoin.Round` on a right-angled polyline produces exactly the rounded outer
+corner the identity asks for; the join radius is half the stroke width, so the road casing's outer
+corner radius is `(84 + 8) / 2 = 46` LU and the surface's is 42. `CORNER_R = 28` is the *centreline*
+fillet the car follows, drawn separately only in the lane dashes, which are generated along the
+filleted centreline so the dashes turn the corner instead of meeting it at a point.
 
-Whether this is ever visible is a separate question from whether it is specified, and it is
-visible in one place. §4.5 guarantees two cars never overlap *on the same edge*, but
-[`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth) is explicit that
-the guarantee stops at a depot fed by two or three terminal edges, and every level at every band
-has one. A shadow is offset only `(0, 6)` LU, so the overlap is a 6 LU sliver — but it is a
-6 LU sliver of `#000000` at 32 % across another car's colour patch, in the one region of the board
-where two colours are being told apart under time pressure, and it is under the apron where the
-picture is already busy. Two passes cost one extra traversal of a list that is never longer than
-about six.
+**Steps 7 and 8 are two passes over the cars, not one**, which is what makes
+[AC-501](acceptance-criteria.md) satisfiable: one pass draws car *n+1*'s shadow on top of car *n*'s
+body. Shadows are a ground layer and they all belong under all of the bodies. The case is reachable
+in exactly one place and that place is now far more common than it was: the shared depot approach
+([`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-shared-approach-road)),
+measured at 59–301 runs per 1,000 rather than the old 0–5.
 
-Cars are painted after junction markers, so **a car is never hidden by a junction marker** — that
-part is unchanged. Both car passes are painted *before* the depot layer, which is the change
-slice 1's measurement forced: a car drives **under** the depot mouth and under the depot body,
-which is
-what makes two cars converging on one depot impossible to see overlapping (§7.6,
-[`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)). Nothing else
-occludes a car.
+Cars are painted after junction markers, so **a car is never hidden by a junction marker**. Both
+car passes are painted *before* the depot layer, so a car drives **under** the terrace and under
+the depot body. Nothing else occludes a car.
 
 ### 4.3 The car
 
-Top-down, axis-aligned to the road tangent. The body is **one large colour fill**: a rounded
-rectangle `CAR_L × CAR_W`, corner radius `CAR_RADIUS`, filled with the car's colour. On top of
-it:
+Top-down, axis-aligned to the road direction — which is now always one of four headings, plus the
+90° sweep through a corner. The body is **one large colour fill**: a rounded rectangle
+`CAR_L × CAR_W`, corner radius `CAR_RADIUS`, filled with the car's colour. On top of it:
 
-- a **windscreen**: a 40 × 60 LU rounded rect (40 across the body, 60 along it), corner radius
-  8 LU, in **`--text` `#E8ECF2` at 22 % opacity**, offset 28 LU toward the nose — it reads as a
+- a **windscreen**: a 26 × 36 LU rounded rect (26 across the body, 36 along it), corner radius
+  6 LU, in **`--text` `#E8ECF2` at 22 % opacity**, offset 24 LU toward the nose — it reads as a
   car rather than a capsule and costs no colour area;
 - the **colour glyph**, `GLYPH_CAR` square, in `--ink`, centred on the body and **counter-rotated
   so it is always upright relative to the screen** (§6.2);
-- a **shadow**: the same rounded rect, `#000000` at 32 %, offset `(0, +6)` LU in **screen** space
+- a **shadow**: the same rounded rect, `#000000` at 32 %, offset `(0, +5)` LU in **screen** space
   — not in the car's frame, because the light is above the screen and a shadow does not rotate
-  with the thing casting it — drawn as a layer under *all* bodies, not per car (§4.2, steps 7
-  and 8).
+  with the thing casting it — drawn as a layer under *all* bodies (§4.2, steps 7 and 8).
 
-No outline, no gradient, no headlights. The colour patch is at minimum 25.4 × 42.4 pt on the
-smallest supported device, comfortably above the 20 px legibility floor.
+No outline, no gradient, no headlights. The colour patch is at minimum 21.1 × 33.3 pt on the
+smallest common device and 20.24 pt wide in the worst supported configuration, above the 20 pt
+legibility floor of [AC-402](acceptance-criteria.md) — by **0.24 pt**, which is the whole of the
+remaining room.
 
-**The windscreen is light, and this is a measurement rather than a preference.** Slice 2 found
-that §4.3 named a `--car-glass` token that §5.3's table never defined, and chose `--ink`
-(`#0B0E13`) on the argument that a dark pane reads as glass seen from above at night. It does not
-survive §5.2's own contrast floor. The windscreen covers about a fifth of the body, and at 22 %
-toward `--ink` that patch drops to **2.79 : 1** against the road for Rose and **2.81 : 1** for
-Iris, against the ≥ 4.2 : 1 this palette was validated at — so a fifth of the colour patch of two
-of the five cars would sit below the floor the whole palette was chosen to clear, on the one
-element whose only job is to be identified by colour. At 22 % toward `--text` the same patch reads
-`6.13 / 8.74 / 4.99 / 6.71 / 5.24 : 1`, every one above the floor. It also protects the glyph,
-which overlaps the windscreen over roughly a quarter of its area: `--ink` glass drops the
-glyph-against-its-background ratio inside the overlap to `4.03 / 5.37 / 3.41 / 4.36 / 3.38`, and
-`--text` glass raises it to `6.16 / 7.73 / 5.30 / 6.53 / 5.44`. Physically it is also the right
+**Cornering.** Through a corner the body rotates 90° over the `2 · CORNER_R = 56` LU of centreline
+the fillet occupies — 0.34 s at band 1, 0.28 s at band 5 — with the rotation linear in arc length,
+not eased. Easing it would make the car appear to hesitate at a junction, which is the one place in
+the game where hesitation means something. The glyph counter-rotates over the same span so it stays
+screen-upright throughout ([AC-603](acceptance-criteria.md)).
+
+**The windscreen is light, and this is a measurement rather than a preference.** At 22 % toward
+`--ink` the windscreen patch drops to **2.79 : 1** against the road for Rose and **2.81 : 1** for
+Iris, against the ≥ 4.2 : 1 this palette was validated at — so part of the colour patch of two of
+the five cars would sit below the floor the whole palette was chosen to clear, on the one element
+whose only job is to be identified by colour. At 22 % toward `--text` the same patch reads
+`6.13 / 8.74 / 4.99 / 6.71 / 5.24 : 1`, every one above the floor. Physically it is also the right
 answer — from directly above at night a windscreen shows reflected sky and street light, not a
-hole.
+hole. **There is no `--car-glass` token.** [AC-606](acceptance-criteria.md)'s figures are per-pixel
+and do not depend on the windscreen's size, so they are unchanged.
 
-**There is no `--car-glass` token.** The windscreen is `--text` at 22 % and §5.3's table is
-unchanged. A token whose value would duplicate an existing one, for one use, is a second place the
-same hex has to stay right.
+**The windscreen shrank further than the body did, and that is a consequence of the smaller car
+rather than a taste.** The car's area fell 42 %, but `GLYPH_CAR` only fell 13 % (48 → 42 LU)
+because it has to stay legible at 13.4 pt (§6.2) — so the glyph's *share* of the body rose from
+20 % to 26 %. Measured by rasterising the exact shapes at 0.25 LU, windscreen plus glyph cover
+**34.0 %** of a 6,740 LU² body, against [AC-502](acceptance-criteria.md)'s 35 % ceiling and the old
+car's 31.5 %. The windscreen gave up the difference. **The colour-blind cue was protected at the
+expense of colour area, deliberately**, and the 1.0 pp of headroom left against AC-502 is the
+signal that this car is as small as the current glyph sizes allow.
 
 ### 4.4 Tap-target arithmetic
 
@@ -269,28 +304,41 @@ A junction is a tap target and must be at least 44 × 44 pt. The visible marker 
 the target, which is standard, and the hit radius adapts to the scale:
 
 ```
-minSep     = min(colW, rowH)                          // per band, 195 LU at worst
-HIT_R_LU   = clamp( ceil(22 / scale), 76, floor((minSep - 6) / 2) )
+minSep     = min(colW, rowH)                          // per band, 150 LU at worst
+HIT_R_MIN  = 76
+HIT_R_LU   = min( max( ceil(22 / scale), HIT_R_MIN ), floor((minSep - 6) / 2) )
 ```
 
-`ceil(22 / scale)` is the radius in LU that yields exactly 44 pt. The lower clamp of 76 keeps the
-target generous on large screens; the upper clamp keeps hit circles from ever touching, since
-`2 * HIT_R_LU < minSep` by construction.
+`ceil(22 / scale)` is the radius in LU that yields exactly 44 pt. `HIT_R_MIN` keeps the target
+generous on large screens. **The upper bound is applied last and wins whenever the two conflict** —
+at band 5, `floor((150 - 6) / 2) = 72 < 76`, so the target is 72 LU and the clamp's lower bound is
+inert. That ordering is normative: it is what keeps hit circles from ever touching, since
+`2 * HIT_R_LU <= minSep - 6 < minSep` by construction.
 
 **Hit circles therefore never overlap**, which means "nearest junction within `HIT_R_LU`" and
 "the unique junction containing the point" are the same answer, and hit testing has no tie-break
 to get wrong.
 
-Verified by arithmetic sweep over widths 320–520 pt × heights 560–1200 pt × 8 safe-area inset
-profiles × 5 bands — **2,580,840 configurations, zero violations**: minimum junction target
-44.00 pt, minimum car body width 21.00 pt, zero overlapping hit circles
-([AC-401](acceptance-criteria.md), [AC-402](acceptance-criteria.md)).
+Verified by arithmetic sweep over widths 320–520 pt × heights 560–1200 pt × 9 safe-area inset
+profiles × 5 bands, excluding configurations below the declared support floor — **5,512,425
+configurations, zero violations**: minimum junction target **44.16 pt**, minimum car body width
+**20.24 pt**, zero overlapping hit circles, minimum clear space below the depot **14.75 pt**
+([AC-401](acceptance-criteria.md), [AC-402](acceptance-criteria.md),
+[AC-411](acceptance-criteria.md)).
 
-**Declared support floor:** `playW ≥ 320 pt` and `playH ≥ 400 pt`. Below that the 44 pt target
-cannot be met at bands 4–5 and the game is not guaranteed.
+**Declared support floor:** `playW ≥ 320 pt` and `playH ≥ 460 pt`. *The height floor moved
+400 → 460 because the design rectangle is shorter and therefore hits its height bound at a larger
+scale; at `playH = 460` the scale is 0.30667 and both floors are met with 0.16 pt and 0.24 pt to
+spare. Below it, band 5's 44 pt target cannot be met and the game is not guaranteed
+([AC-409](acceptance-criteria.md)).*
+
+**Both floors are now tight, and that is the price of the finer grid.** The old layout cleared 44 pt
+by 2.00 pt and 20 pt by 1.00 pt at their worst; this one clears them by 0.16 pt and 0.24 pt. A sixth
+column at band 5 and a 66 LU car are as far as this design rectangle goes. **Any future change that
+adds a column, shrinks a car, or raises `HIT_R_MIN` has to move `DESIGN_W`, and that rescales every
+width-bound device** — which is most of them.
 
 ---
-
 ## 5. Colour
 
 ### 5.1 The car palette
@@ -394,10 +442,16 @@ their colours do.
   Without this, "square" and "diamond" would be the same shape, and a triangle would point in a
   different direction on every edge.
 - Shapes are chosen for maximum silhouette difference at 14 pt: a filled disc, a filled
-  equilateral triangle, a filled square, a plus with 16 LU-thick arms, and two horizontal bars
+  equilateral triangle, a filled square, a plus with arms `0.33 × s` thick, and two horizontal bars
   with a gap equal to the bar height. No two of them share an outline family, and no shape is
   another shape rotated.
-- The **Symbol size** setting switches `GLYPH_CAR` 48 → 66 LU and `GLYPH_DEPOT` 64 → 88 LU, and
+  *Round 8 shrank `GLYPH_CAR` 48 → 42 LU with the car, which is **13.4 pt on the binding device** —
+  just under the 14 pt this rule is stated at. The car glyph is a secondary cue layered on colour
+  and never a rule (§6.1), and the primary cue grew in relative terms because the glyph is now a
+  larger fraction of a smaller body; but a player who needs the glyph should be on **Large**, which
+  gives 18.6 pt and full opacity. That is why Large raises opacity as well as size, and it is the
+  honest reading of what the smaller car cost accessibility ([AC-604](acceptance-criteria.md)).*
+- The **Symbol size** setting switches `GLYPH_CAR` 42 → 58 LU and `GLYPH_DEPOT` 52 → 72 LU, and
   raises car-glyph opacity to 100 %.
 
 ### 6.3 What is not claimed
@@ -416,22 +470,41 @@ left / centre / right.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  LEVEL 12        ████████████░░░░░░░░░░         ● ● ○    ┌────┐  │
-│   4,820                23 / 36                           │ ▮▮ │  │
+│  LEVEL 12        ▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░         ● ● ○    ┌────┐  │
+│     23                   1:07                            │ ▮▮ │  │
 │                                                          └────┘  │
 └──────────────────────────────────────────────────────────────────┘
    ↑ label 12/16          ↑ bar 180×8, r4          ↑ 3 pips   ↑ 44×44
-   ↑ numeric 20/24 tabular ↑ caption 12/16
+   ↑ numeric 20/24 tabular ↑ caption 12/16 tabular
 ```
 
-- **Level + score.** `LEVEL nn` in `--text-dim`, Label style. Score in `--text`, HUD-numeric
-  style, tabular figures so the width does not jitter as it counts up.
-- **Quota bar.** 180 × 8 pt, radius 4, track `--surface-raised`, fill `--text`. Caption
-  `delivered / quota` beneath, centred.
+- **Level + delivered.** `LEVEL nn` in `--text-dim`, Label style. **The number beneath it is
+  `delivered`** — the score ([`gameplay.md` §4.3](gameplay.md#43-the-score-is-the-number-of-cars-delivered))
+  — in `--text`, HUD-numeric style, tabular figures so the width does not jitter as it counts up.
+  It is one to two digits where the old score was four, which is a small win for a bar that is
+  crowded.
+- **The clock bar.** 180 × 8 pt, radius 4, track `--surface-raised`, fill `--text`. It **drains**
+  left to right as the level runs: fill width is `180 * (LEVEL_TICKS - tick) / LEVEL_TICKS`.
+  Caption beneath it is the time remaining as `m:ss`, centred, tabular.
+  *This replaces the quota bar, which filled. Draining is the correct direction for a resource
+  being spent and it is the opposite of the old bar, so a screenshot from before round 8 is
+  immediately distinguishable from one after.*
+- **The last ten seconds.** Below `tick >= LEVEL_TICKS - 600` the caption switches to seconds only
+  and the bar fill switches to `--alert`, with no pulse and no motion
+  ([AC-520](acceptance-criteria.md)). It is the one piece of chrome that changes colour on a timer,
+  and it is a state change rather than decoration: the player's routing decisions in the last ten
+  seconds are worth nothing for any car that cannot reach a depot, and knowing that is worth
+  telling them.
 - **Lives.** Three 10 pt pips, 8 pt apart. Filled `--text` when held, outlined `--text-mute` when
   lost. Never colour-coded — a colour-only life counter would be the one place in the game where
   colour carries meaning without a glyph.
 - **Pause.** 44 × 44 pt target, 16 pt glyph, `--text-dim`, 8 pt from the right edge.
+
+**The clock is drawn from `state.tick`, never from wall time** — the bar and the caption are pure
+functions of the tick, so a paused game shows a frozen clock and a replay shows the same clock the
+run did ([`gameplay.md` §6.1](gameplay.md#61-pause), [AC-505](acceptance-criteria.md)). A
+`setInterval` counting seconds would drift from the simulation on any device that drops frames,
+and would show 0:00 while cars were still moving.
 
 ### 7.2 Road
 
@@ -439,87 +512,104 @@ Casing, surface and dashes as in §4.2. The road is uniform everywhere; a branch
 junction marker, not by a change in road treatment, so the player's eye is not pulled to
 decoration.
 
+**Lane dashes follow the filleted centreline**, so a dash never lands on a corner as a wedge. The
+dash pattern restarts at the start of every edge, which means the phase is a property of the edge
+and not of the whole path — a car's position is never inferable from where the dashes happen to be.
+
 ### 7.3 Junction
 
 ```
-        idle                   flipped (open = 1)          armed (car within 260 LU)
+   branch {c, c+1}          branch {c-1, c}         branch {c-1, c+1}
+   open = 0 (down)          open = 1 (down)          open = 0 (left)
 
-         ╱ ╲                        ╱ ╲                          ╱ ╲
-        ╱   ╲                      ╱   ╲                        ╱▓▓▓╲
-       ◆──────                    ──────◆                    ══◆══════
-      ╱                                  ╲                    ╱
-   dim  bright                      bright  dim            bright arc, --text 60 %
+         │                        │                        │
+         ◆━━━━━╮                ╭━◆                   ◄━━━━◆      ╮
+         ┃     ╎                ╎ ┃                        ╎      │ closed
+         ▼     ╎                ╎ ▼                        ╎      ╯ branch,
+                                                                    dim
+   blade points DOWN        blade points DOWN         blade points LEFT
+   closed branch RIGHT      closed branch LEFT        closed branch RIGHT
+   separation 90°           separation 90°            separation 180°
 ```
 
-- **Marker.** A `JUNCTION_MARK_R = 46` LU disc in `--surface-raised` with a 4 LU `--road-edge`
-  ring, and a **blade**: a rounded bar `BLADE_LEN = 40` LU long and `BLADE_W = 12` LU thick,
+- **Marker.** A `JUNCTION_MARK_R = 34` LU disc in `--surface-raised` with a 4 LU `--road-edge`
+  ring, and a **blade**: a rounded bar `BLADE_LEN = 30` LU long and `BLADE_W = 9` LU thick,
   radius `BLADE_W / 2`, drawn from the node centre outward along the open branch, in `--text` at
-  92 %. The blade is the state: where it points is where the next car goes. *Both numbers are proportions of the
-  marker, which is why they are stated here rather than left to the renderer. 40 LU from the
-  centre of a 46 LU disc keeps the whole blade on the marker and leaves 6 LU of disc face between
-  the blade's tip and the inside of the ring, so the blade never touches the ring at any rotation.
-  12 LU is three times the ring's 4 LU and gives a 3.3 : 1 bar — 12.1 × 3.6 pt at the smallest
-  supported scale (0.3025) — which is the thinnest bar whose angle is still readable at that size.*
-- **The blade's heading is the chord from the junction node to the branch's far node**, not the
-  road's tangent near the junction. This is normative and it is the one place where "draw it along
-  the open edge" gives the wrong picture. Every edge leaves its node **vertically** by design
-  ([`generation.md` §2.3](generation.md#23-edges)) — that is what makes roads join without a kink —
-  so 40 LU down *either* branch the road is still pointing straight down, and a tangent-derived
-  blade draws the identical vertical bar whichever way the switch is set. Slice 2 shipped that and
-  the junction silently stopped showing its state; it was caught by looking at a screenshot, not by
-  a test. The chord points at the column the branch actually reaches: straight down for a straight
-  branch, clearly down-left or down-right for a diagonal. ([AC-504](acceptance-criteria.md))
-- **Open branch.** The first 150 LU of the open outgoing edge is overdrawn in `--road` lightened
+  92 %. The blade is the state: where it points is where the next car goes. *Both numbers are
+  proportions of the marker. 30 LU from the centre of a 34 LU disc keeps the whole blade on the
+  marker and leaves 4 LU of disc face between the blade's tip and the inside of the ring. 9 LU is
+  a 3.3 : 1 bar — 9.6 × 2.9 pt at the smallest supported scale — which is the thinnest bar whose
+  direction is still readable at that size.*
+- **The blade points along the first segment of the open branch, and under orthogonal roads that
+  is unambiguous.** A `straight` edge's first segment is vertical (down); a `jogL`'s is horizontal
+  (left); a `jogR`'s is horizontal (right). So the blade has exactly three possible headings and
+  the two branches of any junction differ by **90° or 180°**.
+
+  > **AC-504's ≥ 30° separation clause is restated as ≥ 90°.** The old threshold was derived from
+  > `atan(colW / rowH)` — the angle between a straight branch and a diagonal one under the cubic
+  > model — and measured out at `36.87 / 39.09 / 40.91 / 44.27°` for straight-against-diagonal and
+  > `73.74 / 78.19 / 81.83 / 88.55°` for diagonal-against-diagonal, so 30° was a real threshold
+  > with a few degrees of room. Orthogonal branches leave the node at right angles by construction:
+  > a branch is `{c, c±1}` (one vertical, one horizontal → **90°**) or `{c-1, c+1}` (two opposed
+  > horizontals → **180°**). There are no other cases, the separation is exact rather than
+  > measured, and **the floor is 90°** ([AC-504](acceptance-criteria.md)).
+
+  The slice-2 defect this clause exists for is **gone by construction, not by discipline.** Under
+  the cubic model every edge left its node vertically, so a tangent-derived blade drew the
+  identical vertical bar for both branches and the junction silently stopped showing its state; it
+  shipped, and it was caught by looking at a screenshot rather than by a test. A tangent-derived
+  blade is now *correct*, because the tangent at the node **is** the first segment's direction. The
+  AC keeps its second clause anyway, because "the two blades differ by at least 90°" is a cheap
+  check that also catches a blade drawn along the wrong branch.
+- **Open branch.** The first 120 LU of the open outgoing edge is overdrawn in `--road` lightened
   16 %, so the open road reads brighter than the closed one even without looking at the blade. The
-  overdraw is stroked at `ROAD_W` with **butt caps at both ends**. *Round caps are wrong here for a
-  reason worth recording: the cap radius on a 104 LU stroke is 52 LU, so a round cap at the near
-  end puts a 52 LU lobe of brightened road **above** the junction node, on the incoming road, which
-  reads as the branch being open backwards. The near butt end is invisible anyway — it sits under
-  the 46 LU marker disc, which is painted after it.* The far end is not hidden by anything, and a
-  butt cap there ends the brightening in a hard line straight across the road, which reads as a
-  painted road marking the game does not have. **The overdraw's alpha therefore ramps linearly to
-  zero over its final `OPEN_BRANCH_FADE = 36` LU** — the same distance §7.6's apron fades out over,
-  for the same reason: 36 LU is the shortest run over which a road-width stroke can end without
-  showing an edge.
-- **Armed.** When the nearest approaching car is within `COMMIT_PREVIEW = 260 LU`, a 3 LU arc in
-  `--text` at 60 % traces the open branch for 220 LU. This is the fairness affordance for the
+  overdraw is stroked at `ROAD_W` with **butt caps at both ends**, and follows the edge's polyline
+  and fillet if the 120 LU reaches round the corner. *Round caps are wrong here: the cap radius on
+  an 84 LU stroke is 42 LU, so a round cap at the near end puts a 42 LU lobe of brightened road
+  **above** the junction node, on the incoming road, which reads as the branch being open
+  backwards. The near butt end is invisible anyway — it sits under the 34 LU marker disc, which is
+  painted after it.* The far end is not hidden by anything, so **the overdraw's alpha ramps
+  linearly to zero over its final `OPEN_BRANCH_FADE = 28` LU** — the shortest run over which a
+  road-width stroke can end without showing an edge.
+- **Armed.** When the nearest approaching car is within `COMMIT_PREVIEW = 200 LU`, a 3 LU bar in
+  `--text` at 60 % traces the open branch for 170 LU. This is the fairness affordance for the
   one-frame render-latency window ([`gameplay.md` §3.3](gameplay.md#33-the-one-honest-caveat-render-latency)).
   It shows what will happen; it does not change what will happen.
-- **Pressed.** During the 160 ms after a tap, a ripple ring expands 46 → 84 LU, `--text` from
+- **Pressed.** During the 160 ms after a tap, a ripple ring expands 34 → 62 LU, `--text` from
   50 % to 0 % opacity.
 
 ### 7.4 Depot
 
 ```
-   ┌───────────────┐   ← DEPOT_W 160 × DEPOT_H 170 LU, radius 12
-   │▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀│   ← 18 LU face band in the depot's colour, full width
-   │               │
-   │       ●       │   ← GLYPH_DEPOT 64 LU, in --ink, on a colour disc of radius 48
-   │               │
-   │  ▬▬▬▬▬▬▬▬▬▬▬  │   ← three 6 LU sill bars in the colour at 18 %
-   └───────────────┘
+   ┌─────────────┐   ← DEPOT_W 124 × DEPOT_H 128 LU, radius 10
+   │▀▀▀▀▀▀▀▀▀▀▀▀▀│   ← 14 LU face band in the depot's colour, full width
+   │             │
+   │      ●      │   ← GLYPH_DEPOT 52 LU, in --ink, on a colour disc of radius 39
+   │             │
+   │ ▬▬▬▬▬▬▬▬▬▬▬ │   ← three 5 LU sill bars in the colour at 18 %
+   └─────────────┘
 ```
 
 Body `--depot`, colour carried by the face band, the glyph disc and the sill bars. The road enters
-through the top face band.
+through the top face band, from directly above, always vertically — under orthogonal routing every
+terminal edge's last segment is a vertical drop into the depot column
+([`generation.md` §2.3](generation.md#23-edges)), so the depot has one mouth in the middle of its
+top face and never a road arriving at an angle.
 
-**Glyph disc.** A filled circle centred on the body centre, radius **0.75 × the glyph size** — 48
-LU at `GLYPH_DEPOT = 64`, 66 LU at `GLYPH_DEPOT_LARGE = 88` (§11.2) — in the depot's colour, with
+**Glyph disc.** A filled circle centred on the body centre, radius **0.75 × the glyph size** — 39
+LU at `GLYPH_DEPOT = 52`, 54 LU at `GLYPH_DEPOT_LARGE = 72` (§11.2) — in the depot's colour, with
 the glyph drawn on it in `--ink`. *The ratio is derived, not chosen. The widest glyph in §6.2 is
 Rose's filled square, whose corners sit at `(√2 / 2) × s = 0.707 s` from the centre, so any disc
 radius below `0.707 × s` would clip it. 0.75 is the next step up that leaves visible margin —
-2.75 LU at Standard, 3.8 LU at Large — and the resulting 132 LU disc at Large still clears
-`DEPOT_W = 160` by 14 LU a side. Do not take this below 0.72.*
+2.2 LU at Standard, 3.1 LU at Large — and the resulting 108 LU disc at Large still clears
+`DEPOT_W = 124` by 8 LU a side. Do not take this below 0.72.*
 
 **Sill bars.** Three horizontal rounded bars in the depot's colour at 18 % opacity, each
-`DEPOT_HATCH_W = 6` LU tall on a 10 LU pitch, inset 16 LU from each side of the body (128 LU wide
-at `DEPOT_W = 160`), with the lowest bar's bottom edge 8 LU above the body's bottom edge. *Slice-0
-wording called this "a 6 LU hatch in the colour at 18 %, bottom third", which named a texture and a
-region and specified neither. It is bars, not diagonal hatching, and they occupy the bottom 26 LU —
-15 % of `DEPOT_H`, not a third. Filling a third of the body with the colour at 18 % would put more
-coloured area in the sill than in the 18 LU face band, and the face band is the primary colour
-carrier: the sill is redundancy at the bottom of the shape, where the eye ends up after following
-the road down, and it must not compete with the band the road actually enters through.*
+`DEPOT_HATCH_W = 5` LU tall on an 8 LU pitch, inset 12 LU from each side of the body (100 LU wide
+at `DEPOT_W = 124`), with the lowest bar's bottom edge 6 LU above the body's bottom edge. They
+occupy the bottom 21 LU — 16 % of `DEPOT_H`. The face band is the primary colour carrier; the sill
+is redundancy at the bottom of the shape, where the eye ends up after following the road down, and
+it must not compete with the band the road actually enters through.
 
 States:
 
@@ -528,165 +618,156 @@ States:
 - **Rejecting** (350 ms) — face band flashes `--alert` for 90 ms, then the whole depot desaturates
   to `--text-mute` and returns over 260 ms.
 
+*The 1.04 receiving scale reaches `y = 1478 + 0.04 × 128 / 2 = 1480.6`, inside `DESIGN_H = 1500`
+with 19 LU to spare ([AC-411](acceptance-criteria.md)).*
+
 ### 7.5 Car
 
-States: **arriving** (see below), **rolling** (steady), **entering the mouth** (no change to the
-car at all — the apron of §7.6 passes over it), **frozen** (level ended — 45 % opacity, no
-motion). There is no *delivered* or *misrouted* car state: by the time either resolves the car is
-beneath the depot layer, and both outcomes are drawn by the depot and the mouth (§8.3, §8.4).
+States: **arriving** (see below), **rolling** (steady), **turning** (§4.3's 90° sweep),
+**entering the terrace** (no change to the car at all — the terrace of §7.6 passes over it),
+**frozen** (level ended — 45 % opacity, no motion). There is no *delivered* or *misrouted* car
+state: by the time either resolves the car is beneath the depot layer, and both outcomes are drawn
+by the depot and the terrace (§8.3, §8.4).
 
 **Arriving — the car appears at full opacity in a single frame.** No fade, no scale-up, no
 ramp of any kind on the car body itself. On the tick a car spawns it is drawn complete: full
 body fill, full glyph, full stroke, at the entry node.
 
-This replaces a 140 ms fade-in over the first 40 LU, and the reason is a rule, not a taste.
+The reason is a rule, not a taste.
 [`generation.md` §7.1.5](generation.md#715-the-per-tick-procedure--normative) D3 says the player
-looks at a newly appeared car **next** rather than last, and that is what makes the first junction
-decision reachable at all
-([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision),
-§8.10). Attention is captured by an abrupt luminance transient; a gradual onset of the same
-magnitude does not capture it. A fade-in is exactly the manipulation that removes the effect the
-player model now depends on — so the drawing would have been quietly falsifying the design's own
-statement about the player. The fade was also spending 40 of the entry edge's 160 LU — a quarter
-of the only window in the game in which that car's colour can be read — on making the colour hard
-to read.
+looks at a newly appeared car **next** rather than last, and that is one of the two things that
+make the first junction decision reachable
+([`gameplay.md` §4.6b](gameplay.md#46b-the-other-window-from-a-car-appearing-to-its-first-decision);
+V14 is the other). Attention is captured by an abrupt luminance transient; a gradual onset of the
+same magnitude does not capture it. **A fade-in is exactly the manipulation that removes the effect
+the player model depends on** — so the drawing would be quietly falsifying the design's own
+statement about the player, in the one place a clear rate could not detect it.
+([AC-517](acceptance-criteria.md))
 
 **Entry flare.** The onset still needs to be *findable* in peripheral vision without the fade, so
 the transient is put somewhere it costs nothing: a ring at the entry node, `--text-mute` at 60 %
-alpha, outer radius 34 LU, 6 LU stroke, scaling 0.6 → 1.4 and fading to zero over 180 ms,
-`ease-out-quad`, drawn **beneath** the car layer (§4.2, step 6). It carries no colour information — the
-car body is the only thing that says which colour arrived — so it never competes with the match
+alpha, outer radius 28 LU, 5 LU stroke, scaling 0.6 → 1.4 and fading to zero over 180 ms,
+`ease-out-quad`, drawn **beneath** the car layer (§4.2, step 6). It carries no colour information —
+the car body is the only thing that says which colour arrived — so it never competes with the match
 key and it is unaffected by the colour-blind settings of §6.
 
-### 7.6 The depot mouth
+### 7.6 The depot terrace
 
 **What this solves.** Every generated level, at every band, has at least one depot fed by two or
-three terminal edges — measured, 100 % of levels, max in-degree 3
-([`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-depot-mouth)). Those edges
-converge geometrically, and the cars on them took different paths from the entry, so nothing
-constrains their relative timing. Measured: two cars came within a car length in 0–5 runs per
-1,000 by band, with a minimum centre-to-centre distance of **26 LU** against a 140 LU car — a
-complete overlap. The rules are fine. The picture is not, and the fix belongs here.
+three terminal edges, and under orthogonal routing those edges **share the same vertical approach
+road for the whole of the last row**
+([`generation.md` §2.3](generation.md#23-edges),
+[`gameplay.md` §4.5b](gameplay.md#45b-where-the-guarantee-stops-the-shared-approach-road)). The cars
+on them took different paths from the entry, so nothing constrains their relative timing. Measured
+in the designer's prototype over 800 seeds per band: two cars came within a car length on a shared
+approach in **59 to 301 runs per 1,000**, with a minimum centre-to-centre distance of **0 LU** —
+a complete overlap. Under the cubic model the same measurement read 0–5 per 1,000. **The owner's
+orthogonal-roads direction bought this, and it is the one place in round 8 where the drawing got
+harder rather than easier.** The rules are fine; the picture is not, and the fix belongs here.
 
-**The treatment: the road runs under the depot.** Each depot is given a forecourt — an apron in
-`--depot` laid over the last stretch of every terminal edge that feeds it — and the car layer is
-painted beneath it (§4.2). A car does not fade, pop or shrink; it drives into the building.
+**The treatment: the road runs under the terrace.** The depot row is given a continuous forecourt —
+one rounded rectangle in `--depot` laid over the bottom of every terminal edge — and the car layer
+is painted beneath it (§4.2). A car does not fade, pop or shrink; it drives into the building.
 
 ```
         col c-1        col c         col c+1
-           ╲             │             ╱
-            ╲            │            ╱          ← ordinary road, cars drawn on top
-             ╲           │           ╱
-        ─────╳───────────╳───────────╳─────      ← mouth line: last mouthLu of each terminal edge
-              ╲▒▒▒▒▒▒▒▒▒▒│▒▒▒▒▒▒▒▒▒▒╱            ← MOUTH_FADE: apron alpha 0 → 100 %
-               ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓             ← apron core, --depot, opaque
-                ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓              ← cars are UNDER all of this
-                 ┌─────────────────┐
-                 │▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀│             ← DEPOT_W × DEPOT_H, §7.4, unchanged
-                 │        ●        │
-                 └─────────────────┘
+           │             │             │
+           │             │             │           ← ordinary road, cars drawn on top
+           ╰─────────────┤             │           ← a jog merging into the depot's approach
+                         │             │
+      ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄       ← TERRACE_FADE: alpha 0 → 100 %
+      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓       ← terrace, --depot, opaque
+      ▓▓▓┌────┐▓▓▓▓▓┌────┐▓▓▓▓▓┌────┐▓▓▓▓▓▓▓       ← cars are UNDER all of this
+      ▓▓▓│ ●  │▓▓▓▓▓│ ▲  │▓▓▓▓▓│ ■  │▓▓▓▓▓▓▓
+         └────┘     └────┘     └────┘
 ```
 
 **Geometry.**
 
 ```
-mouthLu     per band, below — LU of arc length measured back from the depot node
-MOUTH_W     = 176   // apron stroke width
-MOUTH_FADE  = 36    // LU of alpha ramp at the leading end
+mouthLu(band) = rowH - JUNCTION_MARK_R - 12          // 170 / 170 / 134 / 134 / 134
+terraceTop    = DEPOT_Y - mouthLu
+terraceRect   = x from (x(0) - DEPOT_W/2 - 12) to (x(C-1) + DEPOT_W/2 + 12)
+                y from terraceTop to DEPOT_Y + DEPOT_H
+TERRACE_FADE  = 28                                   // LU of alpha ramp at the top edge
 ```
 
-`MOUTH_W = 176` because a car body's diagonal is `sqrt(140² + 84²) = 163.3` LU: a 176 LU stroke
-contains a car at any heading, so no corner of a car can poke out of the side of the apron. It is
-also 16 LU wider than `DEPOT_W`, so the forecourt reads as a flare into the building rather than
-as a stripe that happens to be the same width.
+| Band | `rowH` | **`mouthLu`** | shared approach visible above the terrace | a car is hidden for |
+|---|---|---|---|---|
+| 1 | 216 | **170** | 46 LU | 1.03 s |
+| 2 | 216 | **170** | 46 LU | 0.98 s |
+| 3 | 180 | **134** | 46 LU | 0.73 s |
+| 4 | 180 | **134** | 46 LU | 0.70 s |
+| 5 | 180 | **134** | 46 LU | 0.67 s |
 
-| Band | `colW` | `rowH` | straight terminal edge | diagonal terminal edge | **`mouthLu`** | apron as % of the straight edge | clear road left below the junction row |
-|---|---|---|---|---|---|---|---|
-| 1 | 300 | 400 | 400 | 521 | **180** | 45 % | 220 LU |
-| 2 | 260 | 300 | 300 | 415 | **160** | 53 % | 140 LU |
-| 3 | 260 | 300 | 300 | 415 | **160** | 53 % | 140 LU |
-| 4 | 195 | 240 | 240 | 323 | **150** | 63 % | 90 LU |
-| 5 | 195 | 200 | 200 | 293 | **140** | 70 % | 60 LU |
+`mouthLu` is its **maximum legal value**, not a taste value: the constraint is
+`mouthLu <= rowH - JUNCTION_MARK_R - 12` so the terrace never reaches the junction marker at the
+top of a terminal edge, and it is taken at equality at every band. The 12 LU is the clear gap
+between the marker's bottom edge and the terrace's top edge.
+([AC-514](acceptance-criteria.md))
 
-`mouthLu` is not a taste value. It is the smallest multiple of 10 LU at which two converging
-terminal centrelines are at least `CAR_W = 84` LU apart, computed from the cubic of
-[`generation.md` §2.3](generation.md#23-edges) — that is, the point above which two cars cannot be
-side by side in the same place. The exact thresholds are 178 / 153 / 153 / 146 / 131 LU.
+**One rectangle, not `K` aprons, and that is a simplification worth stating.** The old treatment
+stroked a per-edge apron along each terminal edge, which required a `saveLayer` so overlapping fade
+segments did not stack alpha into a visible lens ([AC-516](acceptance-criteria.md)), a per-band
+`MOUTH_W` derived from the car's diagonal, and a measured worst-case residual overlap. Under
+orthogonal routing every terminal edge ends in a vertical drop at a depot column, so the region to
+cover is a single horizontal band across the depot row. One rounded rect with one gradient along
+its top edge covers it, cannot stack alpha with itself, and is built once per level.
+[AC-516](acceptance-criteria.md) becomes trivially satisfied rather than carefully satisfied.
 
-**What it guarantees, measured against the curve rather than asserted.** With these values, for
-every pair of cars on converging terminal edges with **both** centres outside the apron:
-
-| | Band 1 | Band 2 | Band 3 | Band 4 | Band 5 |
-|---|---|---|---|---|---|
-| Worst residual overlap, diagonal vs straight | 10.9 % | 9.4 % | 9.4 % | 10.2 % | 8.5 % |
-| Worst residual overlap, diagonal vs opposite diagonal | 0 % | 0 % | 0 % | 0 % | 0 % |
-| Minimum centre-to-centre distance | 91 LU | 97 LU | 97 LU | 95 LU | 102 LU |
-
-So the measured 26 LU total overlap can only occur beneath the apron, where it cannot be seen,
-and the worst thing that remains visible is a corner of one car clipping a corner of another by
-about a tenth of a body — which reads as one car passing another, because that is what it is.
-**A full geometric guarantee is not available and is not claimed:** an apron large enough to
-prove zero overlap for every configuration would need to be about 210–270 LU deep, longer than
-the terminal edge itself at bands 4 and 5. ([AC-513](acceptance-criteria.md))
-
-**Drawing it.** Two draws, in this order, both after the car layer:
-
-1. **Cores.** For every terminal edge, the sub-path covering its last `mouthLu - MOUTH_FADE` LU,
-   stroked at `MOUTH_W`, round cap and round join. All of a level's cores go into **one** `Path`
-   and are filled once in `--depot` at 100 %, so overlapping lobes cannot stack.
-2. **Fades.** For every terminal edge, the `MOUTH_FADE` stretch immediately above its core,
-   stroked at `MOUTH_W` with a linear gradient in `--depot` running 0 % → 100 % alpha along the
-   edge tangent. These are drawn inside a single `saveLayer`, so where two fade segments overlap
-   the alpha does not accumulate into a visible lens.
-
-Both paths are built once per level, at level load, from the same cubics the roads are drawn
-from. Nothing here is per-frame work and nothing here reads simulation state.
-
-**Constraint the band table must keep satisfying:** `mouthLu <= rowH - JUNCTION_MARK_R - 12`, so
-the apron never reaches the junction marker at the top of a straight terminal edge. The tightest
-band is 5: `200 - 46 - 12 = 142`, against `mouthLu = 140`. ([AC-514](acceptance-criteria.md))
+**What it guarantees and what it does not.** It guarantees that the entire shared approach except
+its top 46 LU is hidden. It does **not** guarantee that two cars are never seen overlapping: two
+cars whose centres are both inside that 46 LU window overlap, and each of them is then more than
+half under the terrace. **A full geometric guarantee is not available and is not claimed** — it
+would require the terrace to swallow the junction markers at the top of the terminal row, which
+would hide a tap target. [AC-513](acceptance-criteria.md) is written to **report the measured rate**
+as well as bound the geometry, because at 59–301 runs per 1,000 this is a thing a player will see
+and a number that deserves a screenshot rather than only a pass.
 
 **What the player loses, and what replaces it.** A car disappears `mouthLu / speed` before it
-resolves — 0.61 s at band 5, 1.00 s at band 1. It loses nothing it could act on: a car on a
-terminal edge is past its last junction and no tap can change its fate. What it would lose is the
-*confirmation*, and that moves to the mouth: see §8.3 and §8.4.
+resolves — 0.67 s at band 5, 1.03 s at band 1, *less* than the 0.61–1.00 s the old apron hid. It
+loses nothing it could act on: a car on a terminal edge is past its last junction and no tap can
+change its fate. What it would lose is the *confirmation*, and that moves to the mouth: see §8.3
+and §8.4.
 
 ---
 
 ## 8. Screen states
 
 ### 8.1 Idle / rolling
-The steady state. The only motion is car translation and the arming of junctions.
+The steady state. The only motion is car translation, cars turning corners, the clock bar draining
+and the arming of junctions.
 
 ### 8.2 Junction flipped
-Blade rotates to the new branch, 120 ms, `ease-out-cubic`. Open-branch brightening cross-fades
-over the same 120 ms. Ripple ring, 160 ms. Light haptic. **Communicates:** your tap landed, and
-this is where the next car goes.
+Blade rotates to the new branch, 120 ms, `ease-out-cubic` — a 90° or 180° sweep. Open-branch
+brightening cross-fades over the same 120 ms. Ripple ring, 160 ms. Light haptic.
+**Communicates:** your tap landed, and this is where the next car goes.
 
 ### 8.3 Car delivered
-The car is already beneath the apron (§7.6), so the confirmation is carried by the mouth and the
-depot. A **mouth glow** — the core of `level.edges[event.edgeId]`'s apron segment, redrawn in the
-car's colour at 55 % alpha ([AC-140](acceptance-criteria.md); the same reason as §8.4 — a depot is
-fed by up to three mouths and only one of them delivered this car) — fades in over 90 ms and out
-over 130 ms, `ease-out-cubic`. Depot plays **receiving**. Quota bar fills over
-180 ms `ease-out-cubic`. Score counts up over 300 ms. **Communicates:** that one is banked, and
-which colour it was.
+The car is already beneath the terrace (§7.6), so the confirmation is carried by the mouth and the
+depot. A **mouth glow** — the last `mouthLu` of `level.edges[event.edgeId]`, redrawn on top of the
+terrace in the car's colour at 55 % alpha ([AC-140](acceptance-criteria.md)) — fades in over 90 ms
+and out over 130 ms, `ease-out-cubic`. Depot plays **receiving**. The delivered count in the HUD
+increments. **Communicates:** that one is banked, which colour it was, and which road it came down.
+
+**One mouth, not the depot's mouths.** A depot is fed by up to three terminal edges and they share
+their final approach, so the glow is drawn on the arriving edge's own geometry — which, where the
+approach is shared, *is* the shared segment plus whichever horizontal run the car came in on.
+([AC-519](acceptance-criteria.md))
 
 ### 8.4 Car misrouted
-The shatter originates at the **mouth line** of `level.edges[event.edgeId]` — the terminal edge the
-car came down, named on the event itself
+The shatter originates at the **terrace line** of `level.edges[event.edgeId]` — the point at which
+the car went under, on the edge named on the event
 ([`gameplay.md` §2.6](gameplay.md#26-resolvearrival--the-single-place-scoring-happens),
 [AC-140](acceptance-criteria.md)) — which is the last point at which the car was visible. Not the
-depot node: a depot has an in-degree of up to 3, so the depot does not identify the road, and
-throwing from the node would show the wrong colour appearing from *under* the depot instead of
-arriving *at* it. Six 26 LU fragments in the car's colour
-scatter 60–110 LU, biased upward and outward along the edge tangent, and fade over 320 ms,
-`ease-out-quad`. Fragments are transient effects (draw order step 11) and are therefore drawn
-**over** the apron and the depot; this is the one thing that is. Depot plays **rejecting**. A
-3 pt `--alert` screen-edge vignette flashes to 30 % and back over 180 ms. One life pip drains
-over 240 ms. Error haptic. **Communicates:** a life is gone and this depot was the wrong one —
-the colour of the fragments and the depot desaturating together name the mistake.
-([AC-515](acceptance-criteria.md))
+depot node: throwing from the node would show the wrong colour appearing from *under* the depot
+instead of arriving *at* it. Six 20 LU fragments in the car's colour scatter 45–85 LU, biased
+upward and outward along the edge direction, and fade over 320 ms, `ease-out-quad`. Fragments are
+transient effects (draw order step 11) and are therefore drawn **over** the terrace and the depot;
+this is the one thing that is. Depot plays **rejecting**. A 3 pt `--alert` screen-edge vignette
+flashes to 30 % and back over 180 ms. One life pip drains over 240 ms. Error haptic.
+**Communicates:** a life is gone and this depot was the wrong one — the colour of the fragments and
+the depot desaturating together name the mistake. ([AC-515](acceptance-criteria.md))
 
 ### 8.5 Last life
 When `lives === 1`, the life-pip row takes a 1.6 s `ease-in-out-sine` opacity pulse between 1.00
@@ -694,19 +775,26 @@ and 0.65, and a 2 pt `--alert` border at 24 % sits steady inside the screen edge
 until the level ends. **Communicates:** sustained jeopardy, without a startle that would cost the
 player the car they are currently tracking.
 
+*If the last ten seconds (§7.1) and the last life coincide, the clock caption and the border are
+both `--alert` and neither moves. That is deliberate: two alert states at once should read as one
+situation, not as two competing animations.*
+
 ### 8.6 Level complete
+
+Shown when `phase === 'ended'` — the clock ran out with at least one life left. **That is what
+clearing a level is** ([`gameplay.md` §7](gameplay.md#7-progression-slice-4-territory-specified-here-so-it-is-not-invented-later)).
 
 ```
 ┌──────────────────────────────────────────┐
 │                                          │
-│              LEVEL 12 CLEAR              │   Title 24/30, --text
+│              TIME — LEVEL 12             │   Title 24/30, --text
 │  ────────────────────────────────────    │
-│   Delivered                      36/36   │   Body 16/22, --text-dim / --text
-│   Best streak                       14   │
-│   Lives remaining          2   ×50 +100  │
+│   Best streak                       14   │   Body 16/22, --text-dim / --text
+│   Misrouted                          2   │
+│   Lives remaining                    1   │
 │  ────────────────────────────────────    │
-│   SCORE                          4,180   │   Display 34/40, --text
-│   Best                           3,940   │   Caption 12/16, --text-dim
+│   DELIVERED                         43   │   Display 34/40, --text
+│   Best                              47   │   Caption 12/16, --text-dim
 │                                          │
 │   ┌─────────────┐   ┌─────────────────┐  │
 │   │    RETRY    │   │     NEXT  ▸     │  │   48 pt tall, 12 pt gap
@@ -714,21 +802,30 @@ player the car they are currently tracking.
 └──────────────────────────────────────────┘
 ```
 
-Play surface dims to 40 % over 240 ms. Panel rises 24 pt and fades in over 280 ms,
-`ease-out-back(1.08)`. Panel `--surface`, radius 20, 24 pt padding, max width 340 pt, centred.
+Play surface dims to 40 % over 240 ms, with cars frozen in place at 45 % opacity. Panel rises 24 pt
+and fades in over 280 ms, `ease-out-back(1.08)`. Panel `--surface`, radius 20, 24 pt padding, max
+width 340 pt, centred.
+
+**The title is `TIME`, not `LEVEL CLEAR`**, because what happened is that the two minutes ran out.
+The distinction matters on the one screen where the player learns what the game wants from them:
+they did not complete a job, they survived a shift.
 
 ### 8.7 Level failed
 
-Same panel geometry. Title `OUT OF LIVES`, rows `Delivered 19/36` and `Score 2,150`, buttons
-`RETRY` and `LEVELS`. Play surface desaturates to greyscale over 320 ms rather than dimming — the
-colours going out is the point, since colour is what the level was about.
+Same panel geometry. Title `OUT OF LIVES`, rows `Delivered 19`, `Best streak 6`, `Time survived
+1:12`, buttons `RETRY` and `LEVELS`. Play surface desaturates to greyscale over 320 ms rather than
+dimming — the colours going out is the point, since colour is what the level was about.
+
+**`Time survived` is on this panel and not on §8.6's**, because it is the only place it carries
+information: a cleared run survived 2:00 by definition.
 
 ### 8.8 Pause and resume countdown
 
 Pause overlay: play surface dims to 40 %, panel with `RESUME` / `RESTART` / `QUIT`. Resume
 countdown: three 600 ms beats, numeral at Display size, `--text`, scaling 1.3 → 1.0 and fading
-out each beat. No simulation ticks advance during either
-([`gameplay.md` §6](gameplay.md#6-run-control)).
+out each beat. **No simulation ticks advance during either, so the level clock does not move**
+([`gameplay.md` §6](gameplay.md#6-run-control)) — the clock bar is frozen at whatever it showed,
+which is the visible proof that pausing costs nothing.
 
 ---
 
@@ -738,18 +835,20 @@ out each beat. No simulation ticks advance during either
 |---|---|---|---|
 | Car arrival | 1 frame | none | A new car exists — an abrupt onset, because §7.5's capture claim depends on it |
 | Entry flare | 180 ms | `ease-out-quad` | Where the new car arrived, findable peripherally, carrying no colour |
+| Car turning a corner | `2·CORNER_R / speed` | linear in arc length | This car has taken a branch |
 | Junction blade rotate | 120 ms | `ease-out-cubic` | The tap landed |
 | Junction tap ripple | 160 ms | `ease-out-quad` | The tap was received at *this* junction |
-| Junction arm (lead arc) | 180 ms fade in | `ease-out-cubic` | This car is committing to this branch |
-| Depot mouth glow | 90 ms in + 130 ms out | `ease-out-cubic` | Banked — and in which colour |
+| Junction arm (lead bar) | 180 ms fade in | `ease-out-cubic` | This car is committing to this branch |
+| Mouth glow | 90 ms in + 130 ms out | `ease-out-cubic` | Banked — and in which colour |
 | Depot receiving pulse | 220 ms | `ease-out-cubic` | This depot accepted it |
-| Car misrouted shatter | 320 ms | `ease-out-quad` | Lost — thrown from the mouth line, in the car's colour |
+| Car misrouted shatter | 320 ms | `ease-out-quad` | Lost — thrown from the terrace line, in the car's colour |
 | Depot rejecting flash | 90 ms + 260 ms | `linear`, `ease-out-cubic` | Wrong depot — and which one |
 | Life pip drain | 240 ms | `ease-out-cubic` | A life is gone |
 | Edge vignette flash | 180 ms | `ease-out-quad` | Something bad, peripherally |
 | Last-life pulse | 1600 ms loop | `ease-in-out-sine` | Sustained jeopardy |
-| Quota bar fill | 180 ms | `ease-out-cubic` | Progress |
-| Score count-up | 300 ms | `ease-out-cubic` | How much that was worth |
+| Clock bar drain | continuous | linear in `tick` | Time remaining |
+| Final-ten colour change | instant | none | The remaining time is shorter than a journey |
+| Delivered count increment | 180 ms | `ease-out-cubic` | One more |
 | Play surface dim | 240 ms | `ease-out-cubic` | The level is over |
 | Failure desaturate | 320 ms | `ease-out-cubic` | The colours went out |
 | Overlay panel rise | 280 ms | `ease-out-back(1.08)` | A decision is wanted |
@@ -759,34 +858,31 @@ out each beat. No simulation ticks advance during either
 animation phase from `(currentTick - eventTick) / TICK_HZ`, taking `eventTick` from
 `state.events` ([`gameplay.md` §2.9](gameplay.md#29-events-are-render-hints-and-only-that)). A
 replay therefore paints identically, frame for frame, to the live run
-([AC-505](acceptance-criteria.md)). UI chrome outside the canvas — overlay panels, the resume
-countdown, the score count-up, the quota bar, the life pips — may use **wall-clock** time, because
-it is not part of the replayable world. That means `requestAnimationFrame` driving React state,
-with the easing curves taken from the same module the canvas uses so that a 280 ms
-`ease-out-cubic` is one function in this codebase and not two. React Native's `Animated` with
-`useNativeDriver: true` is permitted where a transition is pure opacity or transform and the
-native thread is worth the wiring; nothing here requires it.
+([AC-505](acceptance-criteria.md)). **The clock bar is in this class even though it lives in the
+HUD**: it is a pure function of `state.tick` and it must be, or a paused or replayed game shows the
+wrong time.
 
-**`react-native-reanimated` is not used, and slice 3 does not adopt it — decided, round 7.** It has
-been in `package.json` since slice 0 with a Babel plugin and a comment claiming it "drives the
-UI-thread clock the render loop reads from". Nothing imports it, and the comment is false: the loop
-is `requestAnimationFrame` and every in-canvas phase derives from ticks. The decision is whether
-slice 3's motion work needs it, and the table above answers that, because of where the line in the
-paragraph above falls. **Everything in the canvas is forbidden from using it** — a wall-clock
-animation inside the play surface breaks AC-505 by construction, so Reanimated cannot touch the
-larger half of this table. What is left outside the canvas is six one-shot transitions of opacity,
-transform or width on a handful of views, plus one looping opacity pulse. None is gesture-driven —
-the only gesture in the game is a tap (§10.3), which resolves to a discrete state change, so there
-is no continuous gesture value for a worklet to follow, which is the case Reanimated exists for.
-**Remove the dependency, the `react-native-reanimated/plugin` entry in `babel.config.js`, and the
-comment.** `react-native-gesture-handler` soft-requires Reanimated and continues without it, so
-nothing else in the tree depends on it. Removing a native module is free only until a device build
-exists; after that it is a rebuild of every artefact, which is why this is decided now rather than
-in slice 3. If slice 5's "juice" later wants a gesture-driven or layout animation, adding it back
-is a dependency decision made for a reason, which is not what the current entry is.
+Other UI chrome outside the canvas — overlay panels, the resume countdown, the life pips, the
+delivered increment — may use **wall-clock** time, because it is not part of the replayable world.
+That means `requestAnimationFrame` driving React state, with the easing curves taken from the same
+module the canvas uses so that a 280 ms `ease-out-cubic` is one function in this codebase and not
+two. React Native's `Animated` with `useNativeDriver: true` is permitted where a transition is pure
+opacity or transform.
+
+**`react-native-reanimated` is not used and slice 3 does not adopt it — decided.** It has been in
+`package.json` since slice 0 with a Babel plugin and a comment claiming it drives the render loop's
+clock. Nothing imports it and the comment is false. **Everything in the canvas is forbidden from
+using it** — a wall-clock animation inside the play surface breaks AC-505 by construction. What is
+left outside the canvas is six one-shot transitions of opacity, transform or width on a handful of
+views, plus one looping opacity pulse. None is gesture-driven — the only gesture in the game is a
+tap (§10.3) — which is the case Reanimated exists for. **Remove the dependency, the
+`react-native-reanimated/plugin` entry in `babel.config.js`, and the comment.**
+`react-native-gesture-handler` soft-requires Reanimated and continues without it.
 
 **Nothing in the play surface loops or idles.** There is no ambient shimmer, no drifting
-background, no pulsing junction waiting to be tapped. If it moves, something happened.
+background, no pulsing junction waiting to be tapped. If it moves, something happened — and the
+clock bar draining is the one continuous motion in the game, which is why it is chrome and not
+board.
 
 ---
 
@@ -816,7 +912,7 @@ tick, 16.7 ms**.
   `maxDistance` 16 pt. It is the only gesture registered
   ([AC-312](acceptance-criteria.md)).
 - **Offramp is a one-pointer game.** One tap recognised at a time; at most one input enqueued per
-  recognised tap. `MAX_POINTERS` is deleted.
+  recognised tap.
 - **A concurrent second pointer neither moves the tap nor cancels it.** The recognised point is
   the position of the gesture's **first** pointer, captured when the gesture begins; additional
   pointers that land before it ends are ignored. This is normative and it is not the default: RNGH
@@ -828,44 +924,35 @@ tick, 16.7 ms**.
 - Taps are discarded while paused, during the resume countdown, and after `phase` leaves
   `'running'`.
 
-**Why one pointer — decided, round 7.** Slice 2 found this section and
-[AC-312](acceptance-criteria.md) in direct conflict: AC-312 requires that only `Gesture.Tap()` is
-registered, and a single `Tap` recognises one tap per gesture no matter how many fingers are on it
-(RNGH 2.31's `TapGesture` has `minPointers` and no `maxPointers`), while two `Tap` instances
-double-fire on a single touch. `Gesture.Manual()` would expose `allTouches` and could deliver two
-independent taps. The conflict is real and it cannot be settled by tier 3, because a mouse has one
-pointer. It is settled here, against two-finger play, on three grounds:
+**Why one pointer — decided.** Three grounds, unchanged by round 8 and one of them strengthened:
 
 1. **The difficulty model is one-fingered by construction, and every number in this design is read
    off it.** [`generation.md` §7.1.3](generation.md#713-constants) sets
    `BOT_MAX_TAPS_PER_TICK = 1` and `BOT_MIN_TAP_GAP = 11` ticks — one thumb, 180 ms between taps —
-   and §7.2.4's five clear rates, §7.2.2's five targets, R2, R3 and
-   [AC-233](acceptance-criteria.md)'s tap-rate ceiling are all measured against that bot. A player
-   able to flip two junctions in one frame has a capability the ladder has never priced, in a game
-   whose entire dynamic range is under three percentage points of per-car error
+   and §7.2's five clear rates, R2, R3 and [AC-233](acceptance-criteria.md)'s tap-rate ceiling are
+   all measured against that bot. A player able to flip two junctions in one frame has a capability
+   the ladder has never priced, in a game whose entire dynamic range is **3.21 percentage points of
+   per-car error**
    ([`generation.md` §7.1.10](generation.md#7110-why-the-clear-rate-is-the-wrong-number-to-reason-about-and-which-number-is-not)).
-   Shipping an unmeasured input channel into that is not a small risk.
 2. **The game never asks for it, and that is a theorem rather than a hope.**
-   [`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time) proves a 670 ms
-   floor between two cars at one junction and §4.6b the tighter first-decision window; §4.7 proves
-   every level solvable with the 1.00 s flip window; the measured tap rate peaks at **0.73/s**
-   against a 1.25/s ceiling. There is no reachable board state that one finger cannot serve in
-   time.
+   [`gameplay.md` §4.6](gameplay.md#46-why-a-junction-is-always-flippable-in-time) proves a 1.50 s
+   floor between two cars at one junction and §4.6b a 1.50 s first-decision floor; §4.7 proves every
+   car routable; the estimated tap demand peaks at **0.79 /s** against a 1.25 /s ceiling. There is
+   no reachable board state that one finger cannot serve in time. *Round 8 raised both floors —
+   from 1.00 s and 0.72 s — so this argument is stronger than it was.*
 3. **It is an affordance for a grip the game is not designed for.** §3 designs for a 6.1" phone
-   held in one hand. The second thumb is not on the glass, and the cost of assuming it is, is a
-   hand-rolled `Manual` gesture reimplementing `maxDuration`, `maxDistance` and cancellation — the
-   one piece of input code in the app that no tier below a device test can exercise.
+   held in one hand, and the cost of assuming a second thumb is a hand-rolled `Manual` gesture
+   reimplementing `maxDuration`, `maxDistance` and cancellation — the one piece of input code in
+   the app that no tier below a device test can exercise.
 
 **What is not given up.** Two inputs resolving on one tick stays exactly as
 [`gameplay.md` §3.5](gameplay.md#35-two-taps-in-the-same-tick) specifies, because it is reachable
 with one finger: any two taps arriving between consecutive `step()` calls share a tick stamp, and
 that window is 33 ms at 30 fps and longer under catch-up.
-[AC-306](acceptance-criteria.md) now states that as a property of the input **queue**, which is
-both what the engine actually guarantees and — unlike the two-pointer version — something a test
-can reach.
+[AC-306](acceptance-criteria.md) states that as a property of the input **queue**, which is both
+what the engine actually guarantees and something a test can reach.
 
 ---
-
 ## 11. Accessibility
 
 ### 11.1 Targets and contrast
@@ -883,7 +970,7 @@ can reach.
 
 | Setting | Options | Default | Effect |
 |---|---|---|---|
-| Symbol size | Standard / Large | Standard | `GLYPH_CAR` 48→66 LU, `GLYPH_DEPOT` 64→88 LU, car-glyph opacity 78 %→100 % |
+| Symbol size | Standard / Large | **Standard** | `GLYPH_CAR` 42→58 LU, `GLYPH_DEPOT` 52→72 LU, car-glyph opacity 78 %→100 % |
 | Reduce motion | Off / On | follows `AccessibilityInfo.isReduceMotionEnabled` | Shatter → 120 ms fade; vignette flash → static 180 ms tint; panel spring → 120 ms fade; last-life pulse → static border; count-up → instant |
 | Haptics | On / Off | **On** ([`gameplay.md` §8.5](gameplay.md#85-owner-recommendation--not-a-blocker-haptics-default)) | Light impact on flip, error notification on misroute, success on level clear |
 | Sound | On / Off | On | Slice 5 |
